@@ -1,137 +1,109 @@
-See LICENSE and LICENSE-DUAL-LICENSING for licensing details.
+# Thetis-SunSDR: SunSDR2 DX Native Protocol Support
 
-# This project is now archived - 2nd April 2026
+Native SunSDR2 DX integration for the [Thetis](https://github.com/ramdor/Thetis) SDR application, built through clean-room protocol reverse engineering.
 
-This fork of the original Thetis, which I started tinkering with in 2019, has now been archived. I will not be performing maintenance or adding features to it for the foreseeable future. Whilst I may return to it from time to time for minor fixes and/or if I develop something for personal use that I feel may also benefit others, active development has stopped.
+## Status: RX Working (`rx-working-v1`)
 
-There are a number of technical issues that would need to be addressed in order to take the project forward. The codebase still depends on an older .NET Framework version (4.8), which is increasingly outdated and is beginning to fall out of support with other libraries used by the project. Rendering is also based on SharpDX, which is itself an archived project. Although moving to a more modern rendering engine would be desirable, many suitable replacements do not properly support the older .NET Framework this fork relies on.
+The receive path is fully operational:
 
-Work on multiple RX slices is also on hold, as that would require a rewrite of the display engine. Given that the current display engine is based on SharpDX, it would not seem prudent to invest that effort into an archived and outdated library.
+- **IQ Streaming** — Native SunSDR protocol on ports 50001 (control) and 50002 (IQ stream)
+- **Resampler** — 312,500 Hz native rate resampled to 384,000 Hz for WDSP DSP engine
+- **Panadapter & Waterfall** — Live spectrum display with correct frequencies
+- **Frequency Tuning** — DDC0 = IQ center frequency, DDC0 offset = 92,500 Hz from primary VFO
+- **Audio Output** — Demodulated audio via VAC (PortAudio/ReaRoute ASIO)
+- **Bidirectional IQ** — TX silence packets keep the radio streaming (1 TX per 8 RX packets)
 
-The project is gradually falling behind, and bringing it up to date would require a substantial amount of rework. I have therefore decided to archive this repository and focus my efforts elsewhere. Thetis is hopefully a better experience than it once was, and with recent milestones now reached, including TCI audio/IQ streaming, the voice keyer, and radio network/detection improvements, I feel this is a good point to call it "done".
+## Key Protocol Facts
 
-Cheers to all who have enjoyed the ride, helped test, and found bugs. With the progression of AI, perhaps in a few years we will be able to ask it to 'modernise the project'. Time will tell.
+| Parameter | Value |
+|-----------|-------|
+| Control port | UDP 50001 |
+| IQ stream port | UDP 50002 |
+| IQ format | 24-bit signed LE, interleaved I/Q |
+| Native sample rate | 312,500 Hz |
+| Samples per packet | 200 (1210 bytes: 10-byte header + 1200-byte payload) |
+| Frequency encoding | Opcode 0x09 (primary) / 0x08 (DDC companion), u64 LE scaled by 10 Hz |
+| PTT/MOX | Opcode 0x06, u32: 1=TX, 0=RX |
+| Power on | Captured macro sequence (29 steps) |
+| Stream keepalive | Bidirectional IQ — send silent TX packets or radio disconnects at ~8s |
 
-73  
-MW0LGE - Richie
+## Architecture
 
+```
+SunSDR2 DX                              Thetis (this fork)
++-----------+     UDP 50001              +------------------+
+|  Control  |<-------------------------->| sunsdr.c         |
+|  Port     |  power-on macro, freq,     | (protocol impl)  |
+|           |  mode, PTT commands        |                  |
++-----------+                            +------------------+
++-----------+     UDP 50002              +------------------+
+|  IQ       |<-------------------------->| SunSDRReadThread  |
+|  Stream   |  RX: 1210-byte IQ pkts    | resample 312k→384k|
+|           |  TX: silence keepalive     | → xrouter → WDSP |
++-----------+                            +------------------+
+                                                  |
+                                         +--------v---------+
+                                         | WDSP (fexchange0) |
+                                         | demodulation      |
+                                         +--------+---------+
+                                                  |
+                                         +--------v---------+
+                                         | VAC mixer → PA    |
+                                         | → audio output    |
+                                         +------------------+
+```
 
-# Latest Release v2.10.3.13 - 1st April 2026
-https://github.com/ramdor/Thetis/releases/tag/v2.10.3.13
+## Audio Path Fixes
 
-# Latest Release v2.10.3.5 December, 24th 2023
-https://github.com/ramdor/Thetis/releases/tag/v2.10.3.5
+Three issues had to be resolved for audio output to work:
 
-# 2.10.3.4 (2023-19-11)
-https://github.com/ramdor/Thetis/releases/tag/v2.10.3.4
+1. **VAC run flag timing** — `SetIVACrun(0,1)` was never called because `console.PowerOn` was false when the C# `EnableVAC1()` ran. Fixed by setting `pvac[v]->run = 1` directly in `SunSDRPowerOn()`.
 
-# 2.10.3.3 (2023-03-11)
-https://github.com/ramdor/Thetis/releases/tag/v2.10.3.3
+2. **VAC mixer deadlock** — The mixer waits for ALL active inputs (`WaitForMultipleObjects(..., TRUE, INFINITE)`). During RX-only, TX monitor input never gets data. Fixed by feeding silence into the TX pipeline via `Inbound()`, which keeps `xcmaster(tx_stream)` running and feeds both mixer inputs.
 
-# 2.10.3.2 (2023-03-11)
-https://github.com/ramdor/Thetis/releases/tag/v2.10.3.2
+3. **No ASIO driver** — `audioCodecId` defaults to HERMES, routing the main mixer to the network void. VAC provides the working audio path.
 
-# 2.10.3.1 (2023-03-11)
-https://github.com/ramdor/Thetis/releases/tag/v2.10.3.1
+## Files Changed (from upstream Thetis)
 
-# 2.10.3 (2023-02-11)
-https://github.com/ramdor/Thetis/releases/tag/v2.10.3
+**New files:**
+- `ChannelMaster/sunsdr.c` — Complete SunSDR native protocol implementation
+- `ChannelMaster/sunsdr.h` — Protocol constants, state structure, API
 
-# 2.10.2.2 (2023-13-10)
+**Modified files:**
+- `ChannelMaster/network.c`, `network.h` — P/Invoke wrappers for SunSDR functions
+- `ChannelMaster/netInterface.c` — SunSDR path in `StartAudioNative()`
+- `ChannelMaster/cmasio.c`, `ivac.c` — Diagnostic logging
+- `ChannelMaster/ChannelMaster.vcxproj` — Added sunsdr.c/h to build
+- `Console/enums.cs` — `SUNSDR2DX` model and `SUNSDR` protocol enums
+- `Console/clsHardwareSpecific.cs` — SunSDR hardware model support
+- `Console/HPSDR/NetworkIO.cs`, `NetworkIOImports.cs` — SunSDR init/freq routing
+- `Console/cmaster.cs` — SunSDR router configuration (1 source, 1 stream, Inbound to RX1)
+- `Console/setup.cs`, `setup.designer.cs` — SunSDR in radio model dropdown
+- `*.vcxproj` (portaudio, wdsp, cmASIO, ChannelMaster) — PlatformToolset v145 → v143
 
-# 2.10.2.1 (2023-11-10)
+## Next Steps
 
-# 2.10.2 (2023-11-10)
+- [ ] TX audio path (wire PTT/MOX to SunSDR opcode 0x06)
+- [ ] Validate I/Q channel order with known signal
+- [ ] Power cycle cleanup (off/on without restart)
+- [ ] Mode switching validation
 
-# 2.10.0 (2023-19-06)
+## Related Repositories
 
-# 2.9.0 (2022-03-04)
-See [ Thetis Change Log ](https://github.com/TAPR/OpenHPSDR-Thetis/blob/master/Thetis%20v2.9.0%20Change%20Log.pdf) for more details.
+- **Protocol RE docs**: [kk68/ExploringSUN](https://github.com/kk68/ExploringSUN) — Clean-room reverse engineering documentation, Python tools, capture scripts
+- **Upstream Thetis**: [ramdor/Thetis](https://github.com/ramdor/Thetis) — Original Thetis SDR application (archived)
 
-# 2.8.11 (2020-20-10)
-See [ Thetis Change Log ](https://github.com/TAPR/OpenHPSDR-Thetis/blob/master/Thetis%20v2.8.11%20Change%20Log.pdf) for more details.
+## Building
 
-# 2.8.9 (2020-13-10)
-See [ Thetis Change Log ](https://github.com/TAPR/OpenHPSDR-Thetis/blob/master/Thetis%20v2.8.9%20Change%20Log.pdf) for more details.
+1. Open `Project Files/Source/Thetis_VS2026.sln` in Visual Studio 2022
+2. Set configuration to **Debug | x64**
+3. Build → Rebuild Solution
+4. Select SunSDR2-DX as radio model in Setup → General
 
-# 2.8.8 (2020-10-10)
-See [ Thetis Change Log ](https://github.com/TAPR/OpenHPSDR-Thetis/blob/master/Thetis%20v2.8.8%20Change%20Log.pdf) for more details.
+Requires Visual Studio 2022 with C++ desktop development workload (v143 toolset).
 
-# 2.8.7 (2020-10-7)
-See [ Thetis Change Log ](https://github.com/TAPR/OpenHPSDR-Thetis/blob/master/Thetis%20v2.8.7%20Change%20Log.pdf) for more details.
+## License
 
-# 2.8.6 (2020-10-6)
-See [ Thetis Change Log ](https://github.com/TAPR/OpenHPSDR-Thetis/blob/master/Thetis%20v2.8.6%20Change%20Log.pdf) for more details.
+This project inherits the GNU General Public License v2 from upstream Thetis. See [LICENSE](LICENSE) for details.
 
-# 2.7.0 Not Officially Released
-
-# 2.6.9 (2020-1-24)
-See [ Thetis Change Log ](https://github.com/TAPR/OpenHPSDR-Thetis/blob/master/Thetis%20v2.6.9%20Change%20Log.pdf) for more details.
-
-# 2.6.8 (2019-11-3)
-See [ Thetis Change Log ](https://github.com/TAPR/OpenHPSDR-Thetis/blob/master/Thetis%20v2.6.8%20Change%20Log.pdf) for more details.
-
-# 2.6.7 (2019-4-29)
-- fixed bug where the VOX/DEXP LookAhead feature was enabled when VOX/DEXP was not.
-- corrected compatiblity issue with the ANAN-10E. This requires new firmare to be flashed. v10.3
-- corrected the Spectrum and Histogram diplay during transmit
-
-# 2.6.6 (2019-4-21)
-- corrects issue with EU region using commas
-- corrects issue with having out of band frequency on startup
-- fixed transmit filter not being displayed when using split
-
-# 2.6.5 (2019-4-18)
-- corrected issue with console remaining open after exiting Thetis
-- fixed problem of program crashing when recording while transmitting
-- fixed problem with program crashing when receiving a bad packet
-
-# 2.6.4 (2019-4-13)
-- improved VOX/DEXP features and performance
-- QSK cabibility for the ANAN-200D, 7000DLE, and 8000DLE models
-- fixed VAC1 startup problem
-- fixed VAC2 resampler problem
-- added option to use VAC2 on split
-- improved TX-RX and RX-TX transistion on voice modes
-- transverter T/R relay bug fixed
-- added control for BYPS-EXT1-XVTR RX ANT for 7000DLE
-
-  * see "Release Notes for 2-6-4.docx" for detailed information.
-
-# 2.6.0 (2018-4-10)
-- added diagnostic LED array
-- divided open collector controls into 3 groups (HF-VHF-SWL)
-- bug fix for step tune using MIDI
-
-# 2.5.9 (2018-3-29)
-- changed "MDECAY" constant to 0.99 in netInterface.c
-- added 2Hz step tune choice
-- corrected duplicate db import dialogs
-- modified behavior of sequence errors so that sequence errors are ignored for seq 0
-- changes to VAC includes tooltips for various controls, fix for the Output Ringbuffer latency Monitor control not working, and added the ability to reset the diagnostics
-- forced BPF1 into ByPass during transmit if PureSignal is enabled for Orion MkII boards only
-
-# 2.5.8 (2018-3-25)
-- changed "MDECAY" constant to 0.9 in netInterface.c
-- fixes for VFO A&B Lock 
-- NB/NB2 is turned OFF while transmitting when DUP is enabled
-- Added 2kHz Tune Step
-- Changed ANF behavior so that it is disabled when in CW mode
-- Removed the 750Hz CW filter and added a 150Hz CW filter
-- Increased display buffer to support larger than 4k displays
-
-# 2.5.7 (2018-3-25)
-- spectrum roll-off adjusted to clip 4%
-- calls to PeakFwdPower(…) and PeakRevPower(…) moved from netInterface.c to network.c
-- skin graphics added for chkRxAnt and chkVFOBLock controls
-
-# 2.5.6 (2018-3-25)
-- added MIDI/CAT updates
-- added independent VFO Locks
-
-# 2.5.5 (2018-3-24)
-- added support for ANAN-7000DLE
-- added 'Rx Ant' support
-
-# 2.5.4 (2018-3-22)
-- added Audio Adaptive Variable Resampler with monitor tools
+Protocol implementation (`sunsdr.c`, `sunsdr.h`) is original work derived from clean-room reverse engineering of owned hardware.
