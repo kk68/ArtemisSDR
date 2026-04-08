@@ -481,6 +481,8 @@ extern __declspec(dllexport) int nativeSunSDRInit(char* radioIP, int ctrlPort, i
 extern __declspec(dllexport) void nativeSunSDRDestroy(void);
 extern __declspec(dllexport) int nativeSunSDRPowerOn(void);
 extern __declspec(dllexport) void nativeSunSDRPowerOff(void);
-extern __declspec(dllexport) void nativeSunSDRSetFreq(int freqHz, int isTx);
+extern __declspec(dllexport) void nativeSunSDRSetFreq(int receiver, int freqHz, int isTx);
 extern __declspec(dllexport) void nativeSunSDRSetMode(int mode);
 extern __declspec(dllexport) void nativeSunSDRSetPTT(int ptt);
+extern __declspec(dllexport) void nativeSunSDRSetRX2(int enabled);
+extern __declspec(dllexport) void nativeSunSDRSetTune(int tune);

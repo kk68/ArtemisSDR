@@ -233,7 +233,34 @@ namespace Thetis
             f_freq = (int)((f * 1e6) * _freq_correction_factor);
             if (f_freq >= 0)
                 if (CurrentRadioProtocol == RadioProtocol.SUNSDR)
-                    nativeSunSDRSetFreq(f_freq, tx);              // SunSDR native protocol
+                {
+                    /*
+                     * SunSDR currently exposes one live RX IQ stream to Thetis.
+                     * The native layer synthesizes the required companion writes
+                     * for RX1 internally, so HPSDR-style extra DDC/VFO ids must
+                     * not be forwarded. In particular, forwarding RX2/VFOB here
+                     * retunes the only live SunSDR stream underneath RX1.
+                     */
+                    if (tx != 0)
+                    {
+                        if (id == 0)
+                            nativeSunSDRSetFreq(0, f_freq, tx);   // TX frequency
+                    }
+                    else
+                    {
+                        /*
+                         * Thetis HPSDR id mapping for RX differs by model family.
+                         * On the SunSDR path we follow the default multi-DDC layout:
+                         *   id 0 = RX1 primary tuning context
+                         *   id 1,2 = RX1 companion DDC writes
+                         *   id 3 = RX2 tuning context
+                         */
+                        if (id == 0)
+                            nativeSunSDRSetFreq(0, f_freq, tx);   // RX1 / VFO A
+                        else if (id == 3)
+                            nativeSunSDRSetFreq(1, f_freq, tx);   // RX2 / VFO B
+                    }
+                }
                 else if (CurrentRadioProtocol == RadioProtocol.USB)
                     SetVFOfreq(id, f_freq, tx);                  // sending freq Hz to firmware
                 else SetVFOfreq(id, Freq2PhaseWord(f_freq), tx);   // sending phaseword to firmware

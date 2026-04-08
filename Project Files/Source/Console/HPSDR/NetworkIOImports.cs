@@ -398,12 +398,18 @@ namespace Thetis
         public static extern void nativeSunSDRPowerOff();
 
         [DllImport("ChannelMaster.dll", CallingConvention = CallingConvention.Cdecl)]
-        public static extern void nativeSunSDRSetFreq(int freqHz, int isTx);
+        public static extern void nativeSunSDRSetFreq(int receiver, int freqHz, int isTx);
 
         [DllImport("ChannelMaster.dll", CallingConvention = CallingConvention.Cdecl)]
         public static extern void nativeSunSDRSetMode(int mode);
 
         [DllImport("ChannelMaster.dll", CallingConvention = CallingConvention.Cdecl)]
         public static extern void nativeSunSDRSetPTT(int ptt);
+
+        [DllImport("ChannelMaster.dll", CallingConvention = CallingConvention.Cdecl)]
+        public static extern void nativeSunSDRSetRX2(int enabled);
+
+        [DllImport("ChannelMaster.dll", CallingConvention = CallingConvention.Cdecl)]
+        public static extern void nativeSunSDRSetTune(int tune);
     }
 }

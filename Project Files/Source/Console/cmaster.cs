@@ -907,21 +907,23 @@ namespace Thetis
                     }
                     break;
                 case RadioProtocol.SUNSDR:
-                    // SunSDR: single DDC, 1 stream, route directly to RX1 via Inbound
-                    int[] SunSDR_Function = new int[8]
+                    int[] SunSDR_Function = new int[16]
                         {
-                        1, 1, 1, 1, 1, 1, 1, 1      // source 0, Call 0: function=1 (Inbound)
+                        1, 1, 1, 1, 1, 1, 1, 1,     // source 0 -> RX1 inbound
+                        1, 1, 1, 1, 1, 1, 1, 1      // source 1 -> RX2 inbound
                         };
-                    int[] SunSDR_Callid = new int[8]
+                    int[] SunSDR_Callid = new int[16]
                         {
-                        0, 0, 0, 0, 0, 0, 0, 0      // source 0, Call 0: callid=0 (RX1)
+                        0, 0, 0, 0, 0, 0, 0, 0,     // source 0: RX1
+                        1, 1, 1, 1, 1, 1, 1, 1      // source 1: RX2
                         };
-                    int[] SunSDR_nstreams = new int[1]
+                    int[] SunSDR_nstreams = new int[2]
                         {
-                        1                            // 1 stream on source 0
+                        1,                           // source 0 carries one RX IQ stream
+                        1                            // source 1 carries one RX IQ stream
                         };
                     fixed (int* pstreams = &SunSDR_nstreams[0], pfunction = &SunSDR_Function[0], pcallid = &SunSDR_Callid[0])
-                        LoadRouterAll((void*)0, 0, 1, 1, 8, pstreams, pfunction, pcallid);
+                        LoadRouterAll((void*)0, 0, 2, 1, 8, pstreams, pfunction, pcallid);
                     break;
             }
         }

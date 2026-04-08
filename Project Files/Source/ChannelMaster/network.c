@@ -1530,9 +1530,9 @@ PORT void nativeSunSDRPowerOff(void)
 	SunSDRPowerOff();
 }
 
-PORT void nativeSunSDRSetFreq(int freqHz, int isTx)
+PORT void nativeSunSDRSetFreq(int receiver, int freqHz, int isTx)
 {
-	SunSDRSetFreq(freqHz, isTx);
+	SunSDRSetFreq(receiver, freqHz, isTx);
 }
 
 PORT void nativeSunSDRSetMode(int mode)
@@ -1543,4 +1543,14 @@ PORT void nativeSunSDRSetMode(int mode)
 PORT void nativeSunSDRSetPTT(int ptt)
 {
 	SunSDRSetPTT(ptt);
+}
+
+PORT void nativeSunSDRSetRX2(int enabled)
+{
+	SunSDRSetRX2(enabled);
+}
+
+PORT void nativeSunSDRSetTune(int tune)
+{
+	SunSDRSetTune(tune);
 }
