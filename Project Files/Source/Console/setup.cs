@@ -848,8 +848,10 @@ namespace Thetis
 
             int[] p1_rates = include_extra_p1_rate ? new int[] { 48000, 96000, 192000, 384000 } : new int[] { 48000, 96000, 192000 };
             int[] p2_rates = { 48000, 96000, 192000, 384000, 768000, 1536000 };
+            int[] sunsdr_rates = { 384000 }; // SunSDR2 DX: native 312500, closest standard rate
 
-            int[] rates = NetworkIO.CurrentRadioProtocol == RadioProtocol.ETH ? p2_rates : p1_rates;
+            int[] rates = HardwareSpecific.Model == HPSDRModel.SUNSDR2DX ? sunsdr_rates :
+                          NetworkIO.CurrentRadioProtocol == RadioProtocol.ETH ? p2_rates : p1_rates;
 
             foreach (int rate in rates)
             {
@@ -864,6 +866,7 @@ namespace Thetis
                 rx1_index = selected_rate1_index;
             else
                 rx1_index = Array.IndexOf(rates, 192000);
+            if (rx1_index < 0) rx1_index = 0; // fallback to first available rate
 
             comboAudioSampleRate1.SelectedIndex = rx1_index; // this will always cause a changed event because we removed everything
 
@@ -872,6 +875,7 @@ namespace Thetis
                 rx2_index = selected_rate2_index;
             else
                 rx2_index = Array.IndexOf(rates, 192000);
+            if (rx2_index < 0) rx2_index = 0;
 
             comboAudioSampleRateRX2.SelectedIndex = rx2_index; // this will always cause a changed event because we removed everything
         }

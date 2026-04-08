@@ -421,7 +421,8 @@ enum HPSDRHW
 	OrionMKII = 5,   // ANAN-7000DLE/8000DLE AnvelinaPro3
 	HermesLite = 6,  // MI0BOT: HL2 allocated number
 	Saturn = 10,     // ANAN-G2: added G8NJJ
-	SaturnMKII = 11  // ANAN-G2: MKII board
+	SaturnMKII = 11, // ANAN-G2: MKII board
+	SunSDR = 20      // SunSDR2 DX
 };
 
 enum _HPSDRModel //from enums.cs
@@ -441,13 +442,15 @@ enum _HPSDRModel //from enums.cs
 	HPSDRModel_ANAN_G2_1K = 12,
 	HPSDRModel_ANVELINAPRO3 = 13,
 	HPSDRModel_HERMESLITE = 14,
-	HPSDRModel_REDPITAYA = 15
+	HPSDRModel_REDPITAYA = 15,
+	HPSDRModel_SUNSDR2DX = 16
 } HPSDRModel;
 
 enum _RadioProtocol
 {
 	USB = 0,  // Protocol USB (P1)
-	ETH = 1   // Protocol ETH (P2)
+	ETH = 1,  // Protocol ETH (P2)
+	SUNSDR = 2 // SunSDR native protocol
 } RadioProtocol;
 
 // Protocol 1 USB
@@ -472,3 +475,12 @@ DWORD WINAPI  sendProtocol1Samples(LPVOID n);
  unsigned char SampleRateIn2Bits;
  int mic_decimation_factor;
  int mic_decimation_count;
+
+// SunSDR native protocol
+extern __declspec(dllexport) int nativeSunSDRInit(char* radioIP, int ctrlPort, int streamPort);
+extern __declspec(dllexport) void nativeSunSDRDestroy(void);
+extern __declspec(dllexport) int nativeSunSDRPowerOn(void);
+extern __declspec(dllexport) void nativeSunSDRPowerOff(void);
+extern __declspec(dllexport) void nativeSunSDRSetFreq(int freqHz, int isTx);
+extern __declspec(dllexport) void nativeSunSDRSetMode(int mode);
+extern __declspec(dllexport) void nativeSunSDRSetPTT(int ptt);

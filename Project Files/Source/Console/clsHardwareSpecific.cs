@@ -182,6 +182,13 @@ namespace Thetis
                         NetworkIO.LRAudioSwap(0);
                         HardwareSpecific.Hardware = HPSDRHW.OrionMKII;
                         break;
+                    case HPSDRModel.SUNSDR2DX:
+                        NetworkIO.SetRxADC(1);
+                        NetworkIO.SetMKIIBPF(0);
+                        cmaster.SetADCSupply(0, 33);
+                        NetworkIO.LRAudioSwap(0);
+                        HardwareSpecific.Hardware = HPSDRHW.SunSDR;
+                        break;
                 }
             }
         }
@@ -345,6 +352,8 @@ namespace Thetis
                     return HPSDRModel.HERMESLITE;
                 case "RED-PITAYA":
                     return HPSDRModel.REDPITAYA;
+                case "SUNSDR2-DX":
+                    return HPSDRModel.SUNSDR2DX;
                 default:
                     return HPSDRModel.HERMES;
             }
@@ -381,6 +390,8 @@ namespace Thetis
                     return "HERMES-LITE";
                 case HPSDRModel.REDPITAYA:
                     return "RED-PITAYA";
+                case HPSDRModel.SUNSDR2DX:
+                    return "SUNSDR2-DX";
                 default:
                     return "HERMES";
             }

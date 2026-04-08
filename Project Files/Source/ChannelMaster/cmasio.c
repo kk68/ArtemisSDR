@@ -136,6 +136,20 @@ void asioIN(double* in_tx)
 
 void asioOUT(int id, int nsamples, double* buff)
 {	// called by the global mixer with a buffer of output data for ASIO
+
+	/* SunSDR audio debug: one-shot logging */
+	{
+		static volatile long asio_dbg_count = 0;
+		long c = InterlockedIncrement(&asio_dbg_count);
+		if (c <= 5 || (c <= 1000 && c % 200 == 0))
+		{
+			char dbg[256];
+			sprintf(dbg, "[asioOUT] id=%d nsamples=%d run=%d protocol=%d (call #%ld)\n",
+				id, nsamples, pcma->run, pcma->protocol, c);
+			OutputDebugStringA(dbg);
+		}
+	}
+
 	if (!pcma->run) return;
 	xrmatchIN(pcma->rmatchOUT, buff);		// audio data from mixer
 	if (pcma->protocol == 0) // W4WMT cmASIO via Protocol 1

@@ -127,6 +127,7 @@ namespace Thetis
         ANVELINAPRO3,
         HERMESLITE,     //MI0BOT
         REDPITAYA,      //DH1KLM
+        SUNSDR2DX,      // SunSDR2 DX native
         LAST
     }
 
@@ -396,6 +397,7 @@ namespace Thetis
         HermesLite = 6,     // MI0BOT
         Saturn = 10,        // ANAN-G2: added G8NJJ
         SaturnMKII = 11,    // ANAN-G2: MKII board?
+        SunSDR = 20,        // SunSDR2 DX
         Unknown = 999,      // MW0LGE
     }
 
@@ -436,6 +438,7 @@ namespace Thetis
     {
         USB = 0,  // Protocol USB (P1)
         ETH,      // Protocol ETH (P2)
+        SUNSDR,   // SunSDR native protocol
         Auto,
         None
     }

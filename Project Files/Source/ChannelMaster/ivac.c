@@ -148,6 +148,20 @@ PORT void xvacOUT(int id, int stream, double* data)
 	// receiver input data (iq_type) -> stream = 0
 	// receiver output data (audio)  -> stream = 1
 	// transmitter output data (mon) -> stream = 2
+
+	/* SunSDR audio debug: one-shot logging for first N calls */
+	{
+		static volatile long xvac_dbg_count = 0;
+		long c = InterlockedIncrement(&xvac_dbg_count);
+		if (c <= 5 || (c <= 1000 && c % 200 == 0))
+		{
+			char dbg[256];
+			sprintf(dbg, "[xvacOUT] id=%d stream=%d run=%d iq_type=%d mixer=%p data=%p (call #%ld)\n",
+				id, stream, a->run, a->iq_type, a->mixer, (void*)data, c);
+			OutputDebugStringA(dbg);
+		}
+	}
+
 	if (a->run)
 	{
 		if (!a->iq_type)

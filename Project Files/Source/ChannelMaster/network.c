@@ -25,7 +25,8 @@
 #define WIN32_LEAN_AND_MEAN
 #endif
 
-#include "network.h" 
+#include "network.h"
+#include "sunsdr.h"
 #include <Iphlpapi.h>
 
 #pragma comment(lib, "IPHLPAPI.lib")
@@ -98,6 +99,11 @@ int nativeInitMetis(char* netaddr, int port, char* localaddr, int localport, int
 
 	RadioProtocol = protocol;
 	HPSDRModel = model_id;
+
+	/* SunSDR native protocol — bypass HPSDR socket setup entirely */
+	if (protocol == SUNSDR) {
+		return SunSDRInit(netaddr, SUNSDR_CONTROL_PORT, SUNSDR_STREAM_PORT);
+	}
 
 	prn->base_outbound_port = port;
 
@@ -380,6 +386,11 @@ int SendStop(void) {
 int StartReadThread(void) {
 	int myrc = 0;
 
+	/* SunSDR: power on and start IQ threads */
+	if (RadioProtocol == SUNSDR) {
+		return SunSDRPowerOn();
+	}
+
 	do {
 
 		if (SendStart() != 0) {
@@ -399,6 +410,10 @@ void StopReadThread() {
 	PrintTimeHack();
 	printf("- StopReadThread()\n");
 	fflush(stdout);
+	if (RadioProtocol == SUNSDR) {
+		SunSDRPowerOff();
+		return;
+	}
 	if (RadioProtocol == ETH) SendStop();
 	else SendStopToMetis();
 	DeInitMetisSockets();
@@ -1256,7 +1271,7 @@ void sendOutbound(int id, double* out)
 	//// convert from complex to byte
 	//// big-endian
 
-	if (RadioProtocol == ETH)
+	if (RadioProtocol == ETH || RadioProtocol == SUNSDR)
 	{
 		EnterCriticalSection(&prn->udpOUT);
 		if (id == 1)
@@ -1491,4 +1506,41 @@ DWORD WINAPI KeepAliveMain(LPVOID n) {
 	KeepAliveLoop();
 
 	return 0;
+}
+
+/* ========== SunSDR native protocol wrappers ========== */
+
+PORT int nativeSunSDRInit(char* radioIP, int ctrlPort, int streamPort)
+{
+	return SunSDRInit(radioIP, ctrlPort, streamPort);
+}
+
+PORT void nativeSunSDRDestroy(void)
+{
+	SunSDRDestroy();
+}
+
+PORT int nativeSunSDRPowerOn(void)
+{
+	return SunSDRPowerOn();
+}
+
+PORT void nativeSunSDRPowerOff(void)
+{
+	SunSDRPowerOff();
+}
+
+PORT void nativeSunSDRSetFreq(int freqHz, int isTx)
+{
+	SunSDRSetFreq(freqHz, isTx);
+}
+
+PORT void nativeSunSDRSetMode(int mode)
+{
+	SunSDRSetMode(mode);
+}
+
+PORT void nativeSunSDRSetPTT(int ptt)
+{
+	SunSDRSetPTT(ptt);
 }

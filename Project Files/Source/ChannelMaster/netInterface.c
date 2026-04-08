@@ -24,6 +24,14 @@
 #include "network.h"
 #include "obbuffs.h"
 
+static void sunsdr_trace(const char* msg) {
+	FILE* f = fopen("C:\\Users\\kosta\\ham\\SUNSDR\\sunsdr_debug.log", "a");
+	if (f) { SYSTEMTIME st; GetLocalTime(&st);
+		fprintf(f, "[%02d:%02d:%02d.%03d] TRACE: %s\n", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, msg);
+		fclose(f);
+	}
+}
+
 #define MDECAY 0.99f;
 const int numInputBuffs = 12;
 
@@ -73,9 +81,14 @@ int StartAudioNative()
 
 		} while (0);
 	}
+	else if (RadioProtocol == SUNSDR)
+	{
+		/* SunSDR: StartReadThread launches its own IQ + keepalive threads */
+		StartReadThread();
+	}
 	else
 	{
-		do { 		
+		do {
 				StartReadThread();
 				prn->hReadThreadInitSem = CreateSemaphore(NULL, 0, 1, NULL);
 				prn->hReadThreadMain = (HANDLE)_beginthreadex(NULL, 0, ReadThreadMain, 0, 0, NULL);
@@ -94,10 +107,11 @@ int StartAudioNative()
 }
 
 PORT
-void StopAudio() 
+void StopAudio()
 {
 	int rc;
-	if (!audio_running) return;
+	sunsdr_trace("StopAudio() called");
+	if (!audio_running) { sunsdr_trace("StopAudio: not running, returning"); return; }
 	audio_running = 0;
 	printf("stop audio called\n");  fflush(stdout);
 	rc = IOThreadStop();

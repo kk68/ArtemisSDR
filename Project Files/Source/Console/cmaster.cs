@@ -906,9 +906,26 @@ namespace Thetis
                         }
                     }
                     break;
+                case RadioProtocol.SUNSDR:
+                    // SunSDR: single DDC, 1 stream, route directly to RX1 via Inbound
+                    int[] SunSDR_Function = new int[8]
+                        {
+                        1, 1, 1, 1, 1, 1, 1, 1      // source 0, Call 0: function=1 (Inbound)
+                        };
+                    int[] SunSDR_Callid = new int[8]
+                        {
+                        0, 0, 0, 0, 0, 0, 0, 0      // source 0, Call 0: callid=0 (RX1)
+                        };
+                    int[] SunSDR_nstreams = new int[1]
+                        {
+                        1                            // 1 stream on source 0
+                        };
+                    fixed (int* pstreams = &SunSDR_nstreams[0], pfunction = &SunSDR_Function[0], pcallid = &SunSDR_Callid[0])
+                        LoadRouterAll((void*)0, 0, 1, 1, 8, pstreams, pfunction, pcallid);
+                    break;
             }
         }
-        
+
         public static void CMSetAntiVoxSourceWhat()
         {
             bool VACEn = Audio.console.VACEnabled;

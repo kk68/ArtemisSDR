@@ -71,6 +71,20 @@ namespace Thetis
             int model_id = (int)HardwareSpecific.Model;
             int protocol = ri.Protocol == RadioDiscoveryRadioProtocol.P1 ? 0 : 1;
 
+            // SunSDR native protocol — skip HPSDR discovery, init directly
+            if (HardwareSpecific.Model == HPSDRModel.SUNSDR2DX)
+            {
+                protocol = (int)RadioProtocol.SUNSDR;
+                ret = nativeInitMetis(radioIP, ratioPort, hostIP, hostPort, protocol, model_id);
+                if (ret == 0)
+                {
+                    BoardID = HPSDRHW.SunSDR;
+                    CurrentRadioProtocol = RadioProtocol.SUNSDR;
+                    BoardMismatch = "";
+                }
+                return ret;
+            }
+
             if (!ri.IsCustom && perform_search)
             {
                 RadioDiscoveryOptions options = new RadioDiscoveryOptions();
@@ -218,7 +232,9 @@ namespace Thetis
             int f_freq;
             f_freq = (int)((f * 1e6) * _freq_correction_factor);
             if (f_freq >= 0)
-                if (CurrentRadioProtocol == RadioProtocol.USB)
+                if (CurrentRadioProtocol == RadioProtocol.SUNSDR)
+                    nativeSunSDRSetFreq(f_freq, tx);              // SunSDR native protocol
+                else if (CurrentRadioProtocol == RadioProtocol.USB)
                     SetVFOfreq(id, f_freq, tx);                  // sending freq Hz to firmware
                 else SetVFOfreq(id, Freq2PhaseWord(f_freq), tx);   // sending phaseword to firmware
         }
