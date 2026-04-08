@@ -548,33 +548,13 @@ int SunSDRPowerOn(void)
     }
 
     /*
-     * FIX: VAC timing issue. The C# EnableVAC1() calls SetIVACrun(0, 1)
-     * only when console.PowerOn is true. For SunSDR, PowerOn may not be set
-     * when VAC is initialized, so pvac[0]->run stays 0. The PortAudio
-     * stream IS open (underflows count), resampler and mixer are created,
-     * but xvacOUT() drops all data because run==0.
-     *
-     * Fix: if VAC has valid rates (was configured) but run==0, enable it.
+     * NOTE: VAC mixer has active=3 (waits for BOTH RX audio + TX monitor).
+     * That deadlock is solved by the TX pipeline keepalive in the IQ read
+     * thread, which feeds silence into the TX Inbound and keeps xvacOUT()
+     * supplied when VAC is actually enabled. Do not force-enable VAC here:
+     * VAC run state must remain owned by the managed EnableVAC1/2() path so
+     * disabled VACs stay fully inactive.
      */
-    {
-        int v;
-        for (v = 0; v < 2; v++) {
-            IVAC a = pvac[v];
-            if (a && !a->run && a->audio_rate > 0 && a->vac_rate > 0) {
-                sdr_logf("AUDIO FIX: VAC[%d] configured (audio_rate=%d) but run=0 — enabling\n",
-                    v, a->audio_rate);
-                a->run = 1;
-            }
-            /*
-             * NOTE: VAC mixer has active=3 (waits for BOTH RX audio + TX monitor).
-             * Previously this caused a deadlock because TX monitor never got data.
-             * Now solved by the TX pipeline keepalive in the IQ read thread —
-             * it feeds silence into the TX Inbound, which runs xcmaster(tx_stream),
-             * which calls xvacOUT(0, 2, ...) to feed TX monitor to the mixer.
-             * Both inputs get data, so no deadlock.
-             */
-        }
-    }
 
     /* Dump audio state AFTER fix */
     sunsdr_dump_audio_state("after-fix");
