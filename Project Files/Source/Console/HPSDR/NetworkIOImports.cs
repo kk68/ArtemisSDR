@@ -10,6 +10,9 @@ namespace Thetis
         public static extern void SetOutputPowerFactor(int i);
 
         [DllImport("ChannelMaster.dll", CallingConvention = CallingConvention.Cdecl)]
+        public static extern void nativeSunSDRSetDrive(int raw);
+
+        [DllImport("ChannelMaster.dll", CallingConvention = CallingConvention.Cdecl)]
         public static extern void DeInitMetisSockets();
 
         [DllImport("ChannelMaster.dll", CharSet = CharSet.Ansi, CallingConvention = CallingConvention.Cdecl)]

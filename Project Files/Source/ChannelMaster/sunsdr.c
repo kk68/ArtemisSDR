@@ -213,6 +213,8 @@ static void sunsdr_tx_outbound(int id, int nsamples, double* buff)
 {
     int i;
     static unsigned int dbg_packets = 0;
+    double drive = 1.0;
+    int raw_drive = -1;
 
     (void)id;
 
@@ -226,9 +228,19 @@ static void sunsdr_tx_outbound(int id, int nsamples, double* buff)
         return;
     }
 
+    raw_drive = sdr.currentDriveRaw;
+
+    if (raw_drive > 0) {
+        drive = (double)raw_drive / 255.0;
+        if (drive < 0.0) drive = 0.0;
+        if (drive > 1.0) drive = 1.0;
+    } else {
+        drive = 1.0;
+    }
+
     for (i = 0; i < nsamples; i++) {
-        double cur_I = buff[2 * i + 0];
-        double cur_Q = buff[2 * i + 1];
+        double cur_I = buff[2 * i + 0] * drive;
+        double cur_Q = buff[2 * i + 1] * drive;
 
         while (sdr.txPhase < 1.0) {
             double frac = sdr.txPhase;
@@ -245,8 +257,8 @@ static void sunsdr_tx_outbound(int id, int nsamples, double* buff)
 
     if (dbg_packets != sdr.txAudioPackets && (sdr.txAudioPackets <= 5 || sdr.txAudioPackets % 250 == 0)) {
         dbg_packets = sdr.txAudioPackets;
-        sdr_logf("TX audio callback: nsamples=%d, tx_audio_packets=%u, seq=%u\n",
-            nsamples, sdr.txAudioPackets, sdr.txSeq);
+        sdr_logf("TX audio callback: nsamples=%d, tx_audio_packets=%u, seq=%u, drive=%.3f (%d)\n",
+            nsamples, sdr.txAudioPackets, sdr.txSeq, drive, raw_drive);
     }
 
     LeaveCriticalSection(&sdr.txLock);
@@ -797,6 +809,7 @@ int SunSDRPowerOn(void)
     sdr.currentRx2FreqHz = 0;
     sdr.currentRX2Enabled = 0;
     sdr.currentTune = 0;
+    sdr.currentDriveRaw = 255;
     sdr.lastTxWasTune = 0;
     sdr.pendingTuneReleaseConfig = 0;
     sdr.txSeq = 0;
@@ -891,6 +904,7 @@ void SunSDRPowerOff(void)
     sdr.powered = 0;
     sdr.currentPTT = 0;
     sdr.currentTune = 0;
+    sdr.currentDriveRaw = 255;
     sdr.lastTxWasTune = 0;
     sdr.pendingTuneReleaseConfig = 0;
     HaveSync = 0;
@@ -976,6 +990,14 @@ void SunSDRSetTune(int tune)
     sdr.currentTune = tune ? 1 : 0;
 }
 
+void SunSDRSetDrive(int raw)
+{
+    if (raw < 0) raw = 0;
+    if (raw > 255) raw = 255;
+    sdr.currentDriveRaw = raw;
+    sdr_logf("SunSDRSetDrive(%d)\n", raw);
+}
+
 void SunSDRSetPTT(int ptt)
 {
     int new_ptt = ptt ? 1 : 0;
@@ -1003,22 +1025,13 @@ void SunSDRSetPTT(int ptt)
 
     if (new_ptt) {
         sunsdr_send_config_block_state(0);
-        if (sdr.currentTune) {
-            sunsdr_send_u32_cmd(SUNSDR_OP_MODE, 0x12);
-            sdr.lastTxWasTune = 1;
-        } else {
-            sdr.lastTxWasTune = 0;
-        }
+        sdr.lastTxWasTune = 0;
         sunsdr_send_u32_cmd(SUNSDR_OP_MOX_PTT, 1);
     } else {
         sunsdr_send_u32_cmd(SUNSDR_OP_MOX_PTT, 0);
-        if (sdr.lastTxWasTune) {
-            sunsdr_send_u32_cmd(SUNSDR_OP_MODE, 0);
-            sdr.lastTxWasTune = 0;
-            sdr.pendingTuneReleaseConfig = 1;
-        } else {
-            sunsdr_send_config_block_state(1);
-        }
+        sunsdr_send_config_block_state(1);
+        sdr.lastTxWasTune = 0;
+        sdr.pendingTuneReleaseConfig = 0;
     }
 
     sdr.currentPTT = new_ptt;

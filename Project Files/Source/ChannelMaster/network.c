@@ -1554,3 +1554,8 @@ PORT void nativeSunSDRSetTune(int tune)
 {
 	SunSDRSetTune(tune);
 }
+
+PORT void nativeSunSDRSetDrive(int raw)
+{
+	SunSDRSetDrive(raw);
+}

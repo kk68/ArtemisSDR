@@ -26,6 +26,11 @@ warren@wpratt.com
 
 #include "cmcomm.h"
 
+extern int RadioProtocol;
+#ifndef SUNSDR
+#define SUNSDR 2
+#endif
+
 cmaster cm  = {0};
 CMASTER pcm = &cm;
 
@@ -390,8 +395,12 @@ void xcmaster (int stream)
 		// WriteAudio(10.0, pcm->xmtr[tx].ch_outrate, pcm->xmtr[tx].ch_outsize, pcm->xmtr[tx].out[0], 3);
 		xsidetone(tx);
 		xpipe (stream, 1, pcm->xmtr[tx].out);
-		// Spectrum0 (1, stream, 0, 0, pcm->xmtr[tx].out[0]);									// panadapter
-		xMixAudio (0, 0, chid (stream, 0), pcm->xmtr[tx].out[2]);								// mix monitor audio
+		// SunSDR voice monitor must follow the real TX audio path, not the sidetone buffer.
+		{
+			double* monitor_audio = (RadioProtocol == SUNSDR) ? pcm->xmtr[tx].out[0] : pcm->xmtr[tx].out[2];
+			// Spectrum0 (1, stream, 0, 0, pcm->xmtr[tx].out[0]);								// panadapter
+			xMixAudio (0, 0, chid (stream, 0), monitor_audio);									// mix monitor audio
+		}
 		xtxgain (pcm->xmtr[tx].pgain);															// Gain for Penelope & amp_protect
 		xeer (pcm->xmtr[tx].peer);																// EER transmission
 		xilv(pcm->xmtr[tx].pilv, pcm->xmtr[tx].out);											// interleave EER, call Outbound()

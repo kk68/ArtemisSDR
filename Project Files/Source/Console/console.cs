@@ -28685,6 +28685,12 @@ namespace Thetis
                 m_fDrivePower = new_pwr;
                 DrivePowerChangedHandlers?.Invoke(1, new_pwr, TUN || chk2TONE.Checked); // only rx1
             }
+
+            if (NetworkIO.CurrentRadioProtocol == RadioProtocol.SUNSDR)
+            {
+                int native_drive = (int)Math.Round(Math.Max(0, Math.Min(100, new_pwr)) * 255.0 / 100.0);
+                NetworkIO.nativeSunSDRSetDrive(native_drive);
+            }
         }
 
         private void ptbAF_Scroll(object sender, System.EventArgs e)
@@ -29053,7 +29059,23 @@ namespace Thetis
         private void HdwMOXChanged(bool tx, double freq)
         {
             if (NetworkIO.CurrentRadioProtocol == RadioProtocol.SUNSDR)
+            {
+                // SunSDR native TX scaling reads prn->tx[0].drive_level. That state is
+                // initialized to 0 on startup, so refresh the current Thetis-selected
+                // power source immediately before keying TX/TUNE.
+                if (tx)
+                {
+                    if (chkTUN.Checked)
+                        ptbTune_Scroll(this, EventArgs.Empty);
+                    else
+                        ptbPWR_Scroll(this, EventArgs.Empty);
+                }
+
+                // Latch tune state immediately before the native MOX/PTT transition.
+                // The async TUNE UI path can otherwise collapse back into plain MOX.
+                NetworkIO.nativeSunSDRSetTune(chkTUN.Checked ? 1 : 0);
                 NetworkIO.nativeSunSDRSetPTT(tx ? 1 : 0);
+            }
 
             if (tx)
             {
@@ -46605,6 +46627,12 @@ namespace Thetis
             {
                 m_fTuneDrivePower = new_pwr;
                 DrivePowerChangedHandlers?.Invoke(1, new_pwr, true); // only rx1, and always tune
+            }
+
+            if (NetworkIO.CurrentRadioProtocol == RadioProtocol.SUNSDR)
+            {
+                int native_drive = (int)Math.Round(Math.Max(0, Math.Min(100, new_pwr)) * 255.0 / 100.0);
+                NetworkIO.nativeSunSDRSetDrive(native_drive);
             }
         }
         private DrivePowerSource _tuneDrivePowerSource = DrivePowerSource.DRIVE_SLIDER;

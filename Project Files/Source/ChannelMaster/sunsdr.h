@@ -98,6 +98,7 @@ typedef struct _sunsdr_state
     int currentPTT;
     int currentRX2Enabled;
     int currentTune;
+    int currentDriveRaw;
     int lastTxWasTune;
     int pendingTuneReleaseConfig;
     int powered;
@@ -131,6 +132,7 @@ void SunSDRSetMode(int mode);
 void SunSDRSetPTT(int ptt);
 void SunSDRSetRX2(int enabled);
 void SunSDRSetTune(int tune);
+void SunSDRSetDrive(int raw);
 
 /* IQ receive thread */
 DWORD WINAPI SunSDRReadThread(LPVOID param);

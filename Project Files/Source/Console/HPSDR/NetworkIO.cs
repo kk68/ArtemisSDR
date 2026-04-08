@@ -223,6 +223,8 @@ namespace Thetis
 
             int i = (int)(255 * f * _swr_protect);
             SetOutputPowerFactor(i);
+            if (CurrentRadioProtocol == RadioProtocol.SUNSDR)
+                nativeSunSDRSetDrive(i);
         }
 
         private static double[][] _lastVFOfreq = new double[2][] { new double[] { 0.0, 0.0, 0.0, 0.0 }, new double[] { 0.0 } };
