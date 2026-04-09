@@ -10,6 +10,9 @@ namespace Thetis
         public static extern void SetOutputPowerFactor(int i);
 
         [DllImport("ChannelMaster.dll", CallingConvention = CallingConvention.Cdecl)]
+        public static extern void nativeSunSDRSetDrive(int raw);
+
+        [DllImport("ChannelMaster.dll", CallingConvention = CallingConvention.Cdecl)]
         public static extern void DeInitMetisSockets();
 
         [DllImport("ChannelMaster.dll", CharSet = CharSet.Ansi, CallingConvention = CallingConvention.Cdecl)]
@@ -398,12 +401,27 @@ namespace Thetis
         public static extern void nativeSunSDRPowerOff();
 
         [DllImport("ChannelMaster.dll", CallingConvention = CallingConvention.Cdecl)]
-        public static extern void nativeSunSDRSetFreq(int freqHz, int isTx);
+        public static extern void nativeSunSDRSetFreq(int receiver, int freqHz, int isTx);
 
         [DllImport("ChannelMaster.dll", CallingConvention = CallingConvention.Cdecl)]
         public static extern void nativeSunSDRSetMode(int mode);
 
         [DllImport("ChannelMaster.dll", CallingConvention = CallingConvention.Cdecl)]
         public static extern void nativeSunSDRSetPTT(int ptt);
+
+        [DllImport("ChannelMaster.dll", CallingConvention = CallingConvention.Cdecl)]
+        public static extern void nativeSunSDRSetRX2(int enabled);
+
+        [DllImport("ChannelMaster.dll", CallingConvention = CallingConvention.Cdecl)]
+        public static extern void nativeSunSDRSetTune(int tune);
+
+        [DllImport("ChannelMaster.dll", CallingConvention = CallingConvention.Cdecl)]
+        public static extern void nativeSunSDRSetAntenna(int antenna);
+
+        [DllImport("ChannelMaster.dll", CallingConvention = CallingConvention.Cdecl)]
+        public static extern void nativeSunSDRSetTxAntenna(int antenna);
+
+        [DllImport("ChannelMaster.dll", CallingConvention = CallingConvention.Cdecl)]
+        public static extern void nativeSunSDRSetPA(int enabled);
     }
 }

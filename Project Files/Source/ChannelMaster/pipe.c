@@ -26,6 +26,11 @@ warren@wpratt.com
 
 #include "cmcomm.h"
 
+extern int RadioProtocol;
+#ifndef SUNSDR
+#define SUNSDR 2
+#endif
+
 pipe pip  = {0};
 PIPE ppip = &pip;
 
@@ -230,14 +235,19 @@ void xpipe (int stream, int pos, double** buffs)
 			xrecordwave(1, 1, 0, buff);															// wav recorder 1
 			break;
 		case 1: // IQ data
-			xscope(0, 1, buffs[2]);																// scope
-			xvacOUT(0, 2, buffs[2]);															// data to VAC 0
-			xvacOUT(1, 2, buffs[2]);															// data to VAC 1
+		{
+			// SunSDR TX monitor should use the real TX audio path; other protocols keep
+			// using the traditional sidetone/monitor buffer.
+			double* tx_monitor = (RadioProtocol == SUNSDR) ? buffs[0] : buffs[2];
+			xscope(0, 1, tx_monitor);															// scope
+			xvacOUT(0, 2, tx_monitor);															// data to VAC 0
+			xvacOUT(1, 2, tx_monitor);															// data to VAC 1
 			for (i = 0; i < pcm->cmRCVR; i++)
-				xtciOUT(i, 2, buffs[2]);														// tx monitor into each TCI rx audio stream
-			xrecordwave(0, 1, 1, buffs[2]);														// wav recorder 0
-			xrecordwave(1, 1, 1, buffs[2]);														// wav recorder 1
+				xtciOUT(i, 2, tx_monitor);														// tx monitor into each TCI rx audio stream
+			xrecordwave(0, 1, 1, tx_monitor);													// wav recorder 0
+			xrecordwave(1, 1, 1, tx_monitor);													// wav recorder 1
 			break;
+		}
 		}
 	}
 	else if (stream == inid(2, 0))	// PowerSDR Stitched Rcvrs, Left side

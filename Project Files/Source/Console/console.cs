@@ -27726,6 +27726,26 @@ namespace Thetis
                             break;
                     }
                     break;
+                case RadioProtocol.SUNSDR:
+                    if (chkPower.Checked)
+                    {
+                        /*
+                         * SunSDR currently exposes RX1, optional RX2, and a single TX
+                         * monitor stream to the Thetis mixer. Treat it like the always-
+                         * active Ethernet monitor path so MON/DUP/VAC monitor routing
+                         * stays alive during MOX.
+                         */
+                        cmaster.MONMixState = true;
+                        cmaster.SetAAudioMixStates((void*)0, 0, RX1 + RX1S + RX2 + MON, RX1 + RX1S + RX2EN + MON);
+                        cmaster.SetAntiVOXSourceStates(0, RX1 + RX1S + RX2, RX1 + RX1S + RX2EN);
+                    }
+                    else
+                    {
+                        cmaster.MONMixState = false;
+                        cmaster.SetAAudioMixStates((void*)0, 0, RX1 + RX1S + RX2 + MON, 0);
+                        cmaster.SetAntiVOXSourceStates(0, RX1 + RX1S + RX2, 0);
+                    }
+                    break;
             }
         }
         public void comboDisplayMode_SelectedIndexChanged(object sender, System.EventArgs e)
@@ -28665,6 +28685,12 @@ namespace Thetis
                 m_fDrivePower = new_pwr;
                 DrivePowerChangedHandlers?.Invoke(1, new_pwr, TUN || chk2TONE.Checked); // only rx1
             }
+
+            if (NetworkIO.CurrentRadioProtocol == RadioProtocol.SUNSDR)
+            {
+                int native_drive = (int)Math.Round(Math.Max(0, Math.Min(100, new_pwr)) * 255.0 / 100.0);
+                NetworkIO.nativeSunSDRSetDrive(native_drive);
+            }
         }
 
         private void ptbAF_Scroll(object sender, System.EventArgs e)
@@ -29032,6 +29058,25 @@ namespace Thetis
 
         private void HdwMOXChanged(bool tx, double freq)
         {
+            if (NetworkIO.CurrentRadioProtocol == RadioProtocol.SUNSDR)
+            {
+                // SunSDR native TX scaling reads prn->tx[0].drive_level. That state is
+                // initialized to 0 on startup, so refresh the current Thetis-selected
+                // power source immediately before keying TX/TUNE.
+                if (tx)
+                {
+                    if (chkTUN.Checked)
+                        ptbTune_Scroll(this, EventArgs.Empty);
+                    else
+                        ptbPWR_Scroll(this, EventArgs.Empty);
+                }
+
+                // Latch tune state immediately before the native MOX/PTT transition.
+                // The async TUNE UI path can otherwise collapse back into plain MOX.
+                NetworkIO.nativeSunSDRSetTune(chkTUN.Checked ? 1 : 0);
+                NetworkIO.nativeSunSDRSetPTT(tx ? 1 : 0);
+            }
+
             if (tx)
             {
                 if (m_bQSOResetTimerOnMox) QSOTimerReset();
@@ -30078,6 +30123,9 @@ namespace Thetis
                     await Task.Run(() => ATUTune(ATUTunetoken), ATUTunetoken);
                 }
 
+                if (NetworkIO.CurrentRadioProtocol == RadioProtocol.SUNSDR)
+                    NetworkIO.nativeSunSDRSetTune(1);
+
                 chkMOX.Checked = true;
 
                 await Task.Delay(100); // MW0LGE_21k8
@@ -30102,6 +30150,9 @@ namespace Thetis
             else
             {
                 _tune_pulse_on = false;
+
+                if (NetworkIO.CurrentRadioProtocol == RadioProtocol.SUNSDR)
+                    NetworkIO.nativeSunSDRSetTune(0);
 
                 chkMOX.Checked = false;                                         // we're done
                 await Task.Delay(100);
@@ -33904,6 +33955,9 @@ namespace Thetis
         {
             if (new_mode == DSPMode.FIRST || new_mode == DSPMode.LAST) return;
 
+            if (NetworkIO.CurrentRadioProtocol == RadioProtocol.SUNSDR)
+                NetworkIO.nativeSunSDRSetMode((int)new_mode);
+
             //MW0LGE_21d
             Band oldBand = RX1Band;
             //            
@@ -37243,8 +37297,29 @@ namespace Thetis
                 //wave cmaster.CMSetSRXWaveRecordRun(1);
                 chkRX2.Checked = value;
 
+                if (NetworkIO.CurrentRadioProtocol == RadioProtocol.SUNSDR)
+                    NetworkIO.nativeSunSDRSetRX2(value ? 1 : 0);
+
                 if (rx2_enabled)
                 {
+                    if (vfob_dsp_mode != DSPMode.FIRST && vfob_dsp_mode != DSPMode.LAST)
+                        RX2DSPMode = vfob_dsp_mode;
+
+                    switch (vfob_filter)
+                    {
+                        case Filter.F1:
+                        case Filter.F2:
+                        case Filter.F3:
+                        case Filter.F4:
+                        case Filter.F5:
+                        case Filter.F6:
+                        case Filter.F7:
+                        case Filter.VAR1:
+                        case Filter.VAR2:
+                            RX2Filter = vfob_filter;
+                            break;
+                    }
+
                     old_rx1_display_mode = comboDisplayMode.Text;
 
                     UpdateDDCs(rx2_enabled);
@@ -37588,6 +37663,9 @@ namespace Thetis
         private void SetRX2Mode(DSPMode new_mode)
         {
             if (new_mode == DSPMode.FIRST || new_mode == DSPMode.LAST) return;
+
+            if (NetworkIO.CurrentRadioProtocol == RadioProtocol.SUNSDR)
+                NetworkIO.nativeSunSDRSetMode((int)new_mode);
 
             Band oldBand = RX2Band; //MW0LGE_21d
             DSPMode old_mode = _rx2_dsp_mode;
@@ -38022,6 +38100,7 @@ namespace Thetis
             radRX2FilterVar2.Text = rx2_filters[(int)new_mode].GetName(Filter.VAR2);
 
             _rx2_dsp_mode = new_mode;
+            vfob_dsp_mode = new_mode;
 
             if (_rx2_dsp_mode != DSPMode.FM && _rx2_dsp_mode != DSPMode.DRM)
             {
@@ -38264,6 +38343,7 @@ namespace Thetis
             }
 
             rx2_filter = new_filter;
+            vfob_filter = new_filter;
 
             low = rx2_filters[(int)_rx2_dsp_mode].GetLow(new_filter);
             high = rx2_filters[(int)_rx2_dsp_mode].GetHigh(new_filter);
@@ -45877,6 +45957,11 @@ namespace Thetis
                 if (!IsSetupFormNull) SetupForm.UpdateOCLedStrip(_mox, bits);
             }
 
+            if (NetworkIO.CurrentRadioProtocol == RadioProtocol.SUNSDR)
+            {
+                NetworkIO.nativeSunSDRSetPA(chkExternalPA.Checked ? 1 : 0);
+            }
+
             _xpa_enabled = chkExternalPA.Checked;
 
             if (_xpa_enabled != old_enabled)
@@ -46547,6 +46632,12 @@ namespace Thetis
             {
                 m_fTuneDrivePower = new_pwr;
                 DrivePowerChangedHandlers?.Invoke(1, new_pwr, true); // only rx1, and always tune
+            }
+
+            if (NetworkIO.CurrentRadioProtocol == RadioProtocol.SUNSDR)
+            {
+                int native_drive = (int)Math.Round(Math.Max(0, Math.Min(100, new_pwr)) * 255.0 / 100.0);
+                NetworkIO.nativeSunSDRSetDrive(native_drive);
             }
         }
         private DrivePowerSource _tuneDrivePowerSource = DrivePowerSource.DRIVE_SLIDER;

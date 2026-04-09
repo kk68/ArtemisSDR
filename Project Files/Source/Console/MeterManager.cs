@@ -9705,7 +9705,7 @@ namespace Thetis
             }
             private string formatAux(string name)
             {
-                if (name.Length < 2) return "";
+                if (string.IsNullOrEmpty(name) || name.Length < 2) return "";
                 string tmp = name.ToLower();
                 tmp = char.ToUpper(tmp[0]) + tmp.Substring(1);
                 if (tmp == "Byps") tmp = "Bypass";

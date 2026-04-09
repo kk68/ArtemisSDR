@@ -1643,7 +1643,7 @@ namespace Thetis
                     try
                     {
                         retval = ivac.StartAudioIVAC(0) == 1;
-                        if (retval && console.PowerOn)
+                        if (retval)
                             ivac.SetIVACrun(0, 1);
                     }
                     catch (Exception)
@@ -1723,7 +1723,7 @@ namespace Thetis
                     try
                     {
                         retval = ivac.StartAudioIVAC(1) == 1;
-                        if (retval && console.PowerOn)
+                        if (retval)
                             ivac.SetIVACrun(1, 1);
 
                     }
