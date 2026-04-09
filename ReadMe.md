@@ -16,6 +16,7 @@ The current fork supports practical operation on SunSDR2 DX:
 - **TX antenna switching working** through Thetis antenna setup controls
 - **PA / xPA control working** from Thetis
 - **Power off/on recovery working** without losing the receive stream
+- **RX band switching currently working via a temporary SunSDR-only auto power recycle workaround**
 
 This is no longer just an RX-only bring-up. It is a usable SunSDR2 DX port with some remaining feature gaps and one major remaining calibration item: TX power/drive linearity.
 
@@ -100,6 +101,56 @@ For a simple HF amplifier test, enabling one `TXPA` pin with `Transmit Pin Actio
 - TX audio works for normal operation and TUNE.
 - The current working path is VAC-centric when no local ASIO output is available.
 - Local monitor-oriented behavior such as `MON` and `DUP` is still not fully resolved for SunSDR and should not be treated as complete.
+
+## RX Band Switching Status
+
+SunSDR RX band switching is currently in a **workable but not final** state.
+
+What is true now:
+
+- live `RX1` band changes can leave the SunSDR receive stream in a bad state
+- the user-discovered workaround was:
+  - switch band
+  - click `POWER` off/on
+  - RX recovers
+- the current fork now performs that same recovery automatically for SunSDR on a real `RX1` band change when not transmitting
+
+Why this exists:
+
+- logs show the correct new-band RX values are being sent after the band change
+- logs also show the radio/stream still needs a native restart to recover cleanly
+- so the remaining bug is not “wrong final frequency/mode/antenna,” but “stream/session needs a lighter-weight recovery we have not yet mapped”
+
+Current implementation note:
+
+- the workaround is implemented in:
+  - `Console/console.cs` via a guarded SunSDR-only automatic `POWER` recycle on `RX1` band changes
+
+This should be treated as a temporary operational fix, not the final protocol solution.
+
+### Next RE Step For RX Band Switching
+
+The next step is to replace the workaround with the exact native SunSDR band-switch sequence used by ExpertSDR3.
+
+Recommended focused captures:
+
+1. `40m -> 20m` RX-only band switch
+2. `20m -> 40m` RX-only band switch
+
+Capture constraints:
+
+- no `MOX`
+- no `TUNE`
+- no antenna changes during the action window
+- keep RX2 state fixed
+
+Goal:
+
+- identify whether ExpertSDR3 sends:
+  - a cleaner ordered RX reconfigure bundle
+  - or an explicit stream/session re-arm command family
+
+Only after that should the current automatic power recycle be removed.
 
 ## TX Power Calibration Status
 
@@ -215,6 +266,7 @@ That means:
 - [ ] Stabilize VAC behavior across RX/MOX/TUNE transitions
 - [ ] Finish local monitor (`MON`) and `DUP` path behavior
 - [ ] Finish TX drive / tune power calibration, starting with 40m reference measurements
+- [ ] Replace the temporary SunSDR RX band-switch auto power recycle with the exact ExpertSDR3 reconfigure sequence
 - [ ] Keep validating mode/filter edge cases
 - [ ] Continue RE for any hidden per-receiver input routing that could make diversity possible
 

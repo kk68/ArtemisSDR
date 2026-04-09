@@ -27226,13 +27226,6 @@ namespace Thetis
         {
             if (initializing) return;
             if (rx == 1) updateUsbBCDdevice(new_band);
-
-            if (NetworkIO.CurrentRadioProtocol == RadioProtocol.SUNSDR && rx == 1)
-            {
-                int ant = GetRXAntenna(new_band);
-                if (ant == 1 || ant == 2)
-                    NetworkIO.nativeSunSDRSetAntenna(ant);
-            }
         }
         private void updateUsbBCDdevice(Band rx1band)
         {

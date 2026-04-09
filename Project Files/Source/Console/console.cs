@@ -45440,7 +45440,82 @@ namespace Thetis
         {
             if (rx != 1) return;
             handleBSFChange(oldBand, newBand, oldMode, newMode, oldFilter, newFilter, oldFreq, newFreq, oldCentreF, newCentreF, oldCTUN, newCTUN, oldZoomSlider, newZoomSlider);
+
+            if (oldBand != newBand &&
+                NetworkIO.CurrentRadioProtocol == RadioProtocol.SUNSDR &&
+                chkPower.Checked)
+            {
+                /*
+                 * SunSDR RX is driven from the settled DDS/centre-frequency path,
+                 * not directly from the visible VFOA number. During a live band
+                 * switch Thetis briefly emits stale old-band writes while it churns
+                 * through the band-stack update. Replay the final settled SunSDR RX
+                 * state here, after SetBand has completed, so the correct DDS state
+                 * wins and the native cache is refreshed for any later POWER cycle.
+                 */
+                BeginInvoke(new MethodInvoker(() =>
+                {
+                    if (!chkPower.Checked)
+                        return;
+
+                    int ant = SetupForm != null ? SetupForm.GetRXAntenna(newBand) : 0;
+                    if (ant == 1 || ant == 2)
+                        NetworkIO.nativeSunSDRSetAntenna(ant);
+
+                    NetworkIO.nativeSunSDRSetMode((int)RX1DSPMode);
+                    NetworkIO.VFOfreq(0, RX1DDSFreq, 0);
+
+                    if (RX2Enabled)
+                        NetworkIO.VFOfreq(3, RX2DDSFreq, 0);
+                }));
+
+                if (!_sunSDRBandPowerRecyclePending && !MOX && !chkTUN.Checked)
+                {
+                    _sunSDRBandPowerRecyclePending = true;
+                    Band targetBand = newBand;
+
+                    Task.Run(async () =>
+                    {
+                        await Task.Delay(150).ConfigureAwait(false);
+
+                        if (IsDisposed)
+                            return;
+
+                        BeginInvoke(new MethodInvoker(() =>
+                        {
+                            if (IsDisposed)
+                                return;
+
+                            if (!chkPower.Checked || RX1Band != targetBand || MOX || chkTUN.Checked)
+                            {
+                                _sunSDRBandPowerRecyclePending = false;
+                                return;
+                            }
+
+                            chkPower.Checked = false;
+                        }));
+
+                        await Task.Delay(900).ConfigureAwait(false);
+
+                        if (IsDisposed)
+                            return;
+
+                        BeginInvoke(new MethodInvoker(() =>
+                        {
+                            if (IsDisposed)
+                                return;
+
+                            if (RX1Band == targetBand)
+                                chkPower.Checked = true;
+
+                            _sunSDRBandPowerRecyclePending = false;
+                        }));
+                    });
+                }
+            }
         }
+
+        private bool _sunSDRBandPowerRecyclePending = false;
         private void OnEntryAdd(BandStackFilter bsf)
         {
             if (!BandStackManager.Ready) return;
