@@ -2,7 +2,7 @@
 
 Native SunSDR2 DX integration for the [Thetis](https://github.com/ramdor/Thetis) SDR application, built through clean-room protocol reverse engineering.
 
-## Status: Core RX/TX Working
+## Status: Core RX/TX/PA Working
 
 The current fork supports practical operation on SunSDR2 DX:
 
@@ -14,6 +14,7 @@ The current fork supports practical operation on SunSDR2 DX:
 - **Drive / Tune power control working** from Thetis sliders
 - **RX antenna switching working**
 - **TX antenna switching working** through Thetis antenna setup controls
+- **PA / xPA control working** from Thetis
 - **Power off/on recovery working** without losing the receive stream
 
 This is no longer just an RX-only bring-up. It is a usable SunSDR2 DX port with some remaining feature gaps.
@@ -33,6 +34,7 @@ This is no longer just an RX-only bring-up. It is a usable SunSDR2 DX port with 
 | Stream keepalive | Bidirectional IQ — send silent TX packets or radio disconnects at ~8s |
 | RX antenna selector | Opcode `0x15`, selector `0x01` = primary, `0x03` = secondary RX |
 | TX antenna selector | Opcode `0x15`, selector `0x01` = primary, `0x02` = secondary TX |
+| PA / xPA selector | Opcode `0x24`, u32: `1` = PA on, `0` = PA off |
 
 ## Architecture
 
@@ -79,8 +81,18 @@ SunSDR2 DX                              Thetis (this fork)
 - **Antenna switching**
   - RX antenna selectors `0x01` / `0x03`
   - TX antenna selectors `0x01` / `0x02`
+- **PA control**
+  - `0x24` PA / external PA enable
 - **Power control**
   - Thetis `Drive` / `Tune` sliders feed native SunSDR TX scaling
+
+## xPA Setup
+
+To use the main-window `xPA` button on SunSDR2 DX, Thetis must first have at least one external PA TX pin enabled in:
+
+- `Setup -> OC Control -> HF/VHF/SWL -> Ext PA Control (xPA)`
+
+For a simple HF amplifier test, enabling one `TXPA` pin with `Transmit Pin Action = Mox/Tune/2Tone` is sufficient to surface the `xPA` button and drive native SunSDR PA control during `MOX` and `TUNE`.
 
 ## Audio Notes
 

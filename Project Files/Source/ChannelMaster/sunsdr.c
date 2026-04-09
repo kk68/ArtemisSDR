@@ -430,6 +430,11 @@ static void sunsdr_send_config_block_state(int rx_state)
     sunsdr_send_hex_pkt_u8(SUNSDR_CONFIG_BLOCK_TEMPLATE_HEX, 0x12, (unsigned char)(rx_state ? 1 : 0));
 }
 
+static unsigned int sunsdr_current_pa_wire_state(void)
+{
+    return (unsigned int)((sdr.currentPAEnabled && sdr.currentPTT) ? 1 : 0);
+}
+
 static void sunsdr_send_rx_tail(void)
 {
     unsigned int ant_selector = (unsigned int)sunsdr_map_ant_selector(sdr.currentRxAntenna > 0 ? sdr.currentRxAntenna : 1);
@@ -440,7 +445,7 @@ static void sunsdr_send_rx_tail(void)
     Sleep(1);
     sunsdr_send_hex_pkt("32ff07001a000000000001000000000000000000000000000000000000000000000000000000000000000000", 44);
     Sleep(1);
-    sunsdr_send_u32_cmd(SUNSDR_OP_PA_ENABLE, (unsigned int)(sdr.currentPAEnabled ? 1 : 0));
+    sunsdr_send_u32_cmd(SUNSDR_OP_PA_ENABLE, sunsdr_current_pa_wire_state());
     Sleep(1);
     sunsdr_send_hex_pkt(SUNSDR_CONFIG_BLOCK_TEMPLATE_HEX, 70);
     Sleep(1);
@@ -1029,9 +1034,8 @@ void SunSDRSetDrive(int raw)
 void SunSDRSetPA(int enabled)
 {
     int new_enabled = enabled ? 1 : 0;
-
-    if (sdr.currentPAEnabled == new_enabled)
-        return;
+    int old_enabled = sdr.currentPAEnabled;
+    unsigned int wire_state;
 
     sdr.currentPAEnabled = new_enabled;
 
@@ -1040,8 +1044,9 @@ void SunSDRSetPA(int enabled)
         return;
     }
 
-    sdr_logf("SunSDRSetPA(%d)\n", new_enabled);
-    sunsdr_send_u32_cmd(SUNSDR_OP_PA_ENABLE, (unsigned int)new_enabled);
+    wire_state = sunsdr_current_pa_wire_state();
+    sdr_logf("SunSDRSetPA(request=%d, old=%d, wire=%u, ptt=%d)\n", new_enabled, old_enabled, wire_state, sdr.currentPTT);
+    sunsdr_send_u32_cmd(SUNSDR_OP_PA_ENABLE, wire_state);
 }
 
 void SunSDRSetAntenna(int antenna)
@@ -1119,7 +1124,11 @@ void SunSDRSetPTT(int ptt)
         sunsdr_send_config_block_state(0);
         sdr.lastTxWasTune = 0;
         sunsdr_send_u32_cmd(SUNSDR_OP_MOX_PTT, 1);
+        sdr.currentPTT = new_ptt;
+        sunsdr_send_u32_cmd(SUNSDR_OP_PA_ENABLE, sunsdr_current_pa_wire_state());
     } else {
+        sdr.currentPTT = new_ptt;
+        sunsdr_send_u32_cmd(SUNSDR_OP_PA_ENABLE, sunsdr_current_pa_wire_state());
         sunsdr_send_u32_cmd(SUNSDR_OP_MOX_PTT, 0);
         sunsdr_send_config_block_state(1);
         sdr.lastTxWasTune = 0;
