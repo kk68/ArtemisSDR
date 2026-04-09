@@ -1093,11 +1093,11 @@ DWORD WINAPI SunSDRReadThread(LPVOID param)
         double elapsed_ms = (double)(now_tick - last_service_tick);
 
         if (elapsed_ms > 0.0) {
-            tx_feed_accum += elapsed_ms * tx_feed_rate / 1000.0;
-            while (tx_feed_accum >= 1.0) {
-                Inbound(tx_stream_id, tx_buf_size, tx_silence_buf);
-                tx_feed_accum -= 1.0;
-            }
+                tx_feed_accum += elapsed_ms * tx_feed_rate / 1000.0;
+                while (tx_feed_accum >= 1.0) {
+                    Inbound(tx_stream_id, tx_buf_size, tx_silence_buf);
+                    tx_feed_accum -= 1.0;
+                }
 
             tx_keepalive_accum += elapsed_ms * tx_keepalive_rate / 1000.0;
             last_service_tick = now_tick;
