@@ -103,6 +103,11 @@ namespace Thetis
 			} 
 			int idx = (int)band - (int)Band.B160M; 
 			TxAnt[idx] = ant;
+
+            // SunSDR does not use the normal Alex bitfield push path for TX antenna
+            // reliably, so drive the native selector from the source-of-truth setter.
+            if (NetworkIO.CurrentRadioProtocol == RadioProtocol.SUNSDR && (ant == 1 || ant == 2))
+                NetworkIO.nativeSunSDRSetTxAntenna(ant);
 		} 
 
         public static Band AntBandFromFreq(double freq)
@@ -311,7 +316,8 @@ namespace Thetis
 		{
 			if ( !alex_enabled ) 
 			{
-                NetworkIO.SetAntBits(0, 0, 0, 0, false);
+                if (NetworkIO.CurrentRadioProtocol != RadioProtocol.SUNSDR)
+                    NetworkIO.SetAntBits(0, 0, 0, 0, false);
                 m_bOld_alex_enabled = alex_enabled;
                 return;
 			}            
@@ -398,7 +404,17 @@ namespace Thetis
 				m_bOld_tx != tx ||
                 m_bOld_alex_enabled != alex_enabled)
 			{                             
-				NetworkIO.SetAntBits(rx_only_ant, trx_ant, tx_ant, rx_out, tx);
+                if (NetworkIO.CurrentRadioProtocol == RadioProtocol.SUNSDR)
+                {
+                    if (!tx && rx_only_ant == 0 && (trx_ant == 1 || trx_ant == 2))
+                        NetworkIO.nativeSunSDRSetAntenna(trx_ant);
+                    else if (tx && (tx_ant == 1 || tx_ant == 2))
+                        NetworkIO.nativeSunSDRSetTxAntenna(tx_ant);
+                }
+                else
+                {
+				    NetworkIO.SetAntBits(rx_only_ant, trx_ant, tx_ant, rx_out, tx);
+                }
 
 				System.Console.WriteLine("Ant idx: " + idx + "(" + ((Band)idx + (int)Band.B160M).ToString() + ")");
                 System.Console.WriteLine("Ant Rx Only {0} , TRx Ant {1}, Tx Ant {2}, Rx Out {3}, TX {4}", rx_only_ant.ToString(), trx_ant.ToString(), tx_ant.ToString(), rx_out.ToString(), tx.ToString());

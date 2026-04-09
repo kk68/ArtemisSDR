@@ -487,3 +487,6 @@ extern __declspec(dllexport) void nativeSunSDRSetPTT(int ptt);
 extern __declspec(dllexport) void nativeSunSDRSetRX2(int enabled);
 extern __declspec(dllexport) void nativeSunSDRSetTune(int tune);
 extern __declspec(dllexport) void nativeSunSDRSetDrive(int raw);
+extern __declspec(dllexport) void nativeSunSDRSetAntenna(int antenna);
+extern __declspec(dllexport) void nativeSunSDRSetTxAntenna(int antenna);
+extern __declspec(dllexport) void nativeSunSDRSetPA(int enabled);

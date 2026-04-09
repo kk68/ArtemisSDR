@@ -45957,6 +45957,11 @@ namespace Thetis
                 if (!IsSetupFormNull) SetupForm.UpdateOCLedStrip(_mox, bits);
             }
 
+            if (NetworkIO.CurrentRadioProtocol == RadioProtocol.SUNSDR)
+            {
+                NetworkIO.nativeSunSDRSetPA(chkExternalPA.Checked ? 1 : 0);
+            }
+
             _xpa_enabled = chkExternalPA.Checked;
 
             if (_xpa_enabled != old_enabled)

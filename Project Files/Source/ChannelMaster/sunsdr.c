@@ -371,6 +371,24 @@ static void sunsdr_send_freq_pkt(int opcode, int sub, int freqHz)
     sunsdr_send_ctrl_and_recv(pkt, 26, reply, sizeof(reply));
 }
 
+static int sunsdr_map_ant_selector(int antenna)
+{
+    switch (antenna) {
+    case 1: return 0x01;
+    case 2: return 0x03;
+    default: return 0;
+    }
+}
+
+static int sunsdr_map_tx_ant_selector(int antenna)
+{
+    switch (antenna) {
+    case 1: return 0x01;
+    case 2: return 0x02;
+    default: return 0;
+    }
+}
+
 /* Send a simple len=4 command with a u32 payload */
 static void sunsdr_send_u32_cmd(int opcode, unsigned int value)
 {
@@ -414,13 +432,15 @@ static void sunsdr_send_config_block_state(int rx_state)
 
 static void sunsdr_send_rx_tail(void)
 {
+    unsigned int ant_selector = (unsigned int)sunsdr_map_ant_selector(sdr.currentRxAntenna > 0 ? sdr.currentRxAntenna : 1);
+
     sunsdr_send_u32_cmd(0x1E, 0);
     Sleep(1);
-    sunsdr_send_u32_cmd(0x15, 1);
+    sunsdr_send_u32_cmd(SUNSDR_OP_RX_ANT, ant_selector);
     Sleep(1);
     sunsdr_send_hex_pkt("32ff07001a000000000001000000000000000000000000000000000000000000000000000000000000000000", 44);
     Sleep(1);
-    sunsdr_send_u32_cmd(0x24, 0);
+    sunsdr_send_u32_cmd(SUNSDR_OP_PA_ENABLE, (unsigned int)(sdr.currentPAEnabled ? 1 : 0));
     Sleep(1);
     sunsdr_send_hex_pkt(SUNSDR_CONFIG_BLOCK_TEMPLATE_HEX, 70);
     Sleep(1);
@@ -616,6 +636,8 @@ int SunSDRInit(const char* radioIP, int ctrlPort, int streamPort)
     sdr.streamSock = INVALID_SOCKET;
     sdr.ctrlPort = ctrlPort;
     sdr.streamPort = streamPort;
+    sdr.currentRxAntenna = 1;
+    sdr.currentTxAntenna = 1;
     strncpy(sdr.radioIP, radioIP, sizeof(sdr.radioIP) - 1);
 
     /* Ensure WSA is initialized */
@@ -792,6 +814,8 @@ static void sunsdr_dump_audio_state(const char* label)
 int SunSDRPowerOn(void)
 {
     int desired_rx2 = sdr.currentRX2Enabled;
+    int desired_rx_ant = sdr.currentRxAntenna > 0 ? sdr.currentRxAntenna : 1;
+    int desired_tx_ant = sdr.currentTxAntenna > 0 ? sdr.currentTxAntenna : 1;
 
     sdr_logf("SunSDRPowerOn() called\n");
     printf("SunSDR: running power-on macro...\n");
@@ -890,6 +914,10 @@ int SunSDRPowerOn(void)
 
     if (desired_rx2)
         SunSDRSetRX2(desired_rx2);
+
+    SunSDRSetAntenna(desired_rx_ant);
+    SunSDRSetTxAntenna(desired_tx_ant);
+    SunSDRSetPA(sdr.currentPAEnabled);
 
     printf("SunSDR: powered on, IQ stream active\n");
     return 0;
@@ -996,6 +1024,70 @@ void SunSDRSetDrive(int raw)
     if (raw > 255) raw = 255;
     sdr.currentDriveRaw = raw;
     sdr_logf("SunSDRSetDrive(%d)\n", raw);
+}
+
+void SunSDRSetPA(int enabled)
+{
+    int new_enabled = enabled ? 1 : 0;
+
+    if (sdr.currentPAEnabled == new_enabled)
+        return;
+
+    sdr.currentPAEnabled = new_enabled;
+
+    if (!sdr.powered) {
+        sdr_logf("SunSDRSetPA(%d) cached while unpowered\n", new_enabled);
+        return;
+    }
+
+    sdr_logf("SunSDRSetPA(%d)\n", new_enabled);
+    sunsdr_send_u32_cmd(SUNSDR_OP_PA_ENABLE, (unsigned int)new_enabled);
+}
+
+void SunSDRSetAntenna(int antenna)
+{
+    int selector = sunsdr_map_ant_selector(antenna);
+
+    if (antenna > 0)
+        sdr.currentRxAntenna = antenna;
+
+    if (selector == 0) {
+        sdr_logf("SunSDRSetAntenna(%d) ignored: unsupported antenna\n", antenna);
+        return;
+    }
+
+    if (!sdr.powered) {
+        sdr_logf("SunSDRSetAntenna(%d) cached while unpowered\n", antenna);
+        return;
+    }
+
+    sdr_logf("SunSDRSetAntenna(%d) selector=0x%02X\n", antenna, selector);
+    sunsdr_send_u32_cmd(SUNSDR_OP_ANT_PREAMBLE, 0);
+    sunsdr_send_u32_cmd(SUNSDR_OP_RX_ANT, (unsigned int)selector);
+    sunsdr_send_u32_cmd(SUNSDR_OP_KEEPALIVE, 0);
+}
+
+void SunSDRSetTxAntenna(int antenna)
+{
+    int selector = sunsdr_map_tx_ant_selector(antenna);
+
+    if (antenna > 0)
+        sdr.currentTxAntenna = antenna;
+
+    if (selector == 0) {
+        sdr_logf("SunSDRSetTxAntenna(%d) ignored: unsupported antenna\n", antenna);
+        return;
+    }
+
+    if (!sdr.powered) {
+        sdr_logf("SunSDRSetTxAntenna(%d) cached while unpowered\n", antenna);
+        return;
+    }
+
+    sdr_logf("SunSDRSetTxAntenna(%d) selector=0x%02X\n", antenna, selector);
+    sunsdr_send_u32_cmd(SUNSDR_OP_ANT_PREAMBLE, 0);
+    sunsdr_send_u32_cmd(SUNSDR_OP_RX_ANT, (unsigned int)selector);
+    sunsdr_send_u32_cmd(SUNSDR_OP_KEEPALIVE, 0);
 }
 
 void SunSDRSetPTT(int ptt)

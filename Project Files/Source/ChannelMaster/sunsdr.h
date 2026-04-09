@@ -37,12 +37,15 @@ of the License, or (at your option) any later version.
 #define SUNSDR_OP_FREQ_PRIMARY  0x09
 #define SUNSDR_OP_STATE_REQ_A   0x0E
 #define SUNSDR_OP_STATE_REQ_B   0x10
+#define SUNSDR_OP_RX_ANT        0x15
 #define SUNSDR_OP_MODE          0x17
 #define SUNSDR_OP_KEEPALIVE     0x18
 #define SUNSDR_OP_RX2_ENABLE    0x1B
 #define SUNSDR_OP_QUERY_FIXED   0x1A
+#define SUNSDR_OP_ANT_PREAMBLE  0x1E
 #define SUNSDR_OP_CONFIG_BLOCK  0x20
 #define SUNSDR_OP_STREAM_XPORT  0x22
+#define SUNSDR_OP_PA_ENABLE     0x24
 #define SUNSDR_OP_EXT_CTRL      0x27
 #define SUNSDR_OP_STATE_REPEAT  0x5A
 #define SUNSDR_OP_POWER_WAKE    0x5F
@@ -97,6 +100,9 @@ typedef struct _sunsdr_state
     int currentMode;
     int currentPTT;
     int currentRX2Enabled;
+    int currentRxAntenna;
+    int currentTxAntenna;
+    int currentPAEnabled;
     int currentTune;
     int currentDriveRaw;
     int lastTxWasTune;
@@ -133,6 +139,9 @@ void SunSDRSetPTT(int ptt);
 void SunSDRSetRX2(int enabled);
 void SunSDRSetTune(int tune);
 void SunSDRSetDrive(int raw);
+void SunSDRSetAntenna(int antenna);
+void SunSDRSetTxAntenna(int antenna);
+void SunSDRSetPA(int enabled);
 
 /* IQ receive thread */
 DWORD WINAPI SunSDRReadThread(LPVOID param);

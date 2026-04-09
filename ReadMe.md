@@ -2,16 +2,21 @@
 
 Native SunSDR2 DX integration for the [Thetis](https://github.com/ramdor/Thetis) SDR application, built through clean-room protocol reverse engineering.
 
-## Status: RX Working (`rx-working-v1`)
+## Status: Core RX/TX Working
 
-The receive path is fully operational:
+The current fork supports practical operation on SunSDR2 DX:
 
-- **IQ Streaming** — Native SunSDR protocol on ports 50001 (control) and 50002 (IQ stream)
-- **Resampler** — 312,500 Hz native rate resampled to 384,000 Hz for WDSP DSP engine
-- **Panadapter & Waterfall** — Live spectrum display with correct frequencies
-- **Frequency Tuning** — DDC0 = IQ center frequency, DDC0 offset = 92,500 Hz from primary VFO
-- **Audio Output** — Demodulated audio via VAC (PortAudio/ReaRoute ASIO)
-- **Bidirectional IQ** — TX silence packets keep the radio streaming (1 TX per 8 RX packets)
+- **Native control and streaming** on UDP `50001` and `50002`
+- **RX1 working** with correct panadapter, waterfall, and demodulated audio
+- **RX2 working** as a second receive path with independent VFO B tuning and audio
+- **MOX/PTT working** with native SunSDR TX streaming
+- **TUNE working** through the normal Thetis TX/tone path
+- **Drive / Tune power control working** from Thetis sliders
+- **RX antenna switching working**
+- **TX antenna switching working** through Thetis antenna setup controls
+- **Power off/on recovery working** without losing the receive stream
+
+This is no longer just an RX-only bring-up. It is a usable SunSDR2 DX port with some remaining feature gaps.
 
 ## Key Protocol Facts
 
@@ -26,6 +31,8 @@ The receive path is fully operational:
 | PTT/MOX | Opcode 0x06, u32: 1=TX, 0=RX |
 | Power on | Captured macro sequence (29 steps) |
 | Stream keepalive | Bidirectional IQ — send silent TX packets or radio disconnects at ~8s |
+| RX antenna selector | Opcode `0x15`, selector `0x01` = primary, `0x03` = secondary RX |
+| TX antenna selector | Opcode `0x15`, selector `0x01` = primary, `0x02` = secondary TX |
 
 ## Architecture
 
@@ -53,15 +60,34 @@ SunSDR2 DX                              Thetis (this fork)
                                          +------------------+
 ```
 
-## Audio Path Fixes
+## Implemented Control Surface
 
-Three issues had to be resolved for audio output to work:
+- **RX tuning**
+  - `0x09` primary frequency write
+  - `0x08` companion writes for RX contexts
+- **TX tuning**
+  - standalone `0x09` split/TX frequency write
+- **Mode control**
+  - native SunSDR mode writes mapped from Thetis mode changes
+- **RX2**
+  - native RX2 enable/disable path
+  - independent RX2 / VFO B tuning context
+- **Transmit**
+  - `0x06` MOX/PTT
+  - `0x20` companion TX/RX state handling
+  - continuous `50002` TX stream keepalive and live TX audio packetization
+- **Antenna switching**
+  - RX antenna selectors `0x01` / `0x03`
+  - TX antenna selectors `0x01` / `0x02`
+- **Power control**
+  - Thetis `Drive` / `Tune` sliders feed native SunSDR TX scaling
 
-1. **VAC run flag timing** — `SetIVACrun(0,1)` was never called because `console.PowerOn` was false when the C# `EnableVAC1()` ran. Fixed by setting `pvac[v]->run = 1` directly in `SunSDRPowerOn()`.
+## Audio Notes
 
-2. **VAC mixer deadlock** — The mixer waits for ALL active inputs (`WaitForMultipleObjects(..., TRUE, INFINITE)`). During RX-only, TX monitor input never gets data. Fixed by feeding silence into the TX pipeline via `Inbound()`, which keeps `xcmaster(tx_stream)` running and feeds both mixer inputs.
-
-3. **No ASIO driver** — `audioCodecId` defaults to HERMES, routing the main mixer to the network void. VAC provides the working audio path.
+- Receive audio works.
+- TX audio works for normal operation and TUNE.
+- The current working path is VAC-centric when no local ASIO output is available.
+- Local monitor-oriented behavior such as `MON` and `DUP` is still not fully resolved for SunSDR and should not be treated as complete.
 
 ## Files Changed (from upstream Thetis)
 
@@ -77,16 +103,29 @@ Three issues had to be resolved for audio output to work:
 - `Console/enums.cs` — `SUNSDR2DX` model and `SUNSDR` protocol enums
 - `Console/clsHardwareSpecific.cs` — SunSDR hardware model support
 - `Console/HPSDR/NetworkIO.cs`, `NetworkIOImports.cs` — SunSDR init/freq routing
-- `Console/cmaster.cs` — SunSDR router configuration (1 source, 1 stream, Inbound to RX1)
-- `Console/setup.cs`, `setup.designer.cs` — SunSDR in radio model dropdown
+- `Console/cmaster.cs` — SunSDR router configuration and source routing
+- `Console/console.cs` — RX2, TX, drive, and native SunSDR control wiring
+- `Console/HPSDR/Alex.cs` — SunSDR antenna control integration
+- `Console/setup.cs`, `setup.designer.cs` — SunSDR in radio model dropdown and antenna setup integration
 - `*.vcxproj` (portaudio, wdsp, cmASIO, ChannelMaster) — PlatformToolset v145 → v143
+
+## Known Limitations
+
+- **Diversity is not supported on SunSDR2 DX in this fork.**
+  - Thetis diversity UI can be surfaced, but ExpertSDR3 evidence shows RX2 follows the same RX antenna selection as RX1.
+  - No independent per-receiver antenna/input assignment has been recovered yet.
+- **Monitor/DUP path is incomplete.**
+  - `MON` and `DUP` behavior is not yet reliable on SunSDR.
+- **VAC behavior still needs cleanup.**
+  - Some RX/TX transitions can still leave VAC in a bad state depending on configuration.
+- **TX antenna behavior depends on normal Thetis “do not TX” / antenna-permit settings.**
 
 ## Next Steps
 
-- [ ] TX audio path (wire PTT/MOX to SunSDR opcode 0x06)
-- [ ] Validate I/Q channel order with known signal
-- [ ] Power cycle cleanup (off/on without restart)
-- [ ] Mode switching validation
+- [ ] Stabilize VAC behavior across RX/MOX/TUNE transitions
+- [ ] Finish local monitor (`MON`) and `DUP` path behavior
+- [ ] Keep validating mode/filter edge cases
+- [ ] Continue RE for any hidden per-receiver input routing that could make diversity possible
 
 ## Related Repositories
 
@@ -98,7 +137,7 @@ Three issues had to be resolved for audio output to work:
 1. Open `Project Files/Source/Thetis_VS2026.sln` in Visual Studio 2022
 2. Set configuration to **Debug | x64**
 3. Build → Rebuild Solution
-4. Select SunSDR2-DX as radio model in Setup → General
+4. Select `SunSDR2-DX` as radio model in Setup → General
 
 Requires Visual Studio 2022 with C++ desktop development workload (v143 toolset).
 

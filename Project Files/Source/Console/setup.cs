@@ -13794,6 +13794,9 @@ namespace Thetis
 
             console.AlexAntCtrlEnabled = true; // need side effect of prop set to push data down to C code 
 
+            if (is_xmit && NetworkIO.CurrentRadioProtocol == RadioProtocol.SUNSDR)
+                NetworkIO.nativeSunSDRSetTxAntenna(ant);
+
             // changed notification
             updateChangedAntAlexButton(is_xmit, idx, band);
             //
@@ -13938,6 +13941,10 @@ namespace Thetis
                 RadioButtonTS[] buttons = _AlexTxAntButtons[idx];
                 if (TXAllowed)
                 {
+                    Alex.getAlex().setTxAnt(band, (byte)Antenna);
+                    pi_TxAnt = Antenna;
+                    console.SetAriesTXAntenna(Antenna, band);
+
                     for (Btn = 0; Btn < 3; Btn++)
                     {
                         if (Btn == Antenna - 1)
@@ -13945,6 +13952,11 @@ namespace Thetis
                         else
                             buttons[Btn].Checked = false;
                     }
+
+                    updateChangedAntAlexButton(true, idx, band);
+
+                    if (NetworkIO.CurrentRadioProtocol == RadioProtocol.SUNSDR)
+                        NetworkIO.nativeSunSDRSetTxAntenna(Antenna);
                 }
             }
         }

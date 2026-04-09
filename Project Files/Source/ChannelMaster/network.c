@@ -1559,3 +1559,18 @@ PORT void nativeSunSDRSetDrive(int raw)
 {
 	SunSDRSetDrive(raw);
 }
+
+PORT void nativeSunSDRSetAntenna(int antenna)
+{
+	SunSDRSetAntenna(antenna);
+}
+
+PORT void nativeSunSDRSetTxAntenna(int antenna)
+{
+    SunSDRSetTxAntenna(antenna);
+}
+
+PORT void nativeSunSDRSetPA(int enabled)
+{
+    SunSDRSetPA(enabled);
+}
