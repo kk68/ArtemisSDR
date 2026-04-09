@@ -221,8 +221,12 @@ namespace Thetis
                 f = 1.0F;
             }
 
-            int i = (int)(255 * f * _swr_protect);
+            int i = (int)Math.Round(255 * f * _swr_protect);
+            if (f > 0.0F && i == 0)
+                i = 1;
             SetOutputPowerFactor(i);
+            // SunSDR drive must follow the same calibrated power path as every
+            // other radio, not the raw UI slider percentage.
             if (CurrentRadioProtocol == RadioProtocol.SUNSDR)
                 nativeSunSDRSetDrive(i);
         }

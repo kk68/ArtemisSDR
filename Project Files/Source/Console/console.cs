@@ -28686,11 +28686,6 @@ namespace Thetis
                 DrivePowerChangedHandlers?.Invoke(1, new_pwr, TUN || chk2TONE.Checked); // only rx1
             }
 
-            if (NetworkIO.CurrentRadioProtocol == RadioProtocol.SUNSDR)
-            {
-                int native_drive = (int)Math.Round(Math.Max(0, Math.Min(100, new_pwr)) * 255.0 / 100.0);
-                NetworkIO.nativeSunSDRSetDrive(native_drive);
-            }
         }
 
         private void ptbAF_Scroll(object sender, System.EventArgs e)
@@ -46634,11 +46629,6 @@ namespace Thetis
                 DrivePowerChangedHandlers?.Invoke(1, new_pwr, true); // only rx1, and always tune
             }
 
-            if (NetworkIO.CurrentRadioProtocol == RadioProtocol.SUNSDR)
-            {
-                int native_drive = (int)Math.Round(Math.Max(0, Math.Min(100, new_pwr)) * 255.0 / 100.0);
-                NetworkIO.nativeSunSDRSetDrive(native_drive);
-            }
         }
         private DrivePowerSource _tuneDrivePowerSource = DrivePowerSource.DRIVE_SLIDER;
         private DrivePowerSource _2ToneDrivePowerSource = DrivePowerSource.DRIVE_SLIDER;

@@ -119,6 +119,25 @@ static int sunsdr_resample(int source, const double* in, int nsamples)
 /* ========== Helpers ========== */
 
 static const double NORM = 1.0 / 2147483648.0;
+/*
+ * SunSDR2 DX needs extra native TX headroom at the top end, but a flat boost
+ * overdrives low power settings badly. Apply a drive-dependent headroom curve:
+ * near-unity at low drive, rising toward the top end where the radio still
+ * needs help to reach full output.
+ */
+static double sunsdr_tx_full_scale_for_drive(double drive)
+{
+    if (drive < 0.0) drive = 0.0;
+    if (drive > 1.0) drive = 1.0;
+
+    /*
+     * Keep low and mid drive close to the calibrated Thetis power path, and
+     * reserve most of the extra native headroom for the very top of the range.
+     * The current SunSDR2 DX measurements show the endpoints are now close,
+     * while the middle of the curve is still too hot.
+     */
+    return 1.0 + (0.34 * drive * drive * drive * drive * drive);
+}
 
 static struct sockaddr_in sunsdr_stream_dest(void)
 {
@@ -215,6 +234,13 @@ static void sunsdr_tx_outbound(int id, int nsamples, double* buff)
     static unsigned int dbg_packets = 0;
     double drive = 1.0;
     int raw_drive = -1;
+    double pre_peak = 0.0;
+    double post_peak = 0.0;
+    double pre_sum_sq = 0.0;
+    double post_sum_sq = 0.0;
+    double pre_rms = 0.0;
+    double post_rms = 0.0;
+    double full_scale = 1.0;
 
     (void)id;
 
@@ -230,7 +256,7 @@ static void sunsdr_tx_outbound(int id, int nsamples, double* buff)
 
     raw_drive = sdr.currentDriveRaw;
 
-    if (raw_drive > 0) {
+    if (raw_drive >= 0) {
         drive = (double)raw_drive / 255.0;
         if (drive < 0.0) drive = 0.0;
         if (drive > 1.0) drive = 1.0;
@@ -238,9 +264,21 @@ static void sunsdr_tx_outbound(int id, int nsamples, double* buff)
         drive = 1.0;
     }
 
+    full_scale = sunsdr_tx_full_scale_for_drive(drive);
+
     for (i = 0; i < nsamples; i++) {
-        double cur_I = buff[2 * i + 0] * drive;
-        double cur_Q = buff[2 * i + 1] * drive;
+        double in_I = buff[2 * i + 0];
+        double in_Q = buff[2 * i + 1];
+        double cur_I = in_I * drive * full_scale;
+        double cur_Q = in_Q * drive * full_scale;
+        double in_mag = sqrt(in_I * in_I + in_Q * in_Q);
+        double out_mag = sqrt(cur_I * cur_I + cur_Q * cur_Q);
+
+        if (in_mag > pre_peak) pre_peak = in_mag;
+        if (out_mag > post_peak) post_peak = out_mag;
+
+        pre_sum_sq += (in_I * in_I) + (in_Q * in_Q);
+        post_sum_sq += (cur_I * cur_I) + (cur_Q * cur_Q);
 
         while (sdr.txPhase < 1.0) {
             double frac = sdr.txPhase;
@@ -255,10 +293,15 @@ static void sunsdr_tx_outbound(int id, int nsamples, double* buff)
         sdr.txPrevQ = cur_Q;
     }
 
+    if (nsamples > 0) {
+        pre_rms = sqrt(pre_sum_sq / (2.0 * (double)nsamples));
+        post_rms = sqrt(post_sum_sq / (2.0 * (double)nsamples));
+    }
+
     if (dbg_packets != sdr.txAudioPackets && (sdr.txAudioPackets <= 5 || sdr.txAudioPackets % 250 == 0)) {
         dbg_packets = sdr.txAudioPackets;
-        sdr_logf("TX audio callback: nsamples=%d, tx_audio_packets=%u, seq=%u, drive=%.3f (%d)\n",
-            nsamples, sdr.txAudioPackets, sdr.txSeq, drive, raw_drive);
+        sdr_logf("TX audio callback: nsamples=%d, tx_audio_packets=%u, seq=%u, drive=%.3f (%d), full_scale=%.2f, pre_peak=%.6f, pre_rms=%.6f, post_peak=%.6f, post_rms=%.6f\n",
+            nsamples, sdr.txAudioPackets, sdr.txSeq, drive, raw_drive, full_scale, pre_peak, pre_rms, post_peak, post_rms);
     }
 
     LeaveCriticalSection(&sdr.txLock);
@@ -386,6 +429,56 @@ static int sunsdr_map_tx_ant_selector(int antenna)
     case 1: return 0x01;
     case 2: return 0x02;
     default: return 0;
+    }
+}
+
+static int sunsdr_map_mode_code(int mode)
+{
+    switch (mode) {
+    case 0:  /* LSB */
+    case 3:  /* CWL */
+    case 9:  /* DIGL */
+    case 12: /* AM_LSB */
+        return SUNSDR_MODE_LSB;
+
+    case 1:  /* USB */
+    case 2:  /* DSB */
+    case 4:  /* CWU */
+    case 5:  /* FM */
+    case 6:  /* AM */
+    case 7:  /* DIGU */
+    case 10: /* SAM */
+    case 11: /* DRM */
+    case 13: /* AM_USB */
+    default:
+        return SUNSDR_MODE_USB;
+    }
+}
+
+/* Forward declarations for helpers used before their definitions. */
+static void sunsdr_send_u32_cmd(int opcode, unsigned int value);
+
+static void sunsdr_reassert_tx_state(void)
+{
+    if (!sdr.powered)
+        return;
+
+    if (sdr.currentTxFreqHz > 0) {
+        sdr_logf("Reassert TX freq: %d Hz\n", sdr.currentTxFreqHz);
+        sunsdr_send_freq_pkt(SUNSDR_OP_FREQ_PRIMARY, 0, sdr.currentTxFreqHz);
+    }
+
+    if (sdr.currentMode > 0) {
+        sdr_logf("Reassert TX mode: 0x%02X\n", sdr.currentMode);
+        sunsdr_send_u32_cmd(SUNSDR_OP_MODE, (unsigned int)sdr.currentMode);
+    }
+
+    if (sdr.currentTxAntenna == 1 || sdr.currentTxAntenna == 2) {
+        int selector = sunsdr_map_tx_ant_selector(sdr.currentTxAntenna);
+        sdr_logf("Reassert TX antenna: %d selector=0x%02X\n", sdr.currentTxAntenna, selector);
+        sunsdr_send_u32_cmd(SUNSDR_OP_ANT_PREAMBLE, 0);
+        sunsdr_send_u32_cmd(SUNSDR_OP_RX_ANT, (unsigned int)selector);
+        sunsdr_send_u32_cmd(SUNSDR_OP_KEEPALIVE, 0);
     }
 }
 
@@ -838,7 +931,7 @@ int SunSDRPowerOn(void)
     sdr.currentRx2FreqHz = 0;
     sdr.currentRX2Enabled = 0;
     sdr.currentTune = 0;
-    sdr.currentDriveRaw = 255;
+    sdr.currentDriveRaw = -1;
     sdr.lastTxWasTune = 0;
     sdr.pendingTuneReleaseConfig = 0;
     sdr.txSeq = 0;
@@ -937,7 +1030,7 @@ void SunSDRPowerOff(void)
     sdr.powered = 0;
     sdr.currentPTT = 0;
     sdr.currentTune = 0;
-    sdr.currentDriveRaw = 255;
+    sdr.currentDriveRaw = -1;
     sdr.lastTxWasTune = 0;
     sdr.pendingTuneReleaseConfig = 0;
     HaveSync = 0;
@@ -996,8 +1089,10 @@ void SunSDRSetFreq(int receiver, int freqHz, int isTx)
 
 void SunSDRSetMode(int mode)
 {
-    sunsdr_send_u32_cmd(SUNSDR_OP_MODE, (unsigned int)mode);
-    sdr.currentMode = mode;
+    int sunsdr_mode = sunsdr_map_mode_code(mode);
+    sdr_logf("SunSDRSetMode(thetis=%d -> sunsdr=0x%02X)\n", mode, sunsdr_mode);
+    sunsdr_send_u32_cmd(SUNSDR_OP_MODE, (unsigned int)sunsdr_mode);
+    sdr.currentMode = sunsdr_mode;
 }
 
 void SunSDRSetRX2(int enabled)
@@ -1121,6 +1216,7 @@ void SunSDRSetPTT(int ptt)
     sdr_logf("SunSDRSetPTT(%d) currentTune=%d\n", new_ptt, sdr.currentTune);
 
     if (new_ptt) {
+        sunsdr_reassert_tx_state();
         sunsdr_send_config_block_state(0);
         sdr.lastTxWasTune = 0;
         sunsdr_send_u32_cmd(SUNSDR_OP_MOX_PTT, 1);

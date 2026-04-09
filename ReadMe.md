@@ -11,13 +11,13 @@ The current fork supports practical operation on SunSDR2 DX:
 - **RX2 working** as a second receive path with independent VFO B tuning and audio
 - **MOX/PTT working** with native SunSDR TX streaming
 - **TUNE working** through the normal Thetis TX/tone path
-- **Drive / Tune power control working** from Thetis sliders
+- **Drive / Tune power control working** from Thetis sliders, but still under active calibration/tuning
 - **RX antenna switching working**
 - **TX antenna switching working** through Thetis antenna setup controls
 - **PA / xPA control working** from Thetis
 - **Power off/on recovery working** without losing the receive stream
 
-This is no longer just an RX-only bring-up. It is a usable SunSDR2 DX port with some remaining feature gaps.
+This is no longer just an RX-only bring-up. It is a usable SunSDR2 DX port with some remaining feature gaps and one major remaining calibration item: TX power/drive linearity.
 
 ## Key Protocol Facts
 
@@ -101,6 +101,58 @@ For a simple HF amplifier test, enabling one `TXPA` pin with `Transmit Pin Actio
 - The current working path is VAC-centric when no local ASIO output is available.
 - Local monitor-oriented behavior such as `MON` and `DUP` is still not fully resolved for SunSDR and should not be treated as complete.
 
+## TX Power Calibration Status
+
+The SunSDR2 DX TX power path is now structurally working, but its calibration is still being tuned.
+
+What is already true:
+
+- `Drive` and `Tune` sliders now reach the native SunSDR TX path correctly
+- `MOX` and `TUNE` both produce RF output
+- the previous hard failures are fixed:
+  - zero-drive muting / full-scale fallback confusion
+  - band-change TX/TUNE failure until `POWER` off/on
+  - PA / xPA not asserting during active TX
+
+What is still open:
+
+- output power is not yet correctly linearized against Thetis slider values
+- top-end output can saturate early depending on the current calibration pass
+- low/mid drive values still need refinement against real on-air wattmeter measurements
+
+Latest observed 40m calibration checkpoints from live testing:
+
+- `0 -> 0W`
+- `10 -> 21W`
+- `25 -> 62W`
+- `50 -> 99W`
+- `75 -> 113W`
+- `100 -> 113W`
+
+Interpretation:
+
+- the drive path is alive and monotonic
+- low/mid values are still too hot
+- the top end is still flattening too early
+
+Current implementation notes for the next agent:
+
+- Thetis calibrated power still flows through `Audio.RadioVolume -> NetworkIO.SetOutputPower() -> nativeSunSDRSetDrive()`
+- SunSDR-specific tuning currently exists in:
+  - `Console/clsHardwareSpecific.cs` — default `PA Gain By Band`
+  - `Console/setup.cs` — SunSDR legacy-profile compatibility fallbacks and default low-power compensation
+  - `ChannelMaster/sunsdr.c` — native TX amplitude scaling (`sunsdr_tx_outbound`)
+- `sunsdr_debug.log` now logs:
+  - `SunSDRSetDrive(raw)`
+  - `TX audio callback ... drive=..., full_scale=..., pre_peak=..., pre_rms=..., post_peak=..., post_rms=...`
+
+Recommended next calibration workflow:
+
+1. keep testing on one band first, currently `40m`
+2. tune the native SunSDR TX full-scale curve in `sunsdr.c`
+3. then refine the SunSDR default PA gain / offset shaping in `setup.cs`
+4. only after 40m is sane, fan out to other bands
+
 ## Files Changed (from upstream Thetis)
 
 **New files:**
@@ -130,12 +182,15 @@ For a simple HF amplifier test, enabling one `TXPA` pin with `Transmit Pin Actio
   - `MON` and `DUP` behavior is not yet reliable on SunSDR.
 - **VAC behavior still needs cleanup.**
   - Some RX/TX transitions can still leave VAC in a bad state depending on configuration.
+- **TX power calibration is not finished.**
+  - Drive/Tune power now works, but real RF output still needs per-band and per-drive calibration tuning.
 - **TX antenna behavior depends on normal Thetis “do not TX” / antenna-permit settings.**
 
 ## Next Steps
 
 - [ ] Stabilize VAC behavior across RX/MOX/TUNE transitions
 - [ ] Finish local monitor (`MON`) and `DUP` path behavior
+- [ ] Finish TX drive / tune power calibration, starting with 40m reference measurements
 - [ ] Keep validating mode/filter edge cases
 - [ ] Continue RE for any hidden per-receiver input routing that could make diversity possible
 

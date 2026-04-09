@@ -23287,7 +23287,133 @@ namespace Thetis
             PAProfile p = getPAProfile(comboPAProfile.Text);
             if (p == null) return 1000;
 
-            return p.GetGainForBand(b, nDriveValue);
+            float gain = p.GetGainForBand(b, nDriveValue);
+            bool zero_adjust_curve = true;
+            for (int i = 0; i < 9; i++)
+            {
+                if (Math.Abs(p.GetAdjust(b, i)) > 0.05f)
+                {
+                    zero_adjust_curve = false;
+                    break;
+                }
+            }
+
+            float[] sunsdrCurrent = new float[(int)Band.LAST];
+            sunsdrCurrent[(int)Band.B160M] = 41.0f;
+            sunsdrCurrent[(int)Band.B80M] = 41.2f;
+            sunsdrCurrent[(int)Band.B60M] = 41.3f;
+            sunsdrCurrent[(int)Band.B40M] = 41.3f;
+            sunsdrCurrent[(int)Band.B30M] = 41.0f;
+            sunsdrCurrent[(int)Band.B20M] = 40.5f;
+            sunsdrCurrent[(int)Band.B17M] = 39.9f;
+            sunsdrCurrent[(int)Band.B15M] = 38.8f;
+            sunsdrCurrent[(int)Band.B12M] = 38.8f;
+            sunsdrCurrent[(int)Band.B10M] = 38.8f;
+            sunsdrCurrent[(int)Band.B6M] = 38.8f;
+
+            /*
+             * SunSDR2DX support was added after many existing databases already
+             * contained PA profiles with the generic fallback of 100 dB on every
+             * band. Those persisted values drive RadioVolume almost to zero.
+             * Treat that legacy all-100 state as "uninitialized" for SunSDR and
+             * fall back to the model defaults until the user recalibrates.
+             */
+            if (HardwareSpecific.Model == HPSDRModel.SUNSDR2DX && gain >= 99.0f)
+            {
+                float[] defaults = HardwareSpecific.DefaultPAGainsForBands(HPSDRModel.SUNSDR2DX);
+                if ((int)b > (int)Band.FIRST && (int)b < (int)Band.LAST)
+                    gain = defaults[(int)b] - GetSunSDRDefaultAdjust(nDriveValue);
+            }
+
+            /*
+             * Early SunSDR2DX support used an ANAN100-like baseline (~50 dB HF),
+             * which drives the native SunSDR TX path far too low. Existing saved
+             * PA profiles may still carry those values, so transparently map that
+             * legacy baseline to the current SunSDR defaults until the operator
+             * recalibrates the profile.
+             */
+            if (HardwareSpecific.Model == HPSDRModel.SUNSDR2DX &&
+                (int)b > (int)Band.FIRST && (int)b < (int)Band.LAST)
+            {
+                float[] legacy = new float[(int)Band.LAST];
+                legacy[(int)Band.B160M] = 50.0f;
+                legacy[(int)Band.B80M] = 50.5f;
+                legacy[(int)Band.B60M] = 50.5f;
+                legacy[(int)Band.B40M] = 50.0f;
+                legacy[(int)Band.B30M] = 49.5f;
+                legacy[(int)Band.B20M] = 48.5f;
+                legacy[(int)Band.B17M] = 48.0f;
+                legacy[(int)Band.B15M] = 47.5f;
+                legacy[(int)Band.B12M] = 46.5f;
+                legacy[(int)Band.B10M] = 42.0f;
+                legacy[(int)Band.B6M] = 43.0f;
+
+                if (Math.Abs(gain - legacy[(int)b]) < 0.2f)
+                {
+                    float[] defaults = HardwareSpecific.DefaultPAGainsForBands(HPSDRModel.SUNSDR2DX);
+                    gain = defaults[(int)b] - GetSunSDRDefaultAdjust(nDriveValue);
+                }
+            }
+
+            /*
+             * A first SunSDR2DX-specific baseline (~41 dB HF, zero offsets) also
+             * shipped during bring-up. That baseline still underdrives the native
+             * TX path and leaves the watt curve badly compressed. Treat that exact
+             * no-offset SunSDR profile shape as legacy too and map it to the
+             * current SunSDR defaults plus the built-in low-power compensation.
+             */
+            if (HardwareSpecific.Model == HPSDRModel.SUNSDR2DX &&
+                zero_adjust_curve &&
+                (int)b > (int)Band.FIRST && (int)b < (int)Band.LAST)
+            {
+                if (Math.Abs(gain - sunsdrCurrent[(int)b]) < 0.2f)
+                {
+                    float[] defaults = HardwareSpecific.DefaultPAGainsForBands(HPSDRModel.SUNSDR2DX);
+                    gain = defaults[(int)b] - GetSunSDRDefaultAdjust(nDriveValue);
+                }
+            }
+
+            return gain;
+        }
+        private float GetSunSDRDefaultAdjust(int nDriveValue)
+        {
+            if (nDriveValue <= 0) return 0.0f;
+            if (nDriveValue >= 100) return 0.0f;
+
+            /*
+             * Default SunSDR2DX low-power shaping, derived from the observed native
+             * curve where full scale was close but low-to-mid drive was compressed.
+             * Points represent extra dB reduction of PA attenuation at 10W..90W.
+             */
+            float[] adjust = new float[] { 0.6f, 0.5f, 0.4f, 0.3f, 0.2f, 0.1f, 0.05f, 0.0f, 0.0f };
+
+            int nLIndex = nDriveValue / 10;
+            if (nDriveValue % 10 == 0)
+            {
+                if (nLIndex == 0 || nLIndex == 10) return 0.0f;
+                return adjust[nLIndex - 1];
+            }
+
+            float low;
+            float high;
+            if (nLIndex == 0)
+            {
+                low = 0.0f;
+                high = adjust[0];
+            }
+            else if (nLIndex >= 9)
+            {
+                low = adjust[8];
+                high = 0.0f;
+            }
+            else
+            {
+                low = adjust[nLIndex - 1];
+                high = adjust[nLIndex];
+            }
+
+            float frac = (nDriveValue - (nLIndex * 10)) / 10f;
+            return low + frac * (high - low);
         }
         public bool GetPABandUsesMaxPower(Band b)
         {
@@ -23746,6 +23872,20 @@ namespace Thetis
         {
             setAdjustingBand(newBand);
             lblTXattBand.Text = newBand.ToString(); //[2.3.10.6]MW0LGE added (also in ATTOnTX)
+
+            if (NetworkIO.CurrentRadioProtocol == RadioProtocol.SUNSDR)
+            {
+                int ant = GetTXAntenna(newBand);
+                if (ant == 1 || ant == 2)
+                    NetworkIO.nativeSunSDRSetTxAntenna(ant);
+
+                if (console != null && console.PowerOn)
+                {
+                    DSPMode tx_mode = (console.RX2Enabled && console.VFOBTX) ? console.RX2DSPMode : console.RX1DSPMode;
+                    NetworkIO.nativeSunSDRSetMode((int)tx_mode);
+                    NetworkIO.VFOfreq(0, tx_frequency, 1);
+                }
+            }
         }
         private void setAdjustingBand(Band b)
         {
@@ -27074,6 +27214,13 @@ namespace Thetis
         {
             if (initializing) return;
             if (rx == 1) updateUsbBCDdevice(new_band);
+
+            if (NetworkIO.CurrentRadioProtocol == RadioProtocol.SUNSDR && rx == 1)
+            {
+                int ant = GetRXAntenna(new_band);
+                if (ant == 1 || ant == 2)
+                    NetworkIO.nativeSunSDRSetAntenna(ant);
+            }
         }
         private void updateUsbBCDdevice(Band rx1band)
         {
