@@ -127,16 +127,29 @@ static const double NORM = 1.0 / 2147483648.0;
  */
 static double sunsdr_tx_full_scale_for_drive(double drive)
 {
+    double t;
+
     if (drive < 0.0) drive = 0.0;
     if (drive > 1.0) drive = 1.0;
 
     /*
-     * Keep low and mid drive close to the calibrated Thetis power path, and
-     * reserve most of the extra native headroom for the very top of the range.
-     * The current SunSDR2 DX measurements show the endpoints are now close,
-     * while the middle of the curve is still too hot.
+     * Keep almost the entire range on the calibrated Thetis power path and only
+     * add extra native headroom near the very top end. Current live SunSDR2 DX
+     * measurements show:
+     * - 0/10/25 are now close enough
+     * - 100 is close enough
+     * - 50/75 are still too hot
+     *
+     * So do not boost the middle. Reserve the boost for the final ~15% only.
      */
-    return 1.0 + (0.34 * drive * drive * drive * drive * drive);
+    if (drive <= 0.85)
+        return 1.0;
+
+    t = (drive - 0.85) / 0.15;
+    if (t < 0.0) t = 0.0;
+    if (t > 1.0) t = 1.0;
+
+    return 1.0 + (0.34 * t * t * t);
 }
 
 static struct sockaddr_in sunsdr_stream_dest(void)

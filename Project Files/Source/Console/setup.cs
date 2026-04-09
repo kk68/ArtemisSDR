@@ -23381,11 +23381,23 @@ namespace Thetis
             if (nDriveValue >= 100) return 0.0f;
 
             /*
-             * Default SunSDR2DX low-power shaping, derived from the observed native
-             * curve where full scale was close but low-to-mid drive was compressed.
-             * Points represent extra dB reduction of PA attenuation at 10W..90W.
+             * Default SunSDR2DX drive shaping.
+             *
+             * The actual TX power path is now fundamentally working, but live 40m
+             * measurements show the top end compresses too early:
+             *   0 -> 0W
+             *   10 -> 9.4W
+             *   25 -> 26W
+             *   50 -> 51W
+             *   75 -> 70W
+             *   100 -> 106W
+             *
+             * So keep the low-end compensation modest, then taper into negative
+             * offsets above ~60W to add attenuation only in the upper range.
+             * Points represent dB reduction of PA attenuation at 10W..90W.
+             * Positive values increase output. Negative values reduce output.
              */
-            float[] adjust = new float[] { 0.6f, 0.5f, 0.4f, 0.3f, 0.2f, 0.1f, 0.05f, 0.0f, 0.0f };
+            float[] adjust = new float[] { 0.70f, 0.55f, 0.40f, 0.28f, 0.12f, -0.10f, -0.55f, -1.10f, -0.65f };
 
             int nLIndex = nDriveValue / 10;
             if (nDriveValue % 10 == 0)

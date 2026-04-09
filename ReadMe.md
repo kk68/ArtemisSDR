@@ -103,7 +103,7 @@ For a simple HF amplifier test, enabling one `TXPA` pin with `Transmit Pin Actio
 
 ## TX Power Calibration Status
 
-The SunSDR2 DX TX power path is now structurally working, but its calibration is still being tuned.
+The SunSDR2 DX TX power path is now structurally working and close enough to move from code bring-up into actual Thetis-side calibration.
 
 What is already true:
 
@@ -113,45 +113,69 @@ What is already true:
   - zero-drive muting / full-scale fallback confusion
   - band-change TX/TUNE failure until `POWER` off/on
   - PA / xPA not asserting during active TX
+- Thetis `PA Gain By Band` and per-band `Offset` values are now in the active SunSDR TX power path
 
-What is still open:
-
-- output power is not yet correctly linearized against Thetis slider values
-- top-end output can saturate early depending on the current calibration pass
-- low/mid drive values still need refinement against real on-air wattmeter measurements
-
-Latest observed 40m calibration checkpoints from live testing:
+Current live 40m reference checkpoints from external wattmeter testing:
 
 - `0 -> 0W`
-- `10 -> 21W`
-- `25 -> 62W`
-- `50 -> 99W`
-- `75 -> 113W`
-- `100 -> 113W`
+- `10 -> 9.4W`
+- `25 -> 26W`
+- `50 -> 51W`
+- `75 -> 70W`
+- `100 -> 106W`
 
 Interpretation:
 
-- the drive path is alive and monotonic
-- low/mid values are still too hot
-- the top end is still flattening too early
+- low and mid power are now close enough to be calibrated with normal Thetis tooling
+- the remaining error is mainly upper-range shaping (`75W` low while `100W` is near full output)
+- this is no longer an RX/TX transport bug hunt; it is calibration work
 
-Current implementation notes for the next agent:
+### What Thetis Calibration Menus Mean For SunSDR
 
-- Thetis calibrated power still flows through `Audio.RadioVolume -> NetworkIO.SetOutputPower() -> nativeSunSDRSetDrive()`
+For SunSDR2 DX, Thetis now uses the normal PA calibration path to determine actual TX drive:
+
+- `PA Gain By Band`
+- `Offset for <band>`
+- `Use watts on Drive/Tune slider`
+- `Actual Power @ 100% slider`
+
+Those settings do affect real transmitted power on SunSDR.
+
+The `Watt Meter` page is different:
+
+- it trims Thetis's displayed TX wattmeter
+- it does **not** directly set actual RF output
+
+### Important Current Limitation: TX Metering
+
+The Thetis `Fwd Pwr` TX meter is **not currently valid for SunSDR2 DX**.
+
+The current SunSDR integration does not yet feed an equivalent forward/reverse power telemetry path into Thetis's `alex_fwd` / `alex_rev` / `calfwdpower` model, so the TX meter can remain at `0W` even when real RF output is present.
+
+That means:
+
+- use an **external wattmeter** as the source of truth for SunSDR power calibration
+- do **not** rely on Thetis `Fwd Pwr` or `Watt Meter Trim` yet
+
+### Current Implementation Notes
+
+- Thetis calibrated power flows through:
+  - `Audio.RadioVolume -> NetworkIO.SetOutputPower() -> nativeSunSDRSetDrive()`
 - SunSDR-specific tuning currently exists in:
   - `Console/clsHardwareSpecific.cs` — default `PA Gain By Band`
-  - `Console/setup.cs` — SunSDR legacy-profile compatibility fallbacks and default low-power compensation
+  - `Console/setup.cs` — SunSDR legacy-profile compatibility fallbacks and default per-drive shaping
   - `ChannelMaster/sunsdr.c` — native TX amplitude scaling (`sunsdr_tx_outbound`)
-- `sunsdr_debug.log` now logs:
+- `sunsdr_debug.log` logs:
   - `SunSDRSetDrive(raw)`
   - `TX audio callback ... drive=..., full_scale=..., pre_peak=..., pre_rms=..., post_peak=..., post_rms=...`
 
-Recommended next calibration workflow:
+### Recommended Next Steps
 
-1. keep testing on one band first, currently `40m`
-2. tune the native SunSDR TX full-scale curve in `sunsdr.c`
-3. then refine the SunSDR default PA gain / offset shaping in `setup.cs`
-4. only after 40m is sane, fan out to other bands
+1. Freeze the native SunSDR TX path unless a new structural bug appears.
+2. Calibrate one band at a time, starting with `40m`, using an external wattmeter only.
+3. Use `PA Gain By Band` for coarse per-band correction.
+4. Use the `Offset for <band>` table to straighten `10W..90W` checkpoints.
+5. After the RF curve is acceptable, implement SunSDR forward/reverse power telemetry so Thetis `Fwd Pwr` and `Watt Meter Trim` become meaningful.
 
 ## Files Changed (from upstream Thetis)
 
