@@ -1574,3 +1574,13 @@ PORT void nativeSunSDRSetPA(int enabled)
 {
     SunSDRSetPA(enabled);
 }
+
+PORT int nativeSunSDRGetVersionText(char* buffer, int maxlen)
+{
+    return SunSDRGetVersionText(buffer, maxlen);
+}
+
+PORT int nativeSunSDRGetProtocolText(char* buffer, int maxlen)
+{
+    return SunSDRGetProtocolText(buffer, maxlen);
+}

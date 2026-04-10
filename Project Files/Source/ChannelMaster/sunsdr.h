@@ -108,6 +108,8 @@ typedef struct _sunsdr_state
     int lastTxWasTune;
     int pendingTuneReleaseConfig;
     int powered;
+    char firmwareVersionText[64];
+    char protocolText[32];
     int txLockInitialized;
     unsigned int txSeq;
     unsigned int txAudioPackets;
@@ -142,6 +144,8 @@ void SunSDRSetDrive(int raw);
 void SunSDRSetAntenna(int antenna);
 void SunSDRSetTxAntenna(int antenna);
 void SunSDRSetPA(int enabled);
+int  SunSDRGetVersionText(char* buffer, int maxlen);
+int  SunSDRGetProtocolText(char* buffer, int maxlen);
 
 /* IQ receive thread */
 DWORD WINAPI SunSDRReadThread(LPVOID param);

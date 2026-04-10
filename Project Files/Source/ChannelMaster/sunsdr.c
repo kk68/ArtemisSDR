@@ -57,6 +57,146 @@ static void sdr_logf(const char* fmt, ...) {
 /* ========== Internal state ========== */
 
 static sunsdr_state_t sdr;
+static const char* sdr_ctrl_trace_label = NULL;
+
+static void sunsdr_set_identity_defaults(void)
+{
+    strncpy(sdr.firmwareVersionText, "Unknown", sizeof(sdr.firmwareVersionText) - 1);
+    sdr.firmwareVersionText[sizeof(sdr.firmwareVersionText) - 1] = '\0';
+    strncpy(sdr.protocolText, "SunSDR Native", sizeof(sdr.protocolText) - 1);
+    sdr.protocolText[sizeof(sdr.protocolText) - 1] = '\0';
+}
+
+static const char* sunsdr_safe_label(const char* label)
+{
+    return (label && label[0]) ? label : "ctrl";
+}
+
+static int sunsdr_copy_text(char* buffer, int maxlen, const char* value)
+{
+    size_t len;
+
+    if (!buffer || maxlen <= 0 || !value) {
+        return 0;
+    }
+
+    len = strlen(value);
+    if (len >= (size_t)maxlen) {
+        len = (size_t)maxlen - 1;
+    }
+
+    memcpy(buffer, value, len);
+    buffer[len] = '\0';
+    return (int)len;
+}
+
+static void sunsdr_hexify(const unsigned char* data, int len, char* out, int outlen)
+{
+    int i;
+    int pos = 0;
+
+    if (!out || outlen <= 0) {
+        return;
+    }
+
+    out[0] = '\0';
+    if (!data || len <= 0) {
+        return;
+    }
+
+    for (i = 0; i < len && pos + 2 < outlen; i++) {
+        pos += _snprintf(out + pos, outlen - pos, "%02x", data[i]);
+        if (pos < 0 || pos >= outlen) {
+            out[outlen - 1] = '\0';
+            return;
+        }
+    }
+}
+
+static void sunsdr_asciiify(const unsigned char* data, int len, char* out, int outlen)
+{
+    int i;
+    int pos = 0;
+
+    if (!out || outlen <= 0) {
+        return;
+    }
+
+    out[0] = '\0';
+    if (!data || len <= 0) {
+        return;
+    }
+
+    for (i = 0; i < len && pos + 1 < outlen; i++) {
+        unsigned char ch = data[i];
+        out[pos++] = (ch >= 32 && ch <= 126) ? (char)ch : '.';
+    }
+
+    out[pos] = '\0';
+}
+
+static int sunsdr_is_versionish_ascii(const char* text)
+{
+    int i;
+    int digits = 0;
+    int dots = 0;
+
+    if (!text || !text[0]) {
+        return 0;
+    }
+
+    for (i = 0; text[i] != '\0'; i++) {
+        if (text[i] >= '0' && text[i] <= '9') digits++;
+        if (text[i] == '.') dots++;
+    }
+
+    return digits >= 2 && dots >= 1;
+}
+
+static void sunsdr_cache_identity_candidate(const unsigned char* data, int len, const char* context)
+{
+    char ascii[256];
+    int i;
+    int run_start = -1;
+
+    if (!data || len <= 0) {
+        return;
+    }
+
+    sunsdr_asciiify(data, len, ascii, (int)sizeof(ascii));
+    if (strstr(ascii, "version") || strstr(ascii, "Version") || strstr(ascii, "boot") || strstr(ascii, "serial")) {
+        sdr_logf("IDENTITY %s ascii=%s\n", context ? context : "pkt", ascii);
+    }
+
+    for (i = 0; i <= len; i++) {
+        unsigned char ch = (i < len) ? data[i] : 0;
+        int printable = (ch >= 32 && ch <= 126);
+
+        if (printable) {
+            if (run_start < 0) run_start = i;
+            continue;
+        }
+
+        if (run_start >= 0) {
+            int run_len = i - run_start;
+            if (run_len >= 4) {
+                char candidate[64];
+                int copy_len = run_len;
+                if (copy_len >= (int)sizeof(candidate)) copy_len = (int)sizeof(candidate) - 1;
+                memcpy(candidate, data + run_start, copy_len);
+                candidate[copy_len] = '\0';
+
+                if (sunsdr_is_versionish_ascii(candidate)) {
+                    strncpy(sdr.firmwareVersionText, candidate, sizeof(sdr.firmwareVersionText) - 1);
+                    sdr.firmwareVersionText[sizeof(sdr.firmwareVersionText) - 1] = '\0';
+                    sdr_logf("IDENTITY %s version_candidate=%s\n", context ? context : "pkt", sdr.firmwareVersionText);
+                    return;
+                }
+            }
+            run_start = -1;
+        }
+    }
+}
 
 /* ========== Resampler: 312500 → 192000 Hz ========== */
 
@@ -323,6 +463,15 @@ static void sunsdr_tx_outbound(int id, int nsamples, double* buff)
 /* Send a raw hex packet to the radio control port and optionally wait for reply */
 static int sunsdr_send_ctrl(const unsigned char* pkt, int len)
 {
+    if (pkt && len >= 3) {
+        sdr_logf("CTRL send: label=%s len=%d op=0x%02X sub=0x%02X%02X\n",
+            sunsdr_safe_label(sdr_ctrl_trace_label),
+            len,
+            pkt[2],
+            len >= 8 ? pkt[7] : 0,
+            len >= 7 ? pkt[6] : 0);
+    }
+
     return sendto(sdr.ctrlSock, (const char*)pkt, len, 0,
         (struct sockaddr*)&sdr.radioAddr, sizeof(sdr.radioAddr));
 }
@@ -342,6 +491,19 @@ static int sunsdr_send_ctrl_and_recv(const unsigned char* pkt, int len,
 
     if (select(0, &fds, NULL, NULL, &tv) > 0) {
         int n = recv(sdr.ctrlSock, (char*)reply, replymax, 0);
+        if (n > 0) {
+            char hexbuf[513];
+            char asciibuf[129];
+            sunsdr_hexify(reply, n < 64 ? n : 64, hexbuf, (int)sizeof(hexbuf));
+            sunsdr_asciiify(reply, n < 64 ? n : 64, asciibuf, (int)sizeof(asciibuf));
+            sdr_logf("CTRL recv: label=%s len=%d op=0x%02X hex=%s ascii=%s\n",
+                sunsdr_safe_label(sdr_ctrl_trace_label),
+                n,
+                n >= 3 ? reply[2] : 0,
+                hexbuf,
+                asciibuf);
+            sunsdr_cache_identity_candidate(reply, n, sunsdr_safe_label(sdr_ctrl_trace_label));
+        }
         return n;
     }
     return 0;
@@ -387,6 +549,51 @@ static void sunsdr_send_hex_pkt(const char* hex, int len_hint)
         len = len_hint;
 
     sunsdr_send_ctrl_and_recv(pkt, len, reply, (int)sizeof(reply));
+}
+
+static void sunsdr_set_ctrl_trace_label(const char* label)
+{
+    sdr_ctrl_trace_label = label;
+}
+
+static void sunsdr_drain_control_socket(const char* label)
+{
+    unsigned char reply[1024];
+    char hexbuf[513];
+    char asciibuf[129];
+    int drained = 0;
+
+    for (;;) {
+        fd_set fds;
+        struct timeval tv;
+        int n;
+
+        tv.tv_sec = 0;
+        tv.tv_usec = 0;
+        FD_ZERO(&fds);
+        FD_SET(sdr.ctrlSock, &fds);
+
+        if (select(0, &fds, NULL, NULL, &tv) <= 0) {
+            break;
+        }
+
+        n = recv(sdr.ctrlSock, (char*)reply, (int)sizeof(reply), 0);
+        if (n <= 0) {
+            break;
+        }
+
+        drained++;
+        sunsdr_hexify(reply, n < 64 ? n : 64, hexbuf, (int)sizeof(hexbuf));
+        sunsdr_asciiify(reply, n < 64 ? n : 64, asciibuf, (int)sizeof(asciibuf));
+        sdr_logf("CTRL drain: label=%s len=%d op=0x%02X hex=%s ascii=%s\n",
+            sunsdr_safe_label(label),
+            n,
+            n >= 3 ? reply[2] : 0,
+            hexbuf,
+            asciibuf);
+    }
+
+    sdr_logf("CTRL drain complete: label=%s packets=%d\n", sunsdr_safe_label(label), drained);
 }
 
 /* Build a standard 18-byte control packet header */
@@ -470,6 +677,11 @@ static int sunsdr_map_mode_code(int mode)
 
 /* Forward declarations for helpers used before their definitions. */
 static void sunsdr_send_u32_cmd(int opcode, unsigned int value);
+static void sunsdr_probe_identity_query(void);
+static void sunsdr_capture_control_window(const char* label, DWORD duration_ms);
+static void sunsdr_drain_control_socket(const char* label);
+static void sunsdr_set_ctrl_trace_label(const char* label);
+static void sunsdr_query_firmware_manager_version(void);
 
 static void sunsdr_reassert_tx_state(void)
 {
@@ -664,9 +876,16 @@ static int sunsdr_run_macro(void)
     unsigned char reply[128];
     int i;
 
+    sunsdr_set_ctrl_trace_label("macro");
+
     for (i = 0; power_on_macro[i].hex != NULL; i++) {
         int len = power_on_macro[i].len;
         int j;
+        char step_label[32];
+
+        _snprintf(step_label, sizeof(step_label), "macro[%02d]", i + 1);
+        step_label[sizeof(step_label) - 1] = '\0';
+        sunsdr_set_ctrl_trace_label(step_label);
 
         /* Parse hex string to bytes */
         for (j = 0; j < len && j < (int)sizeof(pkt); j++) {
@@ -684,6 +903,8 @@ static int sunsdr_run_macro(void)
             Sleep(ms);
         }
     }
+
+    sunsdr_set_ctrl_trace_label(NULL);
 
     return 0;
 }
@@ -749,6 +970,7 @@ int SunSDRInit(const char* radioIP, int ctrlPort, int streamPort)
     sdr.streamPort = streamPort;
     sdr.currentRxAntenna = 1;
     sdr.currentTxAntenna = 1;
+    sunsdr_set_identity_defaults();
     strncpy(sdr.radioIP, radioIP, sizeof(sdr.radioIP) - 1);
 
     /* Ensure WSA is initialized */
@@ -870,6 +1092,7 @@ void SunSDRDestroy(void)
     }
 
     SendpOutboundTx(OutBound);
+    sunsdr_set_identity_defaults();
 
     printf("SunSDR: destroyed\n");
 }
@@ -1015,6 +1238,11 @@ int SunSDRPowerOn(void)
     /* Keepalive disabled — capture shows ExpertSDR3 sends nothing for 20+ seconds */
     /* sdr.hKeepaliveThread = CreateThread(NULL, 0, SunSDRKeepaliveThread, NULL, 0, NULL); */
     sdr_logf("Keepalive thread DISABLED for testing\n");
+
+    /* Replay the existing info query and drain follow-on control replies. */
+    sunsdr_query_firmware_manager_version();
+    sunsdr_probe_identity_query();
+    sunsdr_capture_control_window("post_probe", 2000);
 
     /* Start IQ read thread */
     sdr.hReadThread = CreateThread(NULL, 0, SunSDRReadThread, NULL, 0, NULL);
@@ -1554,4 +1782,162 @@ DWORD WINAPI SunSDRReadThread(LPVOID param)
     free(rx_silence_buf);
     printf("SunSDR: IQ read thread stopped\n");
     return 0;
+}
+
+static void sunsdr_probe_identity_query(void)
+{
+    unsigned char pkt[64];
+    unsigned char reply[512];
+    char hexbuf[1025];
+    char asciibuf[257];
+    int len;
+    DWORD start_tick;
+    int packet_count = 0;
+
+    len = sunsdr_parse_hex("32ff07001a000000000001000000000000000000000000000000000000000000000000000000000000000000",
+        pkt, (int)sizeof(pkt));
+    if (len <= 0) {
+        return;
+    }
+
+    sunsdr_drain_control_socket("pre_probe");
+    sunsdr_set_ctrl_trace_label("identity_probe");
+    sdr_logf("IDENTITY probe send: opcode=0x07 len=%d\n", len);
+    sunsdr_send_ctrl(pkt, len);
+    start_tick = GetTickCount();
+
+    while ((GetTickCount() - start_tick) < 500) {
+        fd_set fds;
+        struct timeval tv;
+        int n;
+
+        tv.tv_sec = 0;
+        tv.tv_usec = 50000;
+        FD_ZERO(&fds);
+        FD_SET(sdr.ctrlSock, &fds);
+
+        if (select(0, &fds, NULL, NULL, &tv) <= 0) {
+            continue;
+        }
+
+        n = recv(sdr.ctrlSock, (char*)reply, (int)sizeof(reply), 0);
+        if (n <= 0) {
+            continue;
+        }
+
+        packet_count++;
+        sunsdr_hexify(reply, n < 128 ? n : 128, hexbuf, (int)sizeof(hexbuf));
+        sunsdr_asciiify(reply, n < 128 ? n : 128, asciibuf, (int)sizeof(asciibuf));
+        sdr_logf("IDENTITY probe rx #%d: len=%d op=0x%02X hex=%s ascii=%s\n",
+            packet_count, n, n >= 3 ? reply[2] : 0, hexbuf, asciibuf);
+        sunsdr_cache_identity_candidate(reply, n, "probe");
+    }
+
+    sdr_logf("IDENTITY probe complete: packets=%d cached_version=%s\n", packet_count, sdr.firmwareVersionText);
+    sunsdr_set_ctrl_trace_label(NULL);
+}
+
+static void sunsdr_capture_control_window(const char* label, DWORD duration_ms)
+{
+    unsigned char reply[1024];
+    char hexbuf[1025];
+    char asciibuf[257];
+    DWORD start_tick;
+    int packet_count = 0;
+
+    if (duration_ms == 0) {
+        return;
+    }
+
+    start_tick = GetTickCount();
+    sdr_logf("CONTROL capture start: label=%s duration_ms=%lu\n", label ? label : "capture", (unsigned long)duration_ms);
+
+    while ((GetTickCount() - start_tick) < duration_ms) {
+        fd_set fds;
+        struct timeval tv;
+        int n;
+
+        tv.tv_sec = 0;
+        tv.tv_usec = 50000;
+        FD_ZERO(&fds);
+        FD_SET(sdr.ctrlSock, &fds);
+
+        if (select(0, &fds, NULL, NULL, &tv) <= 0) {
+            continue;
+        }
+
+        n = recv(sdr.ctrlSock, (char*)reply, (int)sizeof(reply), 0);
+        if (n <= 0) {
+            continue;
+        }
+
+        packet_count++;
+        sunsdr_hexify(reply, n < 128 ? n : 128, hexbuf, (int)sizeof(hexbuf));
+        sunsdr_asciiify(reply, n < 128 ? n : 128, asciibuf, (int)sizeof(asciibuf));
+        sdr_logf("CONTROL capture rx #%d: label=%s len=%d op=0x%02X hex=%s ascii=%s\n",
+            packet_count, label ? label : "capture", n, n >= 3 ? reply[2] : 0, hexbuf, asciibuf);
+        sunsdr_cache_identity_candidate(reply, n, label ? label : "capture");
+    }
+
+    sdr_logf("CONTROL capture complete: label=%s packets=%d cached_version=%s\n",
+        label ? label : "capture", packet_count, sdr.firmwareVersionText);
+}
+
+static void sunsdr_query_firmware_manager_version(void)
+{
+    unsigned char pkt[32];
+    unsigned char reply[256];
+    char hexbuf[513];
+    int len;
+    int n;
+
+    /*
+     * ExpertSDR3 Firmware Manager sends a zero-payload 0x1A query and receives
+     * a 0x1A len=0x20 reply whose payload bytes 22/24 carry the displayed
+     * firmware version, e.g. 0x58 / 0x08 -> 88.8.
+     */
+    len = sunsdr_parse_hex("32ff1a000000000000000100000000000000", pkt, (int)sizeof(pkt));
+    if (len <= 0) {
+        return;
+    }
+
+    sunsdr_drain_control_socket("pre_fwmgr");
+    sunsdr_set_ctrl_trace_label("fwmgr_version");
+    n = sunsdr_send_ctrl_and_recv(pkt, len, reply, (int)sizeof(reply));
+    sunsdr_set_ctrl_trace_label(NULL);
+
+    if (n <= 0) {
+        sdr_logf("FWMGR query: no reply\n");
+        return;
+    }
+
+    sunsdr_hexify(reply, n < 64 ? n : 64, hexbuf, (int)sizeof(hexbuf));
+    sdr_logf("FWMGR query reply: len=%d hex=%s\n", n, hexbuf);
+
+    if (n >= 26 &&
+        reply[0] == 0x32 &&
+        reply[1] == 0xFF &&
+        reply[2] == 0x1A &&
+        reply[4] == 0x20 &&
+        reply[5] == 0x00)
+    {
+        unsigned int version_major = reply[22];
+        unsigned int version_minor = reply[24];
+
+        if (version_major > 0 && version_major < 250 && version_minor < 100) {
+            _snprintf(sdr.firmwareVersionText, sizeof(sdr.firmwareVersionText), "%u.%u", version_major, version_minor);
+            sdr.firmwareVersionText[sizeof(sdr.firmwareVersionText) - 1] = '\0';
+            sdr_logf("FWMGR version parsed: %s\n", sdr.firmwareVersionText);
+        }
+    }
+}
+
+int SunSDRGetVersionText(char* buffer, int maxlen)
+{
+    return sunsdr_copy_text(buffer, maxlen, sdr.firmwareVersionText);
+}
+
+int SunSDRGetProtocolText(char* buffer, int maxlen)
+{
+    return sunsdr_copy_text(buffer, maxlen, sdr.protocolText);
 }

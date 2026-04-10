@@ -455,6 +455,18 @@ HPSDRHW hw = (HPSDRHW)0;
             RadioConnected(_selected_key);
         }
 
+        public void RefreshSelectedLiveState()
+        {
+            RowItem item = getSelectedItem();
+            if (item == null) return;
+
+            if (!string.Equals(item.RadioModel, HPSDRHW.SunSDR.ToString(), StringComparison.OrdinalIgnoreCase))
+                return;
+
+            item.RadioVersionText = NetworkIO.GetSunSDRVersionText();
+            Invalidate();
+        }
+
         public void RadioDisconnected()
         {
             if (string.IsNullOrWhiteSpace(_selected_key)) return;
@@ -1339,7 +1351,8 @@ if (!DoesRadioExist(item.Key))
 
             string protoText;
 
-            if (item.RadioProtocol == RadioDiscoveryRadioProtocol.P1) protoText = "Protocol-1";
+            if (string.Equals(item.RadioModel, HPSDRHW.SunSDR.ToString(), StringComparison.OrdinalIgnoreCase)) protoText = NetworkIO.GetSunSDRProtocolText();
+            else if (item.RadioProtocol == RadioDiscoveryRadioProtocol.P1) protoText = "Protocol-1";
             else if (item.RadioProtocol == RadioDiscoveryRadioProtocol.P2)
             {
                 protoText = "Protocol-2";
@@ -1959,6 +1972,10 @@ if (!DoesRadioExist(item.Key))
 
             switch (radio.DeviceType)
             {
+                case HPSDRHW.SunSDR:
+                    versionText = "Unknown";
+                    break;
+
                 case HPSDRHW.Saturn:
                     versionText = "fpga=" + radio.CodeVersion.ToString();
                     if (radio.BetaVersion >= 39)
