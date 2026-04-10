@@ -2,6 +2,10 @@
 
 Native SunSDR2 DX integration for the [Thetis](https://github.com/ramdor/Thetis) SDR application, built through clean-room protocol reverse engineering.
 
+New-user setup guide:
+
+- [START_HERE_SUNSDR2DX.md](/mnt/c/Users/kosta/ham/SUNSDR/Thetis/START_HERE_SUNSDR2DX.md)
+
 ## Status: Core RX/TX/PA Working
 
 The current fork supports practical operation on SunSDR2 DX:
