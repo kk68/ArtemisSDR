@@ -17,6 +17,8 @@ The current fork supports practical operation on SunSDR2 DX:
 - **PA / xPA control working** from Thetis
 - **Power off/on recovery working** without losing the receive stream
 - **RX band switching currently working via a temporary SunSDR-only auto power recycle workaround**
+- **TX forward power meter working** via `0x1F` telemetry packet (bytes 14-15 → quadratic conversion to watts, calibrated on 40m)
+- **VAC TO VAC underflows during MOX/TX largely resolved** via RX silence injection (radio reduces RX rate during TX, blocking WDSP RX with `bfo=1`)
 
 This is no longer just an RX-only bring-up. It is a usable SunSDR2 DX port with some remaining feature gaps and one major remaining calibration item: TX power/drive linearity.
 
@@ -101,6 +103,16 @@ For a simple HF amplifier test, enabling one `TXPA` pin with `Transmit Pin Actio
 - TX audio works for normal operation and TUNE.
 - The current working path is VAC-centric when no local ASIO output is available.
 - Local monitor-oriented behavior such as `MON` and `DUP` is still not fully resolved for SunSDR and should not be treated as complete.
+
+### VAC Underflow Fix During MOX/TX (2026-04-10)
+
+**Problem:** During MOX/TUNE, the Thetis VAC output (`TO VAC`) accumulated thousands of underflows per second, causing degraded audio and unreliable TX. The TX RF path itself worked, but the VAC pipeline starved.
+
+**Root cause:** The SunSDR2 DX radio reduces its RX IQ packet rate from ~1562/sec to ~195/sec when transmitting. The Thetis WDSP RX channels are opened with `bfo=1` (block-for-output), so `fexchange0` blocks on `WaitForSingleObject(Sem_OutReady, INFINITE)` waiting for output that WDSP cannot produce fast enough at the reduced input rate. This blocks the `cm_main` thread, which starves the VAC mixer Input 0, which starves `rmatchOUT`, which causes the PortAudio output callback to underflow.
+
+**Fix:** The SunSDR IQ read thread now injects silence buffers into `xrouter` during TX whenever a real RX packet hasn't arrived for >2ms. This keeps the WDSP RX input rate at the expected 384k samples/sec, so `fexchange0` doesn't block, `cm_main` keeps running, and the VAC mixer keeps producing output.
+
+Implementation: `ChannelMaster/sunsdr.c` `SunSDRReadThread()` — `last_rx_pkt_tick` tracking + silence injection loop, capped at 32 buffers per gap to prevent runaway.
 
 ## RX Band Switching Status
 

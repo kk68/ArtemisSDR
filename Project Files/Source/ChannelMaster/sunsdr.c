@@ -1262,6 +1262,7 @@ DWORD WINAPI SunSDRReadThread(LPVOID param)
     unsigned char txbuf[1210];
     int i, k;
     int pkt_count = 0;
+    int telemetry_count = 0;
     unsigned int last_tx_audio_packets = 0;
     ULONGLONG last_service_tick;
     double tx_feed_accum = 0.0;
@@ -1283,6 +1284,19 @@ DWORD WINAPI SunSDRReadThread(LPVOID param)
     double* tx_silence_buf = (double*)calloc(2 * tx_buf_size, sizeof(double));
     double tx_feed_rate = (double)pcm->xcm_inrate[tx_stream_id] / (double)tx_buf_size;  /* bufs/sec */
     double tx_keepalive_rate = 1562.5 / 8.0; /* packets/sec */
+
+    /* RX silence padding: when SunSDR reduces its IQ rate during MOX (1562 -> ~195/sec),
+     * the WDSP RX channel (opened with bfo=1) blocks waiting for output that never comes,
+     * starving the VAC mixer Input 0 and causing massive PortAudio underflows.
+     *
+     * Solution: feed silence to xrouter at the expected rate (1562 buffers/sec * 246 samples)
+     * whenever packets aren't arriving fast enough. This keeps WDSP's input rate constant.
+     */
+    int rx_stream_id = inid(0, 0);
+    int rx_resample_outsize = 246;  /* matches sunsdr_resample output size */
+    double* rx_silence_buf = (double*)calloc(2 * rx_resample_outsize, sizeof(double));
+    double rx_feed_rate_target = 1562.5; /* expected packets/sec */
+    ULONGLONG last_rx_pkt_tick = 0;
 
     sdr_logf("IQ read thread started\n");
     sdr_logf("TX pipeline keepalive: stream=%d, buf_size=%d, feed_rate=%d/sec, step=%.4f\n",
@@ -1311,6 +1325,28 @@ DWORD WINAPI SunSDRReadThread(LPVOID param)
 
             tx_keepalive_accum += elapsed_ms * tx_keepalive_rate / 1000.0;
             last_service_tick = now_tick;
+        }
+
+        /* RX silence padding: if no real RX packet has arrived for >2ms (would
+         * normally arrive every ~640us at 1562/sec), inject silence to keep WDSP
+         * RX input rate at expected 384k samples/sec. This prevents fexchange0
+         * from blocking on Sem_OutReady when SunSDR throttles the IQ stream
+         * during TX (radio drops from 1562/sec to ~195/sec during MOX/TUNE). */
+        if (sdr.currentPTT && last_rx_pkt_tick > 0) {
+            ULONGLONG since_last_rx = now_tick - last_rx_pkt_tick;
+            if (since_last_rx >= 2) {
+                /* Inject one buffer of silence per 640us gap */
+                int gaps_to_fill = (int)(since_last_rx * 1562 / 1000);
+                if (gaps_to_fill > 32) gaps_to_fill = 32;  /* cap to prevent runaway */
+                for (int g = 0; g < gaps_to_fill; g++) {
+                    __try {
+                        xrouter(NULL, 0, 0, rx_resample_outsize, rx_silence_buf);
+                    } __except(EXCEPTION_EXECUTE_HANDLER) {
+                        break;
+                    }
+                }
+                last_rx_pkt_tick = now_tick;
+            }
         }
 
         while (tx_keepalive_accum >= 1.0) {
@@ -1345,21 +1381,121 @@ DWORD WINAPI SunSDRReadThread(LPVOID param)
             timeout_count = 0;
         }
 
+        if (n <= 0) {
+            timeout_count++;
+            continue;
+        }
+
+        /* Verify magic */
+        if (n < 4 || pktbuf[0] != SUNSDR_MAGIC_0 || pktbuf[1] != SUNSDR_MAGIC_1) {
+            timeout_count++;
+            continue;
+        }
+
+        /* --- 0x1F telemetry family (34 or 42 bytes, byte[3]==0x1F) --- */
+        if (pktbuf[3] == 0x1F && (n == 34 || n == 42)) {
+            unsigned char subtype = pktbuf[2];
+            telemetry_count++;
+
+            if (subtype == 0x00) {
+                /* Recurring power/SWR telemetry — setPowerSwr path
+                 * DLL handler reads packet offsets +0x12, +0x16, +0x1a
+                 * as float and u16 conversions.
+                 */
+                /* Parse every byte pair as u16 LE for fine-grained analysis */
+                unsigned short u16[17] = {0};
+                for (int bi = 0; bi < 17 && (bi*2+1) < n; bi++)
+                    u16[bi] = pktbuf[bi*2] | (pktbuf[bi*2+1] << 8);
+
+                /* Also try float32 at various offsets */
+                float f_08 = 0, f_0c = 0, f_10 = 0, f_14 = 0, f_18 = 0, f_1c = 0;
+                if (n >= 12) memcpy(&f_08, &pktbuf[8], 4);
+                if (n >= 16) memcpy(&f_0c, &pktbuf[12], 4);
+                if (n >= 20) memcpy(&f_10, &pktbuf[16], 4);
+                if (n >= 24) memcpy(&f_14, &pktbuf[20], 4);
+                if (n >= 28) memcpy(&f_18, &pktbuf[24], 4);
+                if (n >= 32) memcpy(&f_1c, &pktbuf[28], 4);
+
+                /* Log first 20, then every 50th, plus always during TX */
+                if (telemetry_count <= 20 || telemetry_count % 50 == 0 || sdr.currentPTT) {
+                    /* u16 view: every 2-byte pair from the packet */
+                    sdr_logf("TELEM 0x1F/00 #%d len=%d PTT=%d u16: "
+                        "%u %u | %u %u | %u %u | %u %u | %u %u | %u %u | %u %u | %u %u | %u\n",
+                        telemetry_count, n, sdr.currentPTT,
+                        u16[0], u16[1],   /* bytes 0-3: header */
+                        u16[2], u16[3],   /* bytes 4-7 */
+                        u16[4], u16[5],   /* bytes 8-11 */
+                        u16[6], u16[7],   /* bytes 12-15 */
+                        u16[8], u16[9],   /* bytes 16-19 */
+                        u16[10], u16[11], /* bytes 20-23 */
+                        u16[12], u16[13], /* bytes 24-27 */
+                        u16[14], u16[15], /* bytes 28-31 */
+                        u16[16]);         /* bytes 32-33 */
+
+                    /* float view at each 4-byte offset */
+                    sdr_logf("TELEM 0x1F/00 #%d floats: "
+                        "f08=%.6g f0c=%.6g f10=%.6g f14=%.6g f18=%.6g f1c=%.6g\n",
+                        telemetry_count,
+                        (double)f_08, (double)f_0c, (double)f_10,
+                        (double)f_14, (double)f_18, (double)f_1c);
+                }
+
+                /* Hex dump: first 5 and every 200th */
+                if (telemetry_count <= 5 || telemetry_count % 200 == 0) {
+                    char hexbuf[256];
+                    int hpos = 0;
+                    for (int b = 0; b < n && hpos < (int)sizeof(hexbuf) - 3; b++)
+                        hpos += sprintf(hexbuf + hpos, "%02x", pktbuf[b]);
+                    sdr_logf("TELEM 0x1F/00 HEX #%d: %s\n", telemetry_count, hexbuf);
+                }
+
+                /* Feed power telemetry to Thetis metering.
+                 * Bytes 14-15 (u16 LE) carry forward power ADC value.
+                 * Confirmed 2026-04-09: u16=48 → 11.2W, u16=186 → ~96W.
+                 * Linear model: watts = max(0, (value - 30) * 0.614)
+                 * Conversion to watts happens in C# computeAlexFwdPower().
+                 * Bytes 16-17 may carry SWR (134 RX, 125 at 96W TX).
+                 */
+                {
+                    unsigned short fwd_raw = (n >= 16) ? (pktbuf[14] | (pktbuf[15] << 8)) : 0;
+                    unsigned short swr_raw = (n >= 18) ? (pktbuf[16] | (pktbuf[17] << 8)) : 0;
+                    PeakFwdPower((float)fwd_raw);
+                    PeakRevPower((float)swr_raw);
+                }
+            }
+            else if (subtype == 0x01) {
+                /* One-shot operational status: PTT/TxPTT/ATU flags */
+                unsigned int status_word = 0;
+                if (n >= 22)
+                    status_word = pktbuf[18] | (pktbuf[19]<<8) | (pktbuf[20]<<16) | (pktbuf[21]<<24);
+                int ptt_bit = (status_word >> 7) & 1;
+                int tx_ptt_bit = (status_word >> 8) & 1;
+                int atu_flag = (status_word >> 11) & 1;
+                sdr_logf("TELEM 0x1F/01 status: word=0x%08X ptt=%d tx_ptt=%d atu=%d\n",
+                    status_word, ptt_bit, tx_ptt_bit, atu_flag);
+            }
+            else {
+                sdr_logf("TELEM 0x1F/%02X len=%d (unknown subtype)\n", subtype, n);
+            }
+            continue;
+        }
+
+        /* Non-IQ, non-telemetry packets */
         if (n != SUNSDR_IQ_PKT_SIZE) {
             timeout_count++;
             continue;
         }
 
-        /* Verify magic and opcode */
-        if (pktbuf[0] != SUNSDR_MAGIC_0 || pktbuf[1] != SUNSDR_MAGIC_1)
-            continue;
+        /* Verify IQ opcode: 0xFE = RX IQ stream, 0xFD = TX-active stream.
+         * Both are 1210-byte 24-bit interleaved IQ packets.
+         * During TX, the radio switches to 0xFD. We MUST keep processing them
+         * to feed xrouter -> xcmaster -> xvacOUT -> VAC mixer Input 0.
+         * Without this, the VAC mixer thread blocks on WaitForMultipleObjects
+         * waiting for Input 0, xvac_out never fires, rmatchOUT drains, and
+         * the PortAudio output callback gets ~1562 underflows/sec during TX.
+         */
         if (pktbuf[2] != SUNSDR_OP_IQ_STREAM && pktbuf[2] != 0xFD)
             continue;
-
-        if (pktbuf[2] == 0xFD) {
-            pkt_count++;
-            continue;
-        }
 
         /* Extract 200 x 24-bit LE I/Q pairs from payload (offset 10) */
         unsigned char* payload = pktbuf + SUNSDR_IQ_HDR_SIZE;
@@ -1391,6 +1527,7 @@ DWORD WINAPI SunSDRReadThread(LPVOID param)
             if (out_n > 0) {
                 __try {
                     xrouter(NULL, 0, source, out_n, resampler[source].out);
+                    if (source == 0) last_rx_pkt_tick = GetTickCount64();
                 } __except(EXCEPTION_EXECUTE_HANDLER) {
                     sdr_logf("CRASH in xrouter at pkt %d (source=%d, out_n=%d)! Exception=0x%08X\n",
                         pkt_count, source, out_n, GetExceptionCode());
@@ -1414,6 +1551,7 @@ DWORD WINAPI SunSDRReadThread(LPVOID param)
 
     sdr_logf("IQ read thread exiting (keepRunning=%d, pkt_count=%d)\n", sdr.keepRunning, pkt_count);
     free(tx_silence_buf);
+    free(rx_silence_buf);
     printf("SunSDR: IQ read thread stopped\n");
     return 0;
 }
