@@ -492,3 +492,4 @@ extern __declspec(dllexport) void nativeSunSDRSetTxAntenna(int antenna);
 extern __declspec(dllexport) void nativeSunSDRSetPA(int enabled);
 extern __declspec(dllexport) int nativeSunSDRGetVersionText(char* buffer, int maxlen);
 extern __declspec(dllexport) int nativeSunSDRGetProtocolText(char* buffer, int maxlen);
+extern __declspec(dllexport) int nativeSunSDRGetSerialText(char* buffer, int maxlen);

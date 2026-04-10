@@ -429,5 +429,8 @@ namespace Thetis
 
         [DllImport("ChannelMaster.dll", CharSet = CharSet.Ansi, CallingConvention = CallingConvention.Cdecl)]
         public static extern int nativeSunSDRGetProtocolText(StringBuilder buffer, int maxlen);
+
+        [DllImport("ChannelMaster.dll", CharSet = CharSet.Ansi, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int nativeSunSDRGetSerialText(StringBuilder buffer, int maxlen);
     }
 }

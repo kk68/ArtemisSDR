@@ -1584,3 +1584,8 @@ PORT int nativeSunSDRGetProtocolText(char* buffer, int maxlen)
 {
     return SunSDRGetProtocolText(buffer, maxlen);
 }
+
+PORT int nativeSunSDRGetSerialText(char* buffer, int maxlen)
+{
+    return SunSDRGetSerialText(buffer, maxlen);
+}

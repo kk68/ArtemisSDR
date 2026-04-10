@@ -25,6 +25,7 @@ namespace Thetis
         public static string BoardMismatch { get; set; } = "";
         public static string SunSDRVersionText { get; private set; } = "Unknown";
         public static string SunSDRProtocolText { get; private set; } = "SunSDR Native";
+        public static string SunSDRSerialText { get; private set; } = "Unknown";
 
         public static int InitRadio()
         {
@@ -214,9 +215,11 @@ namespace Thetis
         {
             StringBuilder version = new StringBuilder(64);
             StringBuilder protocol = new StringBuilder(32);
+            StringBuilder serial = new StringBuilder(64);
 
             SunSDRVersionText = "Unknown";
             SunSDRProtocolText = "SunSDR Native";
+            SunSDRSerialText = "Unknown";
 
             try
             {
@@ -229,11 +232,17 @@ namespace Thetis
                 {
                     SunSDRProtocolText = protocol.ToString().Trim();
                 }
+
+                if (nativeSunSDRGetSerialText(serial, serial.Capacity) > 0 && !string.IsNullOrWhiteSpace(serial.ToString()))
+                {
+                    SunSDRSerialText = serial.ToString().Trim();
+                }
             }
             catch
             {
                 SunSDRVersionText = "Unknown";
                 SunSDRProtocolText = "SunSDR Native";
+                SunSDRSerialText = "Unknown";
             }
         }
 
@@ -247,9 +256,20 @@ namespace Thetis
             return string.IsNullOrWhiteSpace(SunSDRProtocolText) ? "SunSDR Native" : SunSDRProtocolText;
         }
 
+        public static string GetSunSDRSerialText()
+        {
+            return string.IsNullOrWhiteSpace(SunSDRSerialText) ? "Unknown" : SunSDRSerialText;
+        }
+
         public static string GetSunSDRTitleVersionString()
         {
-            return "FW " + GetSunSDRVersionText() + " " + GetSunSDRProtocolText();
+            string title = "FW " + GetSunSDRVersionText() + " " + GetSunSDRProtocolText();
+            string serial = GetSunSDRSerialText();
+            if (!string.Equals(serial, "Unknown", StringComparison.OrdinalIgnoreCase))
+            {
+                title += " SN " + serial;
+            }
+            return title;
         }
 
         private static float _swr_protect = 1.0f;

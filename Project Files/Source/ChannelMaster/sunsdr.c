@@ -38,8 +38,56 @@ extern IVAC pvac[];
 
 /* Debug log */
 static FILE* sdr_log = NULL;
+static int sdr_log_initialized = 0;
+static char sdr_log_path[MAX_PATH];
+
+static void sdr_log_build_path(void)
+{
+    DWORD len;
+    char* slash;
+
+    if (sdr_log_path[0] != '\0') {
+        return;
+    }
+
+    len = GetModuleFileNameA(NULL, sdr_log_path, (DWORD)sizeof(sdr_log_path));
+    if (len == 0 || len >= sizeof(sdr_log_path)) {
+        strncpy(sdr_log_path, "sunsdr_debug.log", sizeof(sdr_log_path) - 1);
+        sdr_log_path[sizeof(sdr_log_path) - 1] = '\0';
+        return;
+    }
+
+    slash = strrchr(sdr_log_path, '\\');
+    if (!slash) {
+        slash = strrchr(sdr_log_path, '/');
+    }
+
+    if (slash) {
+        slash[1] = '\0';
+        strncat(sdr_log_path, "sunsdr_debug.log", sizeof(sdr_log_path) - strlen(sdr_log_path) - 1);
+    } else {
+        strncpy(sdr_log_path, "sunsdr_debug.log", sizeof(sdr_log_path) - 1);
+        sdr_log_path[sizeof(sdr_log_path) - 1] = '\0';
+    }
+}
+
 static void sdr_log_open(void) {
-    if (!sdr_log) sdr_log = fopen("C:\\Users\\kosta\\ham\\SUNSDR\\sunsdr_debug.log", "a");
+    if (!sdr_log) {
+        const char* mode;
+
+        sdr_log_build_path();
+        mode = sdr_log_initialized ? "a" : "w";
+        sdr_log = fopen(sdr_log_path, mode);
+        if (sdr_log) {
+            SYSTEMTIME st;
+            sdr_log_initialized = 1;
+            GetLocalTime(&st);
+            fprintf(sdr_log, "===== SunSDR session %04d-%02d-%02d %02d:%02d:%02d.%03d =====\n",
+                st.wYear, st.wMonth, st.wDay,
+                st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
+            fflush(sdr_log);
+        }
+    }
 }
 static void sdr_logf(const char* fmt, ...) {
     va_list ap;
@@ -65,6 +113,8 @@ static void sunsdr_set_identity_defaults(void)
     sdr.firmwareVersionText[sizeof(sdr.firmwareVersionText) - 1] = '\0';
     strncpy(sdr.protocolText, "SunSDR Native", sizeof(sdr.protocolText) - 1);
     sdr.protocolText[sizeof(sdr.protocolText) - 1] = '\0';
+    strncpy(sdr.serialText, "Unknown", sizeof(sdr.serialText) - 1);
+    sdr.serialText[sizeof(sdr.serialText) - 1] = '\0';
 }
 
 static const char* sunsdr_safe_label(const char* label)
@@ -153,6 +203,62 @@ static int sunsdr_is_versionish_ascii(const char* text)
     return digits >= 2 && dots >= 1;
 }
 
+static void sunsdr_try_parse_identity_011a(const unsigned char* data, int len, const char* context)
+{
+    unsigned int device_suffix;
+    char year_token[8];
+
+    if (!data || len < 24) {
+        return;
+    }
+
+    if (data[0] != 0x32 || data[1] != 0xFF || data[2] != 0x01 || data[3] != 0x1A) {
+        return;
+    }
+
+    device_suffix = (unsigned int)data[4] | ((unsigned int)data[5] << 8);
+    _snprintf(year_token, sizeof(year_token), "%02X%02X", data[8], data[9]);
+    year_token[sizeof(year_token) - 1] = '\0';
+
+    if (device_suffix > 0 && strcmp(year_token, "0000") != 0) {
+        _snprintf(sdr.serialText, sizeof(sdr.serialText), "EED06%s%05u", year_token, device_suffix);
+        sdr.serialText[sizeof(sdr.serialText) - 1] = '\0';
+        sdr_logf("IDENTITY %s serial_inferred=%s year=%s suffix=%u\n",
+            context ? context : "pkt",
+            sdr.serialText,
+            year_token,
+            device_suffix);
+    }
+}
+
+static void sunsdr_try_parse_serial_from_fwmgr(const unsigned char* data, int len, const char* context)
+{
+    unsigned int device_suffix;
+    char year_token[8];
+
+    if (!data || len < 40) {
+        return;
+    }
+
+    if (data[0] != 0x32 || data[1] != 0xFF || data[2] != 0x1A || data[4] != 0x20 || data[5] != 0x00) {
+        return;
+    }
+
+    device_suffix = (unsigned int)data[38] | ((unsigned int)data[39] << 8);
+    _snprintf(year_token, sizeof(year_token), "%02X%02X", data[26], data[27]);
+    year_token[sizeof(year_token) - 1] = '\0';
+
+    if (device_suffix > 0 && strcmp(year_token, "0000") != 0) {
+        _snprintf(sdr.serialText, sizeof(sdr.serialText), "EED06%s%05u", year_token, device_suffix);
+        sdr.serialText[sizeof(sdr.serialText) - 1] = '\0';
+        sdr_logf("IDENTITY %s serial_inferred_fwmgr=%s year=%s suffix=%u\n",
+            context ? context : "pkt",
+            sdr.serialText,
+            year_token,
+            device_suffix);
+    }
+}
+
 static void sunsdr_cache_identity_candidate(const unsigned char* data, int len, const char* context)
 {
     char ascii[256];
@@ -162,6 +268,9 @@ static void sunsdr_cache_identity_candidate(const unsigned char* data, int len, 
     if (!data || len <= 0) {
         return;
     }
+
+    sunsdr_try_parse_identity_011a(data, len, context);
+    sunsdr_try_parse_serial_from_fwmgr(data, len, context);
 
     sunsdr_asciiify(data, len, ascii, (int)sizeof(ascii));
     if (strstr(ascii, "version") || strstr(ascii, "Version") || strstr(ascii, "boot") || strstr(ascii, "serial")) {
@@ -1091,6 +1200,11 @@ void SunSDRDestroy(void)
         sdr.txLockInitialized = 0;
     }
 
+    if (sdr_log) {
+        fclose(sdr_log);
+        sdr_log = NULL;
+    }
+
     SendpOutboundTx(OutBound);
     sunsdr_set_identity_defaults();
 
@@ -1940,4 +2054,9 @@ int SunSDRGetVersionText(char* buffer, int maxlen)
 int SunSDRGetProtocolText(char* buffer, int maxlen)
 {
     return sunsdr_copy_text(buffer, maxlen, sdr.protocolText);
+}
+
+int SunSDRGetSerialText(char* buffer, int maxlen)
+{
+    return sunsdr_copy_text(buffer, maxlen, sdr.serialText);
 }
