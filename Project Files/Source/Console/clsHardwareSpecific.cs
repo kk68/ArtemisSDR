@@ -633,6 +633,44 @@ namespace Thetis
 
                     return gains;
 
+                case HPSDRModel.SUNSDR2DX:
+                    /*
+                     * SunSDR2 DX uses the native TX path rather than the HPSDR DAC/output
+                     * chain. In practice it needs a materially lower PA attenuation baseline
+                     * than the ANAN100 family or the calibrated Thetis power path tops out
+                     * far below full drive. It also needs low-power compensation via the
+                     * per-drive offset table, so the base gain here is set a few dB lower
+                     * than the Hermes/ANAN10 family and fine shaping is handled separately.
+                     */
+                    gains[(int)Band.B160M] = 37.4f;
+                    gains[(int)Band.B80M] = 37.6f;
+                    gains[(int)Band.B60M] = 37.7f;
+                    gains[(int)Band.B40M] = 37.7f;
+                    gains[(int)Band.B30M] = 37.4f;
+                    gains[(int)Band.B20M] = 36.9f;
+                    gains[(int)Band.B17M] = 36.3f;
+                    gains[(int)Band.B15M] = 35.3f;
+                    gains[(int)Band.B12M] = 35.3f;
+                    gains[(int)Band.B10M] = 35.3f;
+                    gains[(int)Band.B6M] = 35.3f;
+
+                    gains[(int)Band.VHF0] = 56.2f;
+                    gains[(int)Band.VHF1] = 56.2f;
+                    gains[(int)Band.VHF2] = 56.2f;
+                    gains[(int)Band.VHF3] = 56.2f;
+                    gains[(int)Band.VHF4] = 56.2f;
+                    gains[(int)Band.VHF5] = 56.2f;
+                    gains[(int)Band.VHF6] = 56.2f;
+                    gains[(int)Band.VHF7] = 56.2f;
+                    gains[(int)Band.VHF8] = 56.2f;
+                    gains[(int)Band.VHF9] = 56.2f;
+                    gains[(int)Band.VHF10] = 56.2f;
+                    gains[(int)Band.VHF11] = 56.2f;
+                    gains[(int)Band.VHF12] = 56.2f;
+                    gains[(int)Band.VHF13] = 56.2f;
+
+                    return gains;
+
                 case HPSDRModel.ANAN200D:
                     gains[(int)Band.B160M] = 49.5f;
                     gains[(int)Band.B80M] = 50.5f;

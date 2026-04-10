@@ -25013,6 +25013,23 @@ namespace Thetis
             float refvoltage = 0;
             int adc_cal_offset = 0;
 
+            // SunSDR2 DX: telemetry u16 at packet bytes 14-15 is forward voltage.
+            // Quadratic model confirmed 2026-04-09: watts = 0.00412 * (value - 33)^2
+            // u16 ∝ RF voltage at directional coupler, power ∝ V^2
+            // Calibration points (40m, external wattmeter):
+            //   u16≈85 → 11W, u16≈142 → 50W, u16≈186 → 96W
+            if (HardwareSpecific.Model == HPSDRModel.SUNSDR2DX)
+            {
+                adc = NetworkIO.getFwdPower();
+                double v = Math.Max(0.0, adc - 33.0);
+                float sunWatts = (float)(0.00412 * v * v);
+                if (PAValues)
+                {
+                    average_fwdadc = alpha * average_fwdadc + (1.0f - alpha) * adc;
+                }
+                return sunWatts;
+            }
+
             switch (HardwareSpecific.Model)
             {
                 case HPSDRModel.ANAN100:
@@ -28686,11 +28703,6 @@ namespace Thetis
                 DrivePowerChangedHandlers?.Invoke(1, new_pwr, TUN || chk2TONE.Checked); // only rx1
             }
 
-            if (NetworkIO.CurrentRadioProtocol == RadioProtocol.SUNSDR)
-            {
-                int native_drive = (int)Math.Round(Math.Max(0, Math.Min(100, new_pwr)) * 255.0 / 100.0);
-                NetworkIO.nativeSunSDRSetDrive(native_drive);
-            }
         }
 
         private void ptbAF_Scroll(object sender, System.EventArgs e)
@@ -29569,7 +29581,15 @@ namespace Thetis
                 //
                 if (!chkTUN.Checked && !chk2TONE.Checked) ptbPWR_Scroll(this, EventArgs.Empty); //MW0LGE_22b need this here as we may have adjusted power via tune slider when not in mox
                 //
-                if (!full_duplex)       // shutdown RX1 and RX2 as appropriate
+                // SunSDR: skip the RX1/RX2 WDSP channel shutdown during MOX.
+                // The SunSDR IQ stream is bidirectional and continues feeding RX
+                // during TX. If we shut down the WDSP RX channel, fexchange0 stops
+                // producing audio output, which starves the VAC mixer Input 0.
+                // The VAC mixer thread blocks on WaitForMultipleObjects waiting for
+                // Input 0 data, xvac_out never fires, rmatchOUT drains, and the
+                // PortAudio output callback gets ~1562 underflows/sec during TX.
+                // The actual RX audio is muted at the mixer level by SetIVACmox.
+                if (!full_duplex && NetworkIO.CurrentRadioProtocol != RadioProtocol.SUNSDR)
                 {
                     bool RX1_shutdown = chkVFOATX.Checked || (chkVFOBTX.Checked && !RX2Enabled) || mute_rx1_on_vfob_tx || (chkVFOBTX.Checked && HardwareSpecific.Model == HPSDRModel.ANAN10E && psform.PSEnabled);
                     bool RX2_shutdown = (chkVFOBTX.Checked && RX2Enabled) || mute_rx2_on_vfoa_tx || (chkVFOATX.Checked && RX2Enabled && HardwareSpecific.Model == HPSDRModel.ANAN10E && psform.PSEnabled);
@@ -45445,7 +45465,82 @@ namespace Thetis
         {
             if (rx != 1) return;
             handleBSFChange(oldBand, newBand, oldMode, newMode, oldFilter, newFilter, oldFreq, newFreq, oldCentreF, newCentreF, oldCTUN, newCTUN, oldZoomSlider, newZoomSlider);
+
+            if (oldBand != newBand &&
+                NetworkIO.CurrentRadioProtocol == RadioProtocol.SUNSDR &&
+                chkPower.Checked)
+            {
+                /*
+                 * SunSDR RX is driven from the settled DDS/centre-frequency path,
+                 * not directly from the visible VFOA number. During a live band
+                 * switch Thetis briefly emits stale old-band writes while it churns
+                 * through the band-stack update. Replay the final settled SunSDR RX
+                 * state here, after SetBand has completed, so the correct DDS state
+                 * wins and the native cache is refreshed for any later POWER cycle.
+                 */
+                BeginInvoke(new MethodInvoker(() =>
+                {
+                    if (!chkPower.Checked)
+                        return;
+
+                    int ant = SetupForm != null ? SetupForm.GetRXAntenna(newBand) : 0;
+                    if (ant == 1 || ant == 2)
+                        NetworkIO.nativeSunSDRSetAntenna(ant);
+
+                    NetworkIO.nativeSunSDRSetMode((int)RX1DSPMode);
+                    NetworkIO.VFOfreq(0, RX1DDSFreq, 0);
+
+                    if (RX2Enabled)
+                        NetworkIO.VFOfreq(3, RX2DDSFreq, 0);
+                }));
+
+                if (!_sunSDRBandPowerRecyclePending && !MOX && !chkTUN.Checked)
+                {
+                    _sunSDRBandPowerRecyclePending = true;
+                    Band targetBand = newBand;
+
+                    Task.Run(async () =>
+                    {
+                        await Task.Delay(150).ConfigureAwait(false);
+
+                        if (IsDisposed)
+                            return;
+
+                        BeginInvoke(new MethodInvoker(() =>
+                        {
+                            if (IsDisposed)
+                                return;
+
+                            if (!chkPower.Checked || RX1Band != targetBand || MOX || chkTUN.Checked)
+                            {
+                                _sunSDRBandPowerRecyclePending = false;
+                                return;
+                            }
+
+                            chkPower.Checked = false;
+                        }));
+
+                        await Task.Delay(900).ConfigureAwait(false);
+
+                        if (IsDisposed)
+                            return;
+
+                        BeginInvoke(new MethodInvoker(() =>
+                        {
+                            if (IsDisposed)
+                                return;
+
+                            if (RX1Band == targetBand)
+                                chkPower.Checked = true;
+
+                            _sunSDRBandPowerRecyclePending = false;
+                        }));
+                    });
+                }
+            }
         }
+
+        private bool _sunSDRBandPowerRecyclePending = false;
         private void OnEntryAdd(BandStackFilter bsf)
         {
             if (!BandStackManager.Ready) return;
@@ -46634,11 +46729,6 @@ namespace Thetis
                 DrivePowerChangedHandlers?.Invoke(1, new_pwr, true); // only rx1, and always tune
             }
 
-            if (NetworkIO.CurrentRadioProtocol == RadioProtocol.SUNSDR)
-            {
-                int native_drive = (int)Math.Round(Math.Max(0, Math.Min(100, new_pwr)) * 255.0 / 100.0);
-                NetworkIO.nativeSunSDRSetDrive(native_drive);
-            }
         }
         private DrivePowerSource _tuneDrivePowerSource = DrivePowerSource.DRIVE_SLIDER;
         private DrivePowerSource _2ToneDrivePowerSource = DrivePowerSource.DRIVE_SLIDER;
