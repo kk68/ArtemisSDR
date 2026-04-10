@@ -2,6 +2,10 @@
 
 Native SunSDR2 DX integration for the [Thetis](https://github.com/ramdor/Thetis) SDR application, built through clean-room protocol reverse engineering.
 
+New-user setup guide:
+
+- [START_HERE_SUNSDR2DX.md](/mnt/c/Users/kosta/ham/SUNSDR/Thetis/START_HERE_SUNSDR2DX.md)
+
 ## Status: Core RX/TX/PA Working
 
 The current fork supports practical operation on SunSDR2 DX:
@@ -17,6 +21,8 @@ The current fork supports practical operation on SunSDR2 DX:
 - **PA / xPA control working** from Thetis
 - **Power off/on recovery working** without losing the receive stream
 - **RX band switching currently working via a temporary SunSDR-only auto power recycle workaround**
+- **Radio firmware version display working** in the Thetis title bar and `Setup -> HW Select`
+- **Radio serial number display working** in the Thetis title bar and `Setup -> HW Select`
 - **TX forward power meter working** via `0x1F` telemetry packet (bytes 14-15 → quadratic conversion to watts, calibrated on 40m)
 - **VAC TO VAC underflows during MOX/TX largely resolved** via RX silence injection (radio reduces RX rate during TX, blocking WDSP RX with `bfo=1`)
 
@@ -38,6 +44,30 @@ This is no longer just an RX-only bring-up. It is a usable SunSDR2 DX port with 
 | RX antenna selector | Opcode `0x15`, selector `0x01` = primary, `0x03` = secondary RX |
 | TX antenna selector | Opcode `0x15`, selector `0x01` = primary, `0x02` = secondary TX |
 | PA / xPA selector | Opcode `0x24`, u32: `1` = PA on, `0` = PA off |
+
+## Identity / Version Display
+
+The current SunSDR2 DX integration now surfaces radio identity directly in Thetis:
+
+- the main title bar shows firmware and, when available, serial number
+- `Setup -> HW Select` shows the same live firmware version and serial-aware radio row
+
+Current capture-backed sources:
+
+- **Firmware version** comes from the ExpertSDR3 Firmware Manager style `0x1A` query/reply
+  - request: `32ff1a000000000000000100000000000000`
+  - reply example: `32ff1a002000000000000100000000000000ee0002005800080020210000e4070c0330c22f4148020000d70900000b000000`
+  - displayed firmware: `88.8` from reply bytes `22` and `24`
+
+- **Serial number** is currently inferred from the same `0x1A` reply and the observed identity packet family
+  - year token: bytes `26-27` = `20 21` -> `2021`
+  - unit suffix: bytes `38-39` = `48 02` -> `584`
+  - current SunSDR2 DX serial format used in Thetis: `EED06` + `2021` + `00584` = `EED06202100584`
+
+Important note:
+
+- firmware is directly packet-backed
+- the `EED06` serial prefix is still treated as a model-family inference derived from ExpertSDR3 behavior and user validation, not yet from a separately decoded on-wire field
 
 ## Architecture
 

@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Net;
 using System.Net.Sockets;
 using System.Net.NetworkInformation;
+using System.Text;
 using System.Windows.Forms;
 
 namespace Thetis
@@ -22,6 +23,9 @@ namespace Thetis
         public static bool FWVersionsChecked { get; set; } = false;
         public static string GetFWVersionErrorMsg { get; set; } = "";
         public static string BoardMismatch { get; set; } = "";
+        public static string SunSDRVersionText { get; private set; } = "Unknown";
+        public static string SunSDRProtocolText { get; private set; } = "SunSDR Native";
+        public static string SunSDRSerialText { get; private set; } = "Unknown";
 
         public static int InitRadio()
         {
@@ -80,6 +84,10 @@ namespace Thetis
                 {
                     BoardID = HPSDRHW.SunSDR;
                     CurrentRadioProtocol = RadioProtocol.SUNSDR;
+                    FWCodeVersion = 0;
+                    BetaVersion = 0;
+                    Protocol2VersionSupported = 0;
+                    RefreshSunSDRVersionInfo();
                     BoardMismatch = "";
                 }
                 return ret;
@@ -201,6 +209,67 @@ namespace Thetis
             }
 
             return ret;
+        }
+
+        public static void RefreshSunSDRVersionInfo()
+        {
+            StringBuilder version = new StringBuilder(64);
+            StringBuilder protocol = new StringBuilder(32);
+            StringBuilder serial = new StringBuilder(64);
+
+            SunSDRVersionText = "Unknown";
+            SunSDRProtocolText = "SunSDR Native";
+            SunSDRSerialText = "Unknown";
+
+            try
+            {
+                if (nativeSunSDRGetVersionText(version, version.Capacity) > 0 && !string.IsNullOrWhiteSpace(version.ToString()))
+                {
+                    SunSDRVersionText = version.ToString().Trim();
+                }
+
+                if (nativeSunSDRGetProtocolText(protocol, protocol.Capacity) > 0 && !string.IsNullOrWhiteSpace(protocol.ToString()))
+                {
+                    SunSDRProtocolText = protocol.ToString().Trim();
+                }
+
+                if (nativeSunSDRGetSerialText(serial, serial.Capacity) > 0 && !string.IsNullOrWhiteSpace(serial.ToString()))
+                {
+                    SunSDRSerialText = serial.ToString().Trim();
+                }
+            }
+            catch
+            {
+                SunSDRVersionText = "Unknown";
+                SunSDRProtocolText = "SunSDR Native";
+                SunSDRSerialText = "Unknown";
+            }
+        }
+
+        public static string GetSunSDRVersionText()
+        {
+            return string.IsNullOrWhiteSpace(SunSDRVersionText) ? "Unknown" : SunSDRVersionText;
+        }
+
+        public static string GetSunSDRProtocolText()
+        {
+            return string.IsNullOrWhiteSpace(SunSDRProtocolText) ? "SunSDR Native" : SunSDRProtocolText;
+        }
+
+        public static string GetSunSDRSerialText()
+        {
+            return string.IsNullOrWhiteSpace(SunSDRSerialText) ? "Unknown" : SunSDRSerialText;
+        }
+
+        public static string GetSunSDRTitleVersionString()
+        {
+            string title = "FW " + GetSunSDRVersionText() + " " + GetSunSDRProtocolText();
+            string serial = GetSunSDRSerialText();
+            if (!string.Equals(serial, "Unknown", StringComparison.OrdinalIgnoreCase))
+            {
+                title += " SN " + serial;
+            }
+            return title;
         }
 
         private static float _swr_protect = 1.0f;

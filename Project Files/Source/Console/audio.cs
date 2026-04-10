@@ -1837,6 +1837,13 @@ namespace Thetis
 
             if(!c.IsSetupFormNull && c.SetupForm.SelectedRadioList != null)
             {
+                if (retval && NetworkIO.CurrentRadioProtocol == RadioProtocol.SUNSDR)
+                {
+                    NetworkIO.RefreshSunSDRVersionInfo();
+                    c.SetupForm.SelectedRadioList.RefreshSelectedLiveState();
+                    c.Text = c.BasicTitleBar;
+                }
+
                 if (retval)
                     c.SetupForm.SelectedRadioList.RadioConnected();
                 else

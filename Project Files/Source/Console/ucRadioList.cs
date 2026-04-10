@@ -84,6 +84,7 @@ namespace Thetis
             public int RadioPort;
             public RadioDiscoveryRadioProtocol RadioProtocol;
             public string RadioVersionText;
+            public string RadioSerialText;
             public string RadioMac;
             public bool RadioIsCustom;
             public string RadioGuid;
@@ -131,6 +132,7 @@ namespace Thetis
             public int RadioPort;
             public string RadioProtocolEnum;
             public string RadioVersionText;
+            public string RadioSerialText;
             public string RadioMac;
             public bool RadioIsCustom;
             public string RadioGuid;
@@ -455,6 +457,19 @@ HPSDRHW hw = (HPSDRHW)0;
             RadioConnected(_selected_key);
         }
 
+        public void RefreshSelectedLiveState()
+        {
+            RowItem item = getSelectedItem();
+            if (item == null) return;
+
+            if (!string.Equals(item.RadioModel, HPSDRHW.SunSDR.ToString(), StringComparison.OrdinalIgnoreCase))
+                return;
+
+            item.RadioVersionText = NetworkIO.GetSunSDRVersionText();
+            item.RadioSerialText = NetworkIO.GetSunSDRSerialText();
+            Invalidate();
+        }
+
         public void RadioDisconnected()
         {
             if (string.IsNullOrWhiteSpace(_selected_key)) return;
@@ -765,6 +780,7 @@ HPSDRHW hw = (HPSDRHW)0;
                 row.RadioPort = src.RadioPort;
                 row.RadioProtocolEnum = enc(src.RadioProtocol.ToString());
                 row.RadioVersionText = enc(src.RadioVersionText);
+                row.RadioSerialText = enc(src.RadioSerialText);
                 row.RadioMac = enc(src.RadioMac);
                 row.RadioIsCustom = src.RadioIsCustom;
                 row.RadioGuid = enc(src.RadioGuid);
@@ -819,6 +835,7 @@ HPSDRHW hw = (HPSDRHW)0;
                 item.RadioIp = dec(r.RadioIp);
                 item.RadioPort = r.RadioPort;
                 item.RadioVersionText = dec(r.RadioVersionText);
+                item.RadioSerialText = dec(r.RadioSerialText);
                 item.RadioMac = dec(r.RadioMac);                
 
 
@@ -1293,6 +1310,7 @@ if (!DoesRadioExist(item.Key))
             }
 
             string model = safe(item.RadioModel);
+            string serial = safe(item.RadioSerialText);
             string ip = safe(item.RadioIp);
             string mac = item.RadioIsCustom ? "Custom" : safe(item.RadioMac);
 
@@ -1304,6 +1322,14 @@ if (!DoesRadioExist(item.Key))
             if (!string.IsNullOrWhiteSpace(model))
             {
                 s = model;
+            }
+
+            if (!string.IsNullOrWhiteSpace(serial) &&
+                !string.Equals(serial, "Unknown", StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(model, HPSDRHW.SunSDR.ToString(), StringComparison.OrdinalIgnoreCase))
+            {
+                if (s.Length > 0) s += "  ";
+                s += serial;
             }
 
             if (!string.IsNullOrWhiteSpace(ipPort))
@@ -1339,7 +1365,8 @@ if (!DoesRadioExist(item.Key))
 
             string protoText;
 
-            if (item.RadioProtocol == RadioDiscoveryRadioProtocol.P1) protoText = "Protocol-1";
+            if (string.Equals(item.RadioModel, HPSDRHW.SunSDR.ToString(), StringComparison.OrdinalIgnoreCase)) protoText = NetworkIO.GetSunSDRProtocolText();
+            else if (item.RadioProtocol == RadioDiscoveryRadioProtocol.P1) protoText = "Protocol-1";
             else if (item.RadioProtocol == RadioDiscoveryRadioProtocol.P2)
             {
                 protoText = "Protocol-2";
@@ -1854,6 +1881,7 @@ if (!DoesRadioExist(item.Key))
             item.RadioPort = 0;
             item.RadioProtocol = RadioDiscoveryRadioProtocol.P1;
             item.RadioVersionText = "";
+            item.RadioSerialText = "";
             item.RadioMac = "";
 
 
@@ -1931,6 +1959,7 @@ if (!DoesRadioExist(item.Key))
             item.RadioPort = port;
             item.RadioProtocol = radio.Protocol;
             item.RadioVersionText = versionText;
+            item.RadioSerialText = "";
             item.RadioMac = mac;
 
 
@@ -1959,6 +1988,10 @@ if (!DoesRadioExist(item.Key))
 
             switch (radio.DeviceType)
             {
+                case HPSDRHW.SunSDR:
+                    versionText = "Unknown";
+                    break;
+
                 case HPSDRHW.Saturn:
                     versionText = "fpga=" + radio.CodeVersion.ToString();
                     if (radio.BetaVersion >= 39)

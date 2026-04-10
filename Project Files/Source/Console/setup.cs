@@ -14009,7 +14009,11 @@ namespace Thetis
 
             if (NetworkIO.getHaveSync() == 1)
             {
-                if (NetworkIO.CurrentRadioProtocol == RadioProtocol.ETH)
+                if (NetworkIO.CurrentRadioProtocol == RadioProtocol.SUNSDR)
+                {
+                    sRet = NetworkIO.GetSunSDRTitleVersionString();
+                }
+                else if (NetworkIO.CurrentRadioProtocol == RadioProtocol.ETH)
                 {
                     switch (HardwareSpecific.Model)
                     {
