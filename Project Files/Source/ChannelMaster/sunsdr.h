@@ -75,8 +75,13 @@ of the License, or (at your option) any later version.
 /* Frequency scaling: wire value = Hz * FREQ_SCALE */
 #define SUNSDR_FREQ_SCALE       10
 
-/* Mode codes */
-#define SUNSDR_MODE_AM          0x00
+/* Mode codes
+ * Verified from ExpertSDR3 full AM session capture 2026-04-13:
+ * AM = 0x28 (matched LSB->AM write; produced RF on-air during MOX).
+ * The earlier USB->AM capture showed 0x00 but that transition may not have
+ * actually resulted in working AM TX. Use 0x28.
+ */
+#define SUNSDR_MODE_AM          0x28
 #define SUNSDR_MODE_LSB         0xBC
 #define SUNSDR_MODE_USB         0xF5
 

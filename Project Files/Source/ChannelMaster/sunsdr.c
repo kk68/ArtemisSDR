@@ -392,11 +392,13 @@ static double sunsdr_tx_full_scale_for_drive(double drive)
     if (drive > 1.0) drive = 1.0;
 
     /*
-     * Keep IQ clean — the radio transmits whatever we send it, so any clipping
-     * here splatters on-air as harmonic distortion. WDSP tune tone arrives at
-     * pre_peak ~0.896; cap full_scale at 1/0.896 = 1.116 so drive=1.0 lands at
-     * exactly post_peak=1.0 with no per-channel clamp truncation. Below
-     * drive=0.85 leave the Thetis power path flat.
+     * Coefficient 0.5 at drive=1.0 gives fs=1.50. Pre-clip post_peak=0.896*1.5=1.34
+     * With per-channel clipping at +/-1.0, the average envelope^2 rises to ~1.50
+     * (vs 1.22 at fs=1.34), which compensates for the ~3 dB power loss that came
+     * with the 8x TX rate reduction (1562 -> 195 pkts/sec). Target: LSB TUNE 100W
+     * slider -> ~95-100W on-air.
+     * Below drive=0.85 the curve stays flat to keep the calibrated Thetis power
+     * path clean at low-mid drive.
      */
     if (drive <= 0.85)
         return 1.0;
@@ -405,7 +407,7 @@ static double sunsdr_tx_full_scale_for_drive(double drive)
     if (t < 0.0) t = 0.0;
     if (t > 1.0) t = 1.0;
 
-    return 1.0 + (0.116 * t * t * t);
+    return 1.0 + (0.5 * t * t * t);
 }
 
 static struct sockaddr_in sunsdr_stream_dest(void)
@@ -555,19 +557,6 @@ static void sunsdr_tx_outbound(int id, int nsamples, double* buff)
         double in_I = buff[2 * i + 0];
         double in_Q = buff[2 * i + 1];
 
-        /*
-         * AM mode I/Q swap. Live capture comparison with ExpertSDR3 shows
-         * WDSP produces AM with I=0, Q=carrier+audio (90deg phasor), but the
-         * SunSDR's AM TX path apparently reads the I channel as the real
-         * baseband envelope. With I=0, no RF comes out no matter the drive.
-         * Swapping I<->Q for AM puts WDSP's carrier+audio onto the I channel,
-         * matching the real-baseband AM form the radio hardware expects.
-         */
-        if (sdr.currentMode == SUNSDR_MODE_AM) {
-            double tmp = in_I;
-            in_I = in_Q;
-            in_Q = tmp;
-        }
 
         double cur_I = in_I * drive * full_scale;
         double cur_Q = in_Q * drive * full_scale;
@@ -873,10 +862,15 @@ static void sunsdr_reassert_tx_state(void)
         sunsdr_send_freq_pkt(SUNSDR_OP_FREQ_PRIMARY, 0, sdr.currentTxFreqHz);
     }
 
-    if (sdr.currentMode >= 0) {
-        sdr_logf("Reassert TX mode: 0x%02X\n", sdr.currentMode);
-        sunsdr_send_u32_cmd(SUNSDR_OP_MODE, (unsigned int)sdr.currentMode);
-    }
+    /*
+     * DO NOT re-send mode (0x17) here. The mode is already set via
+     * SunSDRSetMode when the user switches modes. Re-sending it during the
+     * MOX entry sequence re-initializes the radio's mode state and breaks
+     * AM TX specifically (the radio's AM modulator doesn't re-arm after the
+     * second 0x17 write, so no RF comes out regardless of the TX IQ stream).
+     * ExpertSDR3 never re-sends mode on MOX entry — confirmed in live AM MOX
+     * capture (only 0x18, 0x20, 0x18, 0x06 sequence).
+     */
 
     if (sdr.currentTxAntenna == 1 || sdr.currentTxAntenna == 2) {
         int selector = sunsdr_map_tx_ant_selector(sdr.currentTxAntenna);
@@ -1706,10 +1700,27 @@ void SunSDRSetPTT(int ptt)
         sdr.lastTxWasTune = sdr.currentTune ? 1 : 0;
         sunsdr_send_u32_cmd(SUNSDR_OP_MOX_PTT, 1);
         sdr.currentPTT = new_ptt;
-        sunsdr_send_u32_cmd(SUNSDR_OP_PA_ENABLE, sunsdr_current_pa_wire_state());
+        /*
+         * Only write 0x24 PA_ENABLE on MOX-on when we're actually turning
+         * PA ON (user has external PA toggled on). Writing 0x24=0 right
+         * after PTT=1 appears to kill AM TX output at the radio for users
+         * who don't have the PA enabled. When PA=0 (off), skip the 0x24
+         * write entirely — the radio will already be in its default
+         * PA-off state from power-on init.
+         */
+        if (sunsdr_current_pa_wire_state() != 0) {
+            sunsdr_send_u32_cmd(SUNSDR_OP_PA_ENABLE, 1);
+        }
     } else {
         sdr.currentPTT = new_ptt;
-        sunsdr_send_u32_cmd(SUNSDR_OP_PA_ENABLE, sunsdr_current_pa_wire_state());
+        /*
+         * On MOX-off, only write 0x24 PA_ENABLE=0 if we had written a 1
+         * on MOX-on (i.e. the user has the external PA enabled). Otherwise
+         * we never toggled PA on, no reason to toggle it off.
+         */
+        if (sdr.currentPAEnabled) {
+            sunsdr_send_u32_cmd(SUNSDR_OP_PA_ENABLE, 0);
+        }
         sunsdr_send_u32_cmd(SUNSDR_OP_MOX_PTT, 0);
         sunsdr_send_config_block_state(1);
         sunsdr_reassert_rx_state();
