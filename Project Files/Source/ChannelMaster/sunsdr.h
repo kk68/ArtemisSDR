@@ -66,8 +66,11 @@ of the License, or (at your option) any later version.
 
 /* Frequency scaling: wire value = Hz * FREQ_SCALE */
 #define SUNSDR_FREQ_SCALE       10
+#define SUNSDR_TUNE_OFFSET_HZ   1000
 
 /* Mode codes */
+#define SUNSDR_MODE_AM          0x00
+#define SUNSDR_MODE_TUNE        0x45
 #define SUNSDR_MODE_LSB         0xBC
 #define SUNSDR_MODE_USB         0xF5
 

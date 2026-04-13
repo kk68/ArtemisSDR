@@ -104,6 +104,7 @@ SunSDR2 DX                              Thetis (this fork)
   - standalone `0x09` split/TX frequency write
 - **Mode control**
   - native SunSDR mode writes mapped from Thetis mode changes
+  - current captured mapping: `AM = 0x00`, `TUNE = 0x45`, `LSB = 0xBC`, `USB = 0xF5`
 - **RX2**
   - native RX2 enable/disable path
   - independent RX2 / VFO B tuning context

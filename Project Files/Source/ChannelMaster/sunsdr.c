@@ -85,6 +85,7 @@ static void sdr_log_open(void) {
             fprintf(sdr_log, "===== SunSDR session %04d-%02d-%02d %02d:%02d:%02d.%03d =====\n",
                 st.wYear, st.wMonth, st.wDay,
                 st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
+            fprintf(sdr_log, "Log path: %s\n", sdr_log_path);
             fflush(sdr_log);
         }
     }
@@ -770,11 +771,13 @@ static int sunsdr_map_mode_code(int mode)
     case 12: /* AM_LSB */
         return SUNSDR_MODE_LSB;
 
+    case 6:  /* AM */
+        return SUNSDR_MODE_AM;
+
     case 1:  /* USB */
     case 2:  /* DSB */
     case 4:  /* CWU */
     case 5:  /* FM */
-    case 6:  /* AM */
     case 7:  /* DIGU */
     case 10: /* SAM */
     case 11: /* DRM */
@@ -802,7 +805,7 @@ static void sunsdr_reassert_tx_state(void)
         sunsdr_send_freq_pkt(SUNSDR_OP_FREQ_PRIMARY, 0, sdr.currentTxFreqHz);
     }
 
-    if (sdr.currentMode > 0) {
+    if (sdr.currentMode >= 0) {
         sdr_logf("Reassert TX mode: 0x%02X\n", sdr.currentMode);
         sunsdr_send_u32_cmd(SUNSDR_OP_MODE, (unsigned int)sdr.currentMode);
     }
@@ -814,6 +817,47 @@ static void sunsdr_reassert_tx_state(void)
         sunsdr_send_u32_cmd(SUNSDR_OP_RX_ANT, (unsigned int)selector);
         sunsdr_send_u32_cmd(SUNSDR_OP_KEEPALIVE, 0);
     }
+}
+
+static void sunsdr_reassert_rx_state(void)
+{
+    if (!sdr.powered)
+        return;
+
+    if (sdr.currentRx1FreqHz > 0) {
+        int primary = sdr.currentRx1FreqHz - SUNSDR_DDC0_OFFSET_HZ;
+        sdr_logf("Reassert RX1 freq: rx=%d primary=%d\n", sdr.currentRx1FreqHz, primary);
+        sunsdr_send_freq_pkt(SUNSDR_OP_FREQ_PRIMARY, 0, primary);
+        sunsdr_send_freq_pkt(SUNSDR_OP_FREQ_COMP, 0, sdr.currentRx1FreqHz);
+    }
+
+    if (sdr.currentRx2FreqHz > 0) {
+        sdr_logf("Reassert RX2 freq: rx2=%d\n", sdr.currentRx2FreqHz);
+        sunsdr_send_freq_pkt(SUNSDR_OP_FREQ_COMP, 1, sdr.currentRx2FreqHz);
+    }
+}
+
+static void sunsdr_enter_tune_state(void)
+{
+    if (!sdr.powered)
+        return;
+
+    sdr_logf("Enter TUNE state: mode=0x%02X tx=%d tune_primary=%d\n",
+        SUNSDR_MODE_TUNE, sdr.currentTxFreqHz, sdr.currentTxFreqHz - SUNSDR_TUNE_OFFSET_HZ);
+    sunsdr_send_u32_cmd(SUNSDR_OP_MODE, SUNSDR_MODE_TUNE);
+}
+
+static void sunsdr_apply_tune_tx_frequency(void)
+{
+    if (!sdr.powered || sdr.currentTxFreqHz <= 0)
+        return;
+
+    /*
+     * ExpertSDR3 AM TUNE capture uses mode 0x45 plus TX primary -1 kHz.
+     * The tune offset appears to compensate the internal tune tone so RF lands
+     * on the displayed dial frequency.
+     */
+    sunsdr_send_freq_pkt(SUNSDR_OP_FREQ_PRIMARY, 0, sdr.currentTxFreqHz - SUNSDR_TUNE_OFFSET_HZ);
 }
 
 /* Send a simple len=4 command with a u32 payload */
@@ -1075,6 +1119,7 @@ int SunSDRInit(const char* radioIP, int ctrlPort, int streamPort)
     memset(&sdr, 0, sizeof(sdr));
     sdr.ctrlSock = INVALID_SOCKET;
     sdr.streamSock = INVALID_SOCKET;
+    sdr.currentMode = -1;
     sdr.ctrlPort = ctrlPort;
     sdr.streamPort = streamPort;
     sdr.currentRxAntenna = 1;
@@ -1281,6 +1326,7 @@ int SunSDRPowerOn(void)
     sdr.currentRx2FreqHz = 0;
     sdr.currentRX2Enabled = 0;
     sdr.currentTune = 0;
+    sdr.currentMode = -1;
     sdr.currentDriveRaw = -1;
     sdr.lastTxWasTune = 0;
     sdr.pendingTuneReleaseConfig = 0;
@@ -1385,6 +1431,7 @@ void SunSDRPowerOff(void)
     sdr.powered = 0;
     sdr.currentPTT = 0;
     sdr.currentTune = 0;
+    sdr.currentMode = -1;
     sdr.currentDriveRaw = -1;
     sdr.lastTxWasTune = 0;
     sdr.pendingTuneReleaseConfig = 0;
@@ -1416,9 +1463,18 @@ void SunSDRPowerOff(void)
 
 void SunSDRSetFreq(int receiver, int freqHz, int isTx)
 {
+    sdr_logf("SunSDRSetFreq(receiver=%d, freq=%d, isTx=%d)\n", receiver, freqHz, isTx);
     if (isTx) {
-        /* TX frequency: only VFO primary, no DDC companions */
-        sunsdr_send_freq_pkt(SUNSDR_OP_FREQ_PRIMARY, 0, freqHz);
+        /*
+         * TX frequency: only VFO primary, no DDC companions. While still in RX,
+         * cache the TX VFO but do not send primary 0x09; that context is also
+         * the RX analog LO and split/VFOB bookkeeping can otherwise retune RX.
+         */
+        if (sdr.currentPTT || sdr.currentTune) {
+            sunsdr_send_freq_pkt(SUNSDR_OP_FREQ_PRIMARY, 0, freqHz);
+        } else {
+            sdr_logf("Cache TX freq while RX: tx=%d\n", freqHz);
+        }
         if (sdr.pendingTuneReleaseConfig) {
             sunsdr_send_config_block_state(1);
             sdr.pendingTuneReleaseConfig = 0;
@@ -1431,7 +1487,17 @@ void SunSDRSetFreq(int receiver, int freqHz, int isTx)
              * Primary drives the analog LO and COMP[0] tracks the displayed RX1 center.
              * Do not overwrite COMP[1] here; RX2 owns that tuning context.
              */
-            sunsdr_send_freq_pkt(SUNSDR_OP_FREQ_PRIMARY, 0, freqHz - SUNSDR_DDC0_OFFSET_HZ);
+            if (sdr.currentPTT || sdr.currentTune) {
+                /*
+                 * During TX/TUNE the primary 0x09 context is the TX LO. Sending
+                 * the RX center offset here retunes the RF output by -92.5 kHz.
+                 * Keep COMP[0] current, but leave primary under TX ownership until RX.
+                 */
+                sdr_logf("Suppress RX primary during TX/TUNE: rx=%d primary=%d ptt=%d tune=%d\n",
+                    freqHz, freqHz - SUNSDR_DDC0_OFFSET_HZ, sdr.currentPTT, sdr.currentTune);
+            } else {
+                sunsdr_send_freq_pkt(SUNSDR_OP_FREQ_PRIMARY, 0, freqHz - SUNSDR_DDC0_OFFSET_HZ);
+            }
             sunsdr_send_freq_pkt(SUNSDR_OP_FREQ_COMP, 0, freqHz);
             sdr.currentRx1FreqHz = freqHz;
         } else if (receiver == 1) {
@@ -1471,6 +1537,7 @@ void SunSDRSetRX2(int enabled)
 void SunSDRSetTune(int tune)
 {
     sdr.currentTune = tune ? 1 : 0;
+    sdr_logf("SunSDRSetTune(%d)\n", sdr.currentTune);
 }
 
 void SunSDRSetDrive(int raw)
@@ -1568,20 +1635,40 @@ void SunSDRSetPTT(int ptt)
         LeaveCriticalSection(&sdr.txLock);
     }
 
-    sdr_logf("SunSDRSetPTT(%d) currentTune=%d\n", new_ptt, sdr.currentTune);
+    sdr_logf("SunSDRSetPTT(%d) currentTune=%d rx1=%d rx2=%d tx=%d rxAnt=%d txAnt=%d pa=%d\n",
+        new_ptt,
+        sdr.currentTune,
+        sdr.currentRx1FreqHz,
+        sdr.currentRx2FreqHz,
+        sdr.currentTxFreqHz,
+        sdr.currentRxAntenna,
+        sdr.currentTxAntenna,
+        sdr.currentPAEnabled);
 
     if (new_ptt) {
-        sunsdr_reassert_tx_state();
+        if (sdr.currentTune)
+            sunsdr_enter_tune_state();
+        else
+            sunsdr_reassert_tx_state();
         sunsdr_send_config_block_state(0);
-        sdr.lastTxWasTune = 0;
+        sdr.lastTxWasTune = sdr.currentTune ? 1 : 0;
         sunsdr_send_u32_cmd(SUNSDR_OP_MOX_PTT, 1);
         sdr.currentPTT = new_ptt;
+        if (sdr.lastTxWasTune)
+            sunsdr_apply_tune_tx_frequency();
         sunsdr_send_u32_cmd(SUNSDR_OP_PA_ENABLE, sunsdr_current_pa_wire_state());
     } else {
         sdr.currentPTT = new_ptt;
         sunsdr_send_u32_cmd(SUNSDR_OP_PA_ENABLE, sunsdr_current_pa_wire_state());
         sunsdr_send_u32_cmd(SUNSDR_OP_MOX_PTT, 0);
+        if (sdr.lastTxWasTune && sdr.currentMode >= 0) {
+            sdr_logf("Restore mode after TUNE: 0x%02X\n", sdr.currentMode);
+            sunsdr_send_u32_cmd(SUNSDR_OP_MODE, (unsigned int)sdr.currentMode);
+            if (sdr.currentTxFreqHz > 0)
+                sunsdr_send_freq_pkt(SUNSDR_OP_FREQ_PRIMARY, 0, sdr.currentTxFreqHz);
+        }
         sunsdr_send_config_block_state(1);
+        sunsdr_reassert_rx_state();
         sdr.lastTxWasTune = 0;
         sdr.pendingTuneReleaseConfig = 0;
     }

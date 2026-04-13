@@ -29074,7 +29074,7 @@ namespace Thetis
             {
                 // SunSDR native TX scaling reads prn->tx[0].drive_level. That state is
                 // initialized to 0 on startup, so refresh the current Thetis-selected
-                // power source immediately before keying TX/TUNE.
+                // power source before the native TX/TUNE transition.
                 if (tx)
                 {
                     if (chkTUN.Checked)
@@ -29082,11 +29082,6 @@ namespace Thetis
                     else
                         ptbPWR_Scroll(this, EventArgs.Empty);
                 }
-
-                // Latch tune state immediately before the native MOX/PTT transition.
-                // The async TUNE UI path can otherwise collapse back into plain MOX.
-                NetworkIO.nativeSunSDRSetTune(chkTUN.Checked ? 1 : 0);
-                NetworkIO.nativeSunSDRSetPTT(tx ? 1 : 0);
             }
 
             if (tx)
@@ -29102,6 +29097,15 @@ namespace Thetis
 
                 UpdateRX1DDSFreq();
                 UpdateRX2DDSFreq();
+                if (NetworkIO.CurrentRadioProtocol == RadioProtocol.SUNSDR && freq > 0.0)
+                {
+                    // Thetis can leave tx_dds_freq_mhz stale after an RX band change.
+                    // Use the MOX transition's validated TX frequency so the radio does
+                    // not key on the previous band. Do not apply the SSB tune-tone
+                    // pitch offset here; the SunSDR primary frequency command is the
+                    // actual RF frequency the radio should transmit on.
+                    tx_dds_freq_mhz = freq;
+                }
                 UpdateTXDDSFreq();
 
                 Band lo_band = BandByFreq(XVTRForm.TranslateFreq(VFOAFreq), rx1_xvtr_index, current_region);
@@ -29124,6 +29128,17 @@ namespace Thetis
                 }
                 UpdateTRXAnt(); //[2.3.10.6]MW0LGE added
 
+                if (NetworkIO.CurrentRadioProtocol == RadioProtocol.SUNSDR)
+                {
+                    // Key SunSDR only after Thetis has pushed the band-dependent
+                    // TX frequency and antenna state. Keying first caused a
+                    // post-PTT frequency/antenna burst, heard as an extra relay
+                    // click on bands where TX/RX cached state differed.
+                    NetworkIO.nativeSunSDRSetMode((int)Audio.TXDSPMode);
+                    NetworkIO.nativeSunSDRSetTune(chkTUN.Checked ? 1 : 0);
+                    NetworkIO.nativeSunSDRSetPTT(1);
+                }
+
                 NetworkIO.SetTRXrelay(1);
                 if (cw_fw_keyer &&
                     (RX1DSPMode == DSPMode.CWL || RX1DSPMode == DSPMode.CWU) &&
@@ -29137,6 +29152,13 @@ namespace Thetis
             }
             else // rx
             {
+                if (NetworkIO.CurrentRadioProtocol == RadioProtocol.SUNSDR)
+                {
+                    // Drop RF before restoring RX-side VFO/antenna state.
+                    NetworkIO.nativeSunSDRSetTune(chkTUN.Checked ? 1 : 0);
+                    NetworkIO.nativeSunSDRSetPTT(0);
+                }
+
                 if (m_bQSOTimerDuringMoxOnly && m_bQSOTimerRunning) QSOTimerRunning = false;
 
                 NetworkIO.SetPttOut(0);
@@ -30144,7 +30166,10 @@ namespace Thetis
                 }
 
                 if (NetworkIO.CurrentRadioProtocol == RadioProtocol.SUNSDR)
+                {
+                    NetworkIO.nativeSunSDRSetMode((int)Audio.TXDSPMode);
                     NetworkIO.nativeSunSDRSetTune(1);
+                }
 
                 chkMOX.Checked = true;
 
@@ -31861,12 +31886,13 @@ namespace Thetis
                 case DSPMode.AM:
                 case DSPMode.SAM:
                 case DSPMode.FM:
-                    if (chkTUN.Checked) tx_freq -= cw_pitch * 1e-6;
+                    if (chkTUN.Checked && NetworkIO.CurrentRadioProtocol != RadioProtocol.SUNSDR)
+                        tx_freq -= cw_pitch * 1e-6;
                     break;
                 case DSPMode.USB:
                 case DSPMode.DIGU:
                 case DSPMode.DSB:
-                    if (chkTUN.Checked)
+                    if (chkTUN.Checked && NetworkIO.CurrentRadioProtocol != RadioProtocol.SUNSDR)
                     {
                         if (RX1IsOn60mChannel() && current_region == FRSRegion.US)
                             tx_freq -= (ModeFreqOffset(_rx1_dsp_mode) + cw_pitch * 1e-6);
@@ -31876,7 +31902,8 @@ namespace Thetis
                     break;
                 case DSPMode.LSB:
                 case DSPMode.DIGL:
-                    if (chkTUN.Checked) tx_freq += cw_pitch * 1e-6;
+                    if (chkTUN.Checked && NetworkIO.CurrentRadioProtocol != RadioProtocol.SUNSDR)
+                        tx_freq += cw_pitch * 1e-6;
                     break;
             }
 
@@ -32275,11 +32302,13 @@ namespace Thetis
                     case DSPMode.FM:
                     case DSPMode.USB:
                     case DSPMode.DIGU:
-                        if (chkTUN.Checked) freq -= (double)cw_pitch * 1e-6;
+                        if (chkTUN.Checked && NetworkIO.CurrentRadioProtocol != RadioProtocol.SUNSDR)
+                            freq -= (double)cw_pitch * 1e-6;
                         break;
                     case DSPMode.LSB:
                     case DSPMode.DIGL:
-                        if (chkTUN.Checked) freq += (double)cw_pitch * 1e-6;
+                        if (chkTUN.Checked && NetworkIO.CurrentRadioProtocol != RadioProtocol.SUNSDR)
+                            freq += (double)cw_pitch * 1e-6;
                         break;
                     case DSPMode.CWL:
                         freq += (double)cw_pitch * 0.0000010;
@@ -32824,11 +32853,13 @@ namespace Thetis
                 case DSPMode.USB:
                 case DSPMode.DIGU:
                 case DSPMode.DSB:
-                    if (chkTUN.Checked) tx_freq -= (double)cw_pitch * 1e-6;
+                    if (chkTUN.Checked && NetworkIO.CurrentRadioProtocol != RadioProtocol.SUNSDR)
+                        tx_freq -= (double)cw_pitch * 1e-6;
                     break;
                 case DSPMode.LSB:
                 case DSPMode.DIGL:
-                    if (chkTUN.Checked) tx_freq += (double)cw_pitch * 1e-6;
+                    if (chkTUN.Checked && NetworkIO.CurrentRadioProtocol != RadioProtocol.SUNSDR)
+                        tx_freq += (double)cw_pitch * 1e-6;
                     break;
                 case DSPMode.CWL:
                     if (!cw_fw_keyer || (cw_fw_keyer && chkTUN.Checked))
