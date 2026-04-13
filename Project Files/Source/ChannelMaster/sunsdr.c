@@ -325,9 +325,18 @@ typedef struct _sunsdr_resampler_state
 
 static sunsdr_resampler_state_t resampler[2];
 
+/*
+ * TX IQ stream rate. From live ExpertSDR3 voice MOX capture, the host sends
+ * packets at 195.3 pkts/sec * 200 complex samples = 39,062.5 samples/sec.
+ * The radio upsamples internally; we must NOT send at the RX IQ rate.
+ * Our WDSP TX ch_outrate is 192,000 Hz (default sample_rate_tx). The resampler
+ * in sunsdr_tx_outbound decimates 192k -> 39.0625k using phase-accumulator
+ * fractional downsampling with linear interpolation between consecutive
+ * input samples.
+ */
 #define SUNSDR_TX_INPUT_RATE   192000.0
-#define SUNSDR_TX_OUTPUT_RATE  312500.0
-#define SUNSDR_TX_RESAMPLE_STEP (SUNSDR_TX_INPUT_RATE / SUNSDR_TX_OUTPUT_RATE)
+#define SUNSDR_TX_OUTPUT_RATE  39062.5
+#define SUNSDR_TX_RESAMPLE_STEP (SUNSDR_TX_INPUT_RATE / SUNSDR_TX_OUTPUT_RATE)  /* ~4.9152 */
 
 /*
  * Resample nsamples complex pairs from in[] to resample_out[].
@@ -383,14 +392,11 @@ static double sunsdr_tx_full_scale_for_drive(double drive)
     if (drive > 1.0) drive = 1.0;
 
     /*
-     * Keep almost the entire range on the calibrated Thetis power path and only
-     * add extra native headroom near the very top end. Current live SunSDR2 DX
-     * measurements show:
-     * - 0/10/25 are now close enough
-     * - 100 is close enough
-     * - 50/75 are still too hot
-     *
-     * So do not boost the middle. Reserve the boost for the final ~15% only.
+     * Keep IQ clean — the radio transmits whatever we send it, so any clipping
+     * here splatters on-air as harmonic distortion. WDSP tune tone arrives at
+     * pre_peak ~0.896; cap full_scale at 1/0.896 = 1.116 so drive=1.0 lands at
+     * exactly post_peak=1.0 with no per-channel clamp truncation. Below
+     * drive=0.85 leave the Thetis power path flat.
      */
     if (drive <= 0.85)
         return 1.0;
@@ -399,7 +405,7 @@ static double sunsdr_tx_full_scale_for_drive(double drive)
     if (t < 0.0) t = 0.0;
     if (t > 1.0) t = 1.0;
 
-    return 1.0 + (0.34 * t * t * t);
+    return 1.0 + (0.116 * t * t * t);
 }
 
 static struct sockaddr_in sunsdr_stream_dest(void)
@@ -425,7 +431,7 @@ static int sunsdr_quantize24(double sample)
     return itemp;
 }
 
-static void sunsdr_build_iq_header(unsigned char* buf, int opcode, unsigned int seq)
+static void sunsdr_build_iq_header(unsigned char* buf, int opcode, unsigned int seq, unsigned char byte8, unsigned char byte9)
 {
     memset(buf, 0, SUNSDR_IQ_PKT_SIZE);
     buf[0] = SUNSDR_MAGIC_0;
@@ -436,8 +442,8 @@ static void sunsdr_build_iq_header(unsigned char* buf, int opcode, unsigned int 
     buf[5] = (unsigned char)((SUNSDR_IQ_PAYLOAD_SIZE >> 8) & 0xFF);
     buf[6] = (unsigned char)(seq & 0xFF);
     buf[7] = (unsigned char)((seq >> 8) & 0xFF);
-    buf[8] = 0x01;
-    buf[9] = 0x00;
+    buf[8] = byte8;
+    buf[9] = byte9;
 }
 
 static void sunsdr_build_tx_packet(unsigned char* buf, unsigned int seq, const double* iq)
@@ -445,7 +451,13 @@ static void sunsdr_build_tx_packet(unsigned char* buf, unsigned int seq, const d
     int i;
     unsigned char* payload = buf + SUNSDR_IQ_HDR_SIZE;
 
-    sunsdr_build_iq_header(buf, SUNSDR_OP_IQ_STREAM, seq);
+    /*
+     * Host->radio TX audio packet: opcode 0xFD with byte8=0x02, byte9=0x01.
+     * This is the TX-active stream opcode observed in live ExpertSDR3 voice
+     * MOX captures. The radio routes 0xFD IQ through the TX audio path; 0xFE
+     * is reserved for RX-state / idle keepalives.
+     */
+    sunsdr_build_iq_header(buf, SUNSDR_OP_IQ_TX_ACTIVE, seq, 0x02, 0x01);
 
     for (i = 0; i < SUNSDR_IQ_COMPLEX_PER_PKT; i++) {
         int I = sunsdr_quantize24(iq[2 * i + 0]);
@@ -529,9 +541,34 @@ static void sunsdr_tx_outbound(int id, int nsamples, double* buff)
 
     full_scale = sunsdr_tx_full_scale_for_drive(drive);
 
+    /*
+     * Downsampling resampler: Fin=192 kHz -> Fout=39.0625 kHz (ratio ~4.9152).
+     * Boxcar-average every ~4.9 input samples into one output, then emit when
+     * phase crosses 1.0. The boxcar provides an anti-aliasing low-pass that
+     * suppresses WDSP TX spectral skirts above 19.5 kHz (our output Nyquist).
+     * Without this, high-frequency content aliases into the voice band as the
+     * characteristic "raspy" distortion heard on-air.
+     */
+    const double step_out_per_in = 1.0 / SUNSDR_TX_RESAMPLE_STEP;  /* ~0.2035 */
+
     for (i = 0; i < nsamples; i++) {
         double in_I = buff[2 * i + 0];
         double in_Q = buff[2 * i + 1];
+
+        /*
+         * AM mode I/Q swap. Live capture comparison with ExpertSDR3 shows
+         * WDSP produces AM with I=0, Q=carrier+audio (90deg phasor), but the
+         * SunSDR's AM TX path apparently reads the I channel as the real
+         * baseband envelope. With I=0, no RF comes out no matter the drive.
+         * Swapping I<->Q for AM puts WDSP's carrier+audio onto the I channel,
+         * matching the real-baseband AM form the radio hardware expects.
+         */
+        if (sdr.currentMode == SUNSDR_MODE_AM) {
+            double tmp = in_I;
+            in_I = in_Q;
+            in_Q = tmp;
+        }
+
         double cur_I = in_I * drive * full_scale;
         double cur_Q = in_Q * drive * full_scale;
         double in_mag = sqrt(in_I * in_I + in_Q * in_Q);
@@ -543,15 +580,23 @@ static void sunsdr_tx_outbound(int id, int nsamples, double* buff)
         pre_sum_sq += (in_I * in_I) + (in_Q * in_Q);
         post_sum_sq += (cur_I * cur_I) + (cur_Q * cur_Q);
 
-        while (sdr.txPhase < 1.0) {
-            double frac = sdr.txPhase;
-            double out_I = sdr.txPrevI + frac * (cur_I - sdr.txPrevI);
-            double out_Q = sdr.txPrevQ + frac * (cur_Q - sdr.txPrevQ);
+        /* Accumulate into the current output window. */
+        sdr.txAccumBoxI += cur_I;
+        sdr.txAccumBoxQ += cur_Q;
+        sdr.txAccumBoxN += 1;
+
+        sdr.txPhase += step_out_per_in;
+        if (sdr.txPhase >= 1.0) {
+            double out_I = sdr.txAccumBoxI / (double)sdr.txAccumBoxN;
+            double out_Q = sdr.txAccumBoxQ / (double)sdr.txAccumBoxN;
             sunsdr_queue_tx_packet_locked(out_I, out_Q);
-            sdr.txPhase += SUNSDR_TX_RESAMPLE_STEP;
+
+            sdr.txAccumBoxI = 0.0;
+            sdr.txAccumBoxQ = 0.0;
+            sdr.txAccumBoxN = 0;
+            sdr.txPhase -= 1.0;
         }
 
-        sdr.txPhase -= 1.0;
         sdr.txPrevI = cur_I;
         sdr.txPrevQ = cur_Q;
     }
@@ -561,10 +606,33 @@ static void sunsdr_tx_outbound(int id, int nsamples, double* buff)
         post_rms = sqrt(post_sum_sq / (2.0 * (double)nsamples));
     }
 
-    if (dbg_packets != sdr.txAudioPackets && (sdr.txAudioPackets <= 5 || sdr.txAudioPackets % 250 == 0)) {
-        dbg_packets = sdr.txAudioPackets;
-        sdr_logf("TX audio callback: nsamples=%d, tx_audio_packets=%u, seq=%u, drive=%.3f (%d), full_scale=%.2f, pre_peak=%.6f, pre_rms=%.6f, post_peak=%.6f, post_rms=%.6f\n",
-            nsamples, sdr.txAudioPackets, sdr.txSeq, drive, raw_drive, full_scale, pre_peak, pre_rms, post_peak, post_rms);
+    {
+        static unsigned int dbg_input_samples_accum = 0;
+        dbg_input_samples_accum += (unsigned int)nsamples;
+
+        if (dbg_packets != sdr.txAudioPackets && (sdr.txAudioPackets <= 5 || sdr.txAudioPackets % 250 == 0)) {
+            static ULONGLONG dbg_last_tick = 0;
+            static unsigned int dbg_last_audio_pkts = 0;
+            static unsigned int dbg_last_input_samples = 0;
+
+            ULONGLONG now_tick = GetTickCount64();
+            double in_rate_hz = 0.0;
+            double out_rate_hz = 0.0;
+            if (dbg_last_tick > 0 && now_tick > dbg_last_tick) {
+                double dt_s = (double)(now_tick - dbg_last_tick) / 1000.0;
+                in_rate_hz  = (double)(dbg_input_samples_accum - dbg_last_input_samples) / dt_s;
+                out_rate_hz = (double)(sdr.txAudioPackets - dbg_last_audio_pkts) * (double)SUNSDR_IQ_COMPLEX_PER_PKT / dt_s;
+            }
+
+            dbg_packets = sdr.txAudioPackets;
+            sdr_logf("TX audio callback: nsamples=%d, pkts=%u, drive=%.3f (%d), fs=%.2f, pre_peak=%.3f, pre_rms=%.3f, post_peak=%.3f, post_rms=%.3f, in_rate=%.0f Hz, out_rate=%.0f Hz, step=%.4f\n",
+                nsamples, sdr.txAudioPackets, drive, raw_drive, full_scale, pre_peak, pre_rms, post_peak, post_rms,
+                in_rate_hz, out_rate_hz, SUNSDR_TX_RESAMPLE_STEP);
+
+            dbg_last_tick = now_tick;
+            dbg_last_audio_pkts = sdr.txAudioPackets;
+            dbg_last_input_samples = dbg_input_samples_accum;
+        }
     }
 
     LeaveCriticalSection(&sdr.txLock);
@@ -835,29 +903,6 @@ static void sunsdr_reassert_rx_state(void)
         sdr_logf("Reassert RX2 freq: rx2=%d\n", sdr.currentRx2FreqHz);
         sunsdr_send_freq_pkt(SUNSDR_OP_FREQ_COMP, 1, sdr.currentRx2FreqHz);
     }
-}
-
-static void sunsdr_enter_tune_state(void)
-{
-    if (!sdr.powered)
-        return;
-
-    sdr_logf("Enter TUNE state: mode=0x%02X tx=%d tune_primary=%d\n",
-        SUNSDR_MODE_TUNE, sdr.currentTxFreqHz, sdr.currentTxFreqHz - SUNSDR_TUNE_OFFSET_HZ);
-    sunsdr_send_u32_cmd(SUNSDR_OP_MODE, SUNSDR_MODE_TUNE);
-}
-
-static void sunsdr_apply_tune_tx_frequency(void)
-{
-    if (!sdr.powered || sdr.currentTxFreqHz <= 0)
-        return;
-
-    /*
-     * ExpertSDR3 AM TUNE capture uses mode 0x45 plus TX primary -1 kHz.
-     * The tune offset appears to compensate the internal tune tone so RF lands
-     * on the displayed dial frequency.
-     */
-    sunsdr_send_freq_pkt(SUNSDR_OP_FREQ_PRIMARY, 0, sdr.currentTxFreqHz - SUNSDR_TUNE_OFFSET_HZ);
 }
 
 /* Send a simple len=4 command with a u32 payload */
@@ -1632,6 +1677,9 @@ void SunSDRSetPTT(int ptt)
         sdr.txPrevI = 0.0;
         sdr.txPrevQ = 0.0;
         sdr.txAccumCount = 0;
+        sdr.txAccumBoxI = 0.0;
+        sdr.txAccumBoxQ = 0.0;
+        sdr.txAccumBoxN = 0;
         LeaveCriticalSection(&sdr.txLock);
     }
 
@@ -1646,27 +1694,23 @@ void SunSDRSetPTT(int ptt)
         sdr.currentPAEnabled);
 
     if (new_ptt) {
-        if (sdr.currentTune)
-            sunsdr_enter_tune_state();
-        else
-            sunsdr_reassert_tx_state();
+        /*
+         * TUNE and MOX follow the same wire path: re-assert current mode
+         * (LSB/USB/AM/etc), PTT on, let the WDSP-generated IQ stream carry
+         * the tune tone at full drive. Do NOT switch the radio to internal
+         * tune mode 0x45 — that path generates a low-power internal carrier
+         * and ignores our IQ stream, capping output at ~2.5W.
+         */
+        sunsdr_reassert_tx_state();
         sunsdr_send_config_block_state(0);
         sdr.lastTxWasTune = sdr.currentTune ? 1 : 0;
         sunsdr_send_u32_cmd(SUNSDR_OP_MOX_PTT, 1);
         sdr.currentPTT = new_ptt;
-        if (sdr.lastTxWasTune)
-            sunsdr_apply_tune_tx_frequency();
         sunsdr_send_u32_cmd(SUNSDR_OP_PA_ENABLE, sunsdr_current_pa_wire_state());
     } else {
         sdr.currentPTT = new_ptt;
         sunsdr_send_u32_cmd(SUNSDR_OP_PA_ENABLE, sunsdr_current_pa_wire_state());
         sunsdr_send_u32_cmd(SUNSDR_OP_MOX_PTT, 0);
-        if (sdr.lastTxWasTune && sdr.currentMode >= 0) {
-            sdr_logf("Restore mode after TUNE: 0x%02X\n", sdr.currentMode);
-            sunsdr_send_u32_cmd(SUNSDR_OP_MODE, (unsigned int)sdr.currentMode);
-            if (sdr.currentTxFreqHz > 0)
-                sunsdr_send_freq_pkt(SUNSDR_OP_FREQ_PRIMARY, 0, sdr.currentTxFreqHz);
-        }
         sunsdr_send_config_block_state(1);
         sunsdr_reassert_rx_state();
         sdr.lastTxWasTune = 0;
@@ -1678,10 +1722,19 @@ void SunSDRSetPTT(int ptt)
 
 /* ========== IQ Receive Thread ========== */
 
-/* Build a silent TX IQ packet (1210 bytes, op=0xFE, all-zero IQ payload) */
+/*
+ * Build a silent IQ packet (1210 bytes, all-zero IQ payload).
+ * Uses the opcode/flags appropriate for current TX state:
+ *   RX/idle (currentPTT=0): op=0xFE, byte8=0x01, byte9=0x00  (matches ExpertSDR3 idle)
+ *   TX-active  (currentPTT=1): op=0xFD, byte8=0x02, byte9=0x01 (matches ExpertSDR3 MOX)
+ */
 static void sunsdr_build_tx_silence(unsigned char* buf, unsigned int seq)
 {
-    sunsdr_build_iq_header(buf, SUNSDR_OP_IQ_STREAM, seq);
+    if (sdr.currentPTT) {
+        sunsdr_build_iq_header(buf, SUNSDR_OP_IQ_TX_ACTIVE, seq, 0x02, 0x01);
+    } else {
+        sunsdr_build_iq_header(buf, SUNSDR_OP_IQ_RX_IDLE, seq, 0x01, 0x00);
+    }
     /* Remaining 1200 bytes are zeros (silence). */
 }
 
@@ -1779,15 +1832,14 @@ DWORD WINAPI SunSDRReadThread(LPVOID param)
         }
 
         while (tx_keepalive_accum >= 1.0) {
-            int send_silence = !sdr.currentPTT;
-
-            if (sdr.currentPTT) {
-                if (sdr.txAudioPackets == last_tx_audio_packets)
-                    send_silence = 1;
-                last_tx_audio_packets = sdr.txAudioPackets;
-            }
-
-            if (send_silence) {
+            /*
+             * Only send idle keepalive silence packets during RX.
+             * During active TX the audio callback (sunsdr_tx_outbound) is the
+             * sole source of packets and emits at the exact 195.3 pkts/sec
+             * expected rate. Any silence injected here would interleave with
+             * voice IQ and produce audible raspiness / crackling on-air.
+             */
+            if (!sdr.currentPTT) {
                 struct sockaddr_in streamDest;
                 memcpy(&streamDest, &sdr.radioAddr, sizeof(streamDest));
                 streamDest.sin_port = htons((u_short)sdr.streamPort);
@@ -1795,6 +1847,7 @@ DWORD WINAPI SunSDRReadThread(LPVOID param)
                 sendto(sdr.streamSock, (const char*)txbuf, SUNSDR_IQ_PKT_SIZE, 0,
                     (struct sockaddr*)&streamDest, sizeof(streamDest));
             }
+            last_tx_audio_packets = sdr.txAudioPackets;
 
             tx_keepalive_accum -= 1.0;
         }

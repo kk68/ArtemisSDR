@@ -50,8 +50,16 @@ of the License, or (at your option) any later version.
 #define SUNSDR_OP_STATE_REPEAT  0x5A
 #define SUNSDR_OP_POWER_WAKE    0x5F
 
-/* Opcode for IQ stream (port 50002) */
-#define SUNSDR_OP_IQ_STREAM     0xFE
+/* Opcodes for IQ stream (port 50002)
+ *   0xFE = RX-state / TX-idle keepalive (byte8=0x01, byte9=0x00)
+ *   0xFD = TX-active, live voice IQ audio (byte8=0x02, byte9=0x01)
+ * Verified from ExpertSDR3 live voice MOX capture on 2026-04-13:
+ * opcode switches FE->FD when MOX is asserted and FD->FE on release.
+ */
+#define SUNSDR_OP_IQ_RX_IDLE    0xFE
+#define SUNSDR_OP_IQ_TX_ACTIVE  0xFD
+/* Backward-compat alias: existing RX parse paths still use this name. */
+#define SUNSDR_OP_IQ_STREAM     SUNSDR_OP_IQ_RX_IDLE
 
 /* IQ stream format */
 #define SUNSDR_IQ_PKT_SIZE      1210
@@ -66,11 +74,9 @@ of the License, or (at your option) any later version.
 
 /* Frequency scaling: wire value = Hz * FREQ_SCALE */
 #define SUNSDR_FREQ_SCALE       10
-#define SUNSDR_TUNE_OFFSET_HZ   1000
 
 /* Mode codes */
 #define SUNSDR_MODE_AM          0x00
-#define SUNSDR_MODE_TUNE        0x45
 #define SUNSDR_MODE_LSB         0xBC
 #define SUNSDR_MODE_USB         0xF5
 
@@ -121,6 +127,10 @@ typedef struct _sunsdr_state
     double txPrevI;
     double txPrevQ;
     int txAccumCount;
+    /* Boxcar anti-alias accumulator for TX downsampler (192k -> 39k). */
+    double txAccumBoxI;
+    double txAccumBoxQ;
+    int txAccumBoxN;
 
     /* IQ buffer (double pairs for xrouter) */
     double* rxBuf;
