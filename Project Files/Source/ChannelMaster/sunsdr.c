@@ -40,6 +40,12 @@ extern IVAC pvac[];
 extern void getIVACdiags(int id, int type, int* underflows, int* overflows, double* var, int* ringsize, int* nring);
 extern void getCMAevents(long* overFlowsIn, long* overFlowsOut, long* underFlowsIn, long* underFlowsOut);
 
+/* WDSP synchronous flush entry point (added in channel.c for SUNSDR Phase C).
+ * Flushes iobuffs + the RXA/TXA DSP chain for the given channel under its
+ * own locks. Called on PTT-on to guarantee a clean TX DSP start regardless
+ * of what state the previous MOX/TUNE session left behind. */
+extern __declspec(dllimport) void FlushChannelNow (int channel);
+
 /* Debug log: async deferred logger.
  *
  * Callers invoke sdr_logf() as before. Instead of doing synchronous fprintf +
@@ -1044,6 +1050,40 @@ static void sunsdr_tx_outbound(int id, int nsamples, double* buff)
         }
         if (pre_peak < 1.0e-6 && pre_rms < 1.0e-6) {
             InterlockedIncrement(&sunsdr_dbg_tx_cb_silent);
+        }
+
+        /* Sustained-silence detector for voice MOX (not TUNE — TUNE's tone
+         * keeps pre_rms high). If the TX callback receives silence from WDSP
+         * for >500 ms during an active MOX attempt, log MOX_AUDIO_SILENCE
+         * so we can catch "no audio on air" failures the way the user
+         * observed during the Run 11 MOX regression. Threshold 1e-4 ~= -80 dBFS
+         * which is well below any normal voice content. Logs at most once
+         * per 1 s to avoid spam. */
+        {
+            static ULONGLONG silence_start_tick = 0;
+            static ULONGLONG last_silence_log_tick = 0;
+            const double silence_threshold = 1.0e-4;
+            const ULONGLONG sustained_ms = 500;
+            const ULONGLONG log_cooldown_ms = 1000;
+
+            if (sdr.currentPTT && !sdr.currentTune) {
+                if (pre_rms < silence_threshold && pre_peak < silence_threshold) {
+                    if (silence_start_tick == 0) {
+                        silence_start_tick = now_tick;
+                    } else if (now_tick - silence_start_tick >= sustained_ms
+                               && now_tick - last_silence_log_tick >= log_cooldown_ms) {
+                        sdr_logf("MOX_AUDIO_SILENCE_SUSTAINED attempt=%ld duration_ms=%llu pre_rms=%.6e pre_peak=%.6e (WDSP TX producing silence during MOX)\n",
+                            sunsdr_dbg_tx_attempt_id,
+                            (unsigned long long)(now_tick - silence_start_tick),
+                            pre_rms, pre_peak);
+                        last_silence_log_tick = now_tick;
+                    }
+                } else {
+                    silence_start_tick = 0;
+                }
+            } else {
+                silence_start_tick = 0;
+            }
         }
 
         sunsdr_dbg_tx_cb_rms_sum += pre_rms;
@@ -2279,6 +2319,37 @@ void SunSDRSetPTT(int ptt)
             sunsdr_dbg_ptt_request_tick = GetTickCount64();
         }
         LeaveCriticalSection(&sdr.txLock);
+    }
+
+    /* Phase C — WDSP TX DSP flush on every PTT-on entry.
+     *
+     * Run 11 evidence showed TUNE raspy at 5 % (1/20), with the remaining
+     * event a cold-start artifact (first-TUNE-after-settle) — TX callback
+     * thread was no longer being preempted (TX_CB_GAP_HIST buckets 8-32 all
+     * empty), meaning scheduler jitter is no longer the driver. The residual
+     * raspy is therefore WDSP-internal state carrying between TX attempts
+     * (filter rings, WCPAGC hang_backaverage, rmatch partial state, etc.).
+     *
+     * FlushChannelNow (added to wdsp/channel.c) synchronously zeroes iobuffs
+     * and calls flush_main -> flush_txa for the TX channel, mirroring the
+     * same work the flushChannel worker does — but NOT relying on the
+     * Sem_Flush semaphore path that the timeout-protected SetChannelState
+     * flush-on-state-0 code path uses (which may silently skip the flush on
+     * 100 ms timeout).
+     *
+     * Called only on PTT-on. State/slew/flags are left to existing
+     * SetChannelState calls in console.cs. Tx channel id is chid(inid(1,0),0)
+     * matching console.cs's WDSP.id(1, 0). */
+    if (new_ptt) {
+        int tx_chan = chid(inid(1, 0), 0);
+        __try {
+            FlushChannelNow(tx_chan);
+            sdr_logf("TX_FLUSH_DONE attempt=%d channel=%d (Phase C: iobuffs + TXA DSP chain flushed on PTT-on)\n",
+                attempt_id, tx_chan);
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            sdr_logf("TX_FLUSH_FAIL attempt=%d channel=%d exception=0x%08X\n",
+                attempt_id, tx_chan, GetExceptionCode());
+        }
     }
 
     sdr_logf("SunSDRSetPTT(%d) currentTune=%d rx1=%d rx2=%d tx=%d rxAnt=%d txAnt=%d pa=%d seq=%u txPhase=%.4f txAccum=%d drive=%.3f rawDrive=%d fs=%.3f attempt=%ld\n",

@@ -147,6 +147,28 @@ void flushChannel (void* p)
 	InterlockedBitTestAndReset(&a->flush_bypass, 0);
 }
 
+/* Synchronous, immediate flush of all channel state (iobuffs + RXA/TXA
+ * DSP chain). Mirrors the flushChannel worker's critical work under the
+ * same locks. Safe to call while ch[channel].state == 1; buffers are
+ * zeroed in place. Intended for callers that need a one-shot flush on
+ * transition boundaries (e.g., SUNSDR PTT-on, where carrying TX DSP
+ * state from a previous attempt can cause audible transients).
+ * Does NOT touch state/slew flags — the caller remains responsible for
+ * channel state management via SetChannelState. */
+PORT
+void FlushChannelNow (int channel)
+{
+	IOB a = ch[channel].iob.pc;
+	EnterCriticalSection(&ch[channel].csDSP);
+	EnterCriticalSection(&ch[channel].csEXCH);
+	flush_iobuffs(channel);
+	InterlockedBitTestAndSet(&a->exec_bypass, 0);
+	flush_main(channel);
+	InterlockedBitTestAndReset(&a->exec_bypass, 0);
+	LeaveCriticalSection(&ch[channel].csEXCH);
+	LeaveCriticalSection(&ch[channel].csDSP);
+}
+
 /********************************************************************************************************
 *																										*
 *										Channel Properties												*

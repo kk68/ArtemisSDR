@@ -730,9 +730,88 @@ Attempt #2 was the second TUNE after startup — the first attempt with the new 
 3. **If voice MOX is clean**: declare the raspy investigation closed. Move on to remaining integration work (LSB TUNE power cal, band switch refinement, cleanup of the GetTickCount-based gap metrics).
 4. **If voice MOX still raspy notably**: Tier 3 (dedicated waitable-timer pacing thread, decouples TX emission from WDSP callback scheduling entirely). ~4-8 hours.
 
+## 2026-04-14 Voice MOX regression + Phase C WDSP flush landed
+
+User ran 5 voice MOX attempts after Run 11. Reported: "MOX failed to transmit any audio on the last test 5" (interpreted as test #5 specifically had no audio on the Anan receive side).
+
+### Log analysis of the 5 MOX attempts (log 16:08:22 onward)
+
+All five MOX attempts in the log look superficially similar: `txPackets` of 1000-3300, `fdGapMax=16.000`, `txCbMaxGapMs=16`, `txCbNonfinite=0`, `txCbRmsAvg` 0.09-0.13, `txCbRmsMax` 0.50-0.57. No obvious discriminator in the packet/callback counters between #5 and the clean ones.
+
+VAC1 BEGIN state per MOX attempt (outNring out of 8640):
+
+| # | outVar | outNring (%) | inVar | inNring (%) |
+|---|---|---|---|---|
+| 1 | 1.0082 | 3955 (46) | 0.9917 | 4757 (55) |
+| 2 | 1.0027 | 7138 (83) | 0.9971 | 1525 (18) |
+| 3 | 0.9951 | 6005 (69) | 1.0048 | 2606 (30) |
+| 4 | 0.9944 | 2838 (33) | 1.0057 | 5794 (67) |
+| 5 | 1.0056 | 3443 (40) | 0.9944 | 5254 (61) |
+
+Ring fills drift significantly between attempts during idle RX between MOX cycles. This is the same pattern seen in TUNE raspy #2 (Run 11). The resampler and DSP state accumulating residue between attempts is the strongest remaining hypothesis for both the TUNE raspy cold-start artifact and the MOX #5 anomaly.
+
+I could not pin down an exact per-attempt discriminator for MOX #5 from Thetis-side logs alone (audio RMS was nonzero in the TX callback, packets were emitted at correct rate, no error markers). The "no audio on air" is either (a) an on-air / PA-side effect of the same WDSP-TX state drift, (b) a radio-side issue we don't instrument, or (c) a user-perception issue. A sustained-silence detector was added to definitively catch future recurrences.
+
+### Final-fix bundle landed (Phase C)
+
+**Change 1: `wdsp/channel.c` + `wdsp/channel.h` — new export `FlushChannelNow(int channel)`**
+
+Synchronous one-shot flush of channel iobuffs + main (= TXA or RXA) DSP chain under the same `csDSP`/`csEXCH` locks the `flushChannel` worker uses. Mirrors the existing internal flush path but doesn't rely on the `Sem_Flush` semaphore wake or the 100 ms timeout that `SetChannelState(ch, 0, 1)` uses. Call can silently skip if `SetChannelState`'s wait times out under scheduler load.
+
+```c
+PORT
+void FlushChannelNow (int channel)
+{
+    IOB a = ch[channel].iob.pc;
+    EnterCriticalSection(&ch[channel].csDSP);
+    EnterCriticalSection(&ch[channel].csEXCH);
+    flush_iobuffs(channel);
+    InterlockedBitTestAndSet(&a->exec_bypass, 0);
+    flush_main(channel);
+    InterlockedBitTestAndReset(&a->exec_bypass, 0);
+    LeaveCriticalSection(&ch[channel].csEXCH);
+    LeaveCriticalSection(&ch[channel].csDSP);
+}
+```
+
+Requires WDSP.dll rebuild (new export).
+
+**Change 2: `sunsdr.c` — call `FlushChannelNow(tx_chan)` at every PTT-on**
+
+In `SunSDRSetPTT` when `new_ptt=1`, after the existing txLock reset block and before `TX_ATTEMPT_BEGIN` logging, call `FlushChannelNow(chid(inid(1, 0), 0))` (= TX channel, WDSP.id(1,0) equivalent). Wrapped in SEH to log any exception. Logs `TX_FLUSH_DONE` for verification.
+
+Flushes entire TXA DSP chain: `panel`, `phrot`, `amsq`, `eqp`, `preemph`, `wcpagc(leveler)`, `cfcomp`, `bandpass(bp0)`, `compressor`, `bandpass(bp1)`, `osctrl`, `bandpass(bp2)`, `wcpagc(alc)`, `ammod`, `fmmod`, `uslew`, `siphon`, `iqc`, `cfir`, `rsmpin`, `rsmpout` + all intermediate buffers.
+
+Addresses the hypothesis that Run 11's #2 cold-start raspy and MOX #5 anomaly are driven by WDSP-internal state carrying between TX attempts.
+
+**Change 3: `sunsdr.c` — sustained-silence detector**
+
+In `sunsdr_tx_outbound`, track how long `pre_rms` and `pre_peak` have both stayed below 1e-4 (~-80 dBFS) during an active MOX attempt (not TUNE — TUNE's tone keeps pre_rms high). If silence persists > 500 ms, log `MOX_AUDIO_SILENCE_SUSTAINED` once per second during the event.
+
+Catches future occurrences of the MOX #5 "no audio" pattern with concrete attempt id + duration for direct diagnosis.
+
+### Run 12 verification (user)
+
+1. Rebuild ChannelMaster + wdsp + Thetis Debug x64 (all three projects — WDSP.dll now has a new export).
+2. Start Thetis with SUNSDR2 DX. On first MOX/TUNE, confirm:
+   - All seven `TIMING_INIT` lines from Tier 1 + Tier 2 + A+B still appear.
+   - `TX_FLUSH_DONE attempt=N channel=<id>` appears on every PTT-on.
+3. Run **20 TUNE cycles** at UI drive 1, 2-3 s on / 2-3 s off. Record clean/slight/moderate/heavy per attempt.
+4. Run **10 voice MOX cycles** at typical mic level, ~3 s each. Note specifically whether any attempt transmits no audio on-air.
+5. Watch for any `MOX_AUDIO_SILENCE_SUSTAINED` log lines.
+
+### Run 12 decision matrix
+
+| Outcome | Interpretation | Next |
+|---|---|---|
+| 20/20 TUNE clean AND 10/10 MOX audio-on-air | Flush closed the residual cold-start / between-attempt state drift. **Investigation closed.** | Move to remaining integration items (LSB TUNE power cal, band switch refinement, GetTickCount metric cleanup). |
+| TUNE still has 1-2/20 raspy; MOX clean | Flush helped MOX but TUNE residual is from a different source not in the TXA chain (tone generator?). | Investigate TXA tone generator (`txa[].gen0` and `gen1`) state at TUNE-on. |
+| TUNE clean; MOX still has silent attempts AND `MOX_AUDIO_SILENCE_SUSTAINED` lines appear | WDSP is producing silence for some MOX entries; the flush isn't enough — possibly ASIO/mic device bind issue or WDSP TX chain not actually pulling from VAC. | Deep-dive MOX audio path (VAC IN → xvacIN → TXA feed). |
+| Both modes still problematic | Flush wasn't sufficient; lower-level rewrite needed. | Tier 3 waitable-timer pacing thread OR WDSP version bump / deeper refactor. |
+
 ## Next Step
 
-User runs short voice MOX regression (10 attempts, 3 s each, with severity grading) to confirm voice is also clean under the new TX priority. Decision on close-vs-Tier-3 depends on that result.
+User rebuild (all three projects including WDSP) + Run 12 per protocol above.
 
 User chose to skip histogram correlation and go straight to Phase B spectral capture since it is definitive regardless of the scheduler-stall question.
 

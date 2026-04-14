@@ -65,6 +65,8 @@ PORT void CloseChannel (int channel);
 
 extern void flushChannel (void* p);
 
+PORT void FlushChannelNow (int channel);
+
 PORT void SetType (int channel, int type);
 
 PORT void SetInputBuffsize (int channel, int in_size);
