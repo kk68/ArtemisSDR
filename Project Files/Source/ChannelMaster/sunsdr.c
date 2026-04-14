@@ -55,6 +55,10 @@ static void sunsdr_send_tx_packet(const double* iq);
 static struct sockaddr_in sunsdr_stream_dest(void);
 static void sunsdr_dbg_note_tx_packet(unsigned int seq);
 
+/* Global SunSDR session state — moved above the iq_dump / tx_pace
+ * helpers which need sdr.currentPTT, sdr.streamSock, sdr.txSeq, etc. */
+static sunsdr_state_t sdr;
+
 /* TX IQ ground-truth recorder.
  *
  * Counters on MOX #5 (no audio on-air) and TUNE #8 (raspy, Run post-Phase C)
@@ -620,7 +624,8 @@ static void sdr_logf(const char* fmt, ...) {
 
 /* ========== Internal state ========== */
 
-static sunsdr_state_t sdr;
+/* sdr was moved to the forward-declaration block near the top of the
+ * file so the iq_dump and tx_pace helpers can reference it. */
 static const char* sdr_ctrl_trace_label = NULL;
 
 static void sunsdr_set_identity_defaults(void)
