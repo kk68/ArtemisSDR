@@ -29135,7 +29135,8 @@ namespace Thetis
                     // post-PTT frequency/antenna burst, heard as an extra relay
                     // click on bands where TX/RX cached state differed.
                     NetworkIO.nativeSunSDRSetMode((int)Audio.TXDSPMode);
-                    NetworkIO.nativeSunSDRSetTune(chkTUN.Checked ? 1 : 0);
+                    if (!_tuning || !chkTUN.Checked)
+                        NetworkIO.nativeSunSDRSetTune(0);
                     NetworkIO.nativeSunSDRSetPTT(1);
                 }
 
@@ -29155,7 +29156,8 @@ namespace Thetis
                 if (NetworkIO.CurrentRadioProtocol == RadioProtocol.SUNSDR)
                 {
                     // Drop RF before restoring RX-side VFO/antenna state.
-                    NetworkIO.nativeSunSDRSetTune(chkTUN.Checked ? 1 : 0);
+                    if (!_tuning)
+                        NetworkIO.nativeSunSDRSetTune(chkTUN.Checked ? 1 : 0);
                     NetworkIO.nativeSunSDRSetPTT(0);
                 }
 

@@ -8,9 +8,9 @@ Intermittent raspy tone/audio during SunSDR TUNE and MOX/TX. Current report is r
 
 ## Current Status
 
-- Status: sixth fixed-drive TUNE-only run analyzed. Drive was held at UI drive 1, which logs as raw drive 30. Current stream counters and broad audio/VAC counters still do not explain raspy vs clean TUNE, so TUNE generator handoff logging has been added for the next run.
+- Status: seventh fixed-drive TUNE-only run analyzed. Drive stayed at UI drive 1/raw drive 30. Stream counters, broad audio/VAC counters, and managed TUNE generator state still do not explain clean vs raspy attempts. The next focused candidate is the duplicate native TUNE state transition around the TUNE-to-MOX/PTT handoff.
 - Primary file: `Project Files/Source/ChannelMaster/sunsdr.c`
-- First reproduction target: repeated TUNE on/off cycles, 2-3 seconds on and 2-3 seconds off.
+- First reproduction target: repeated TUNE on/off cycles. TUNE-on time is usually 2-3 seconds; TUNE-off time may be 10-30 seconds so results can be recorded manually.
 - Keep this tracker updated after every test or code change until the issue is resolved.
 - Commit and push every meaningful stable checkpoint to `kk68/feature/sunsdr2dx`. Do not push to upstream `ramdor/Thetis`.
 
@@ -71,7 +71,8 @@ For clean vs raspy attempts, compare:
 - Run 3 confirmed the TX IQ gate fix works mechanically: `TX_FIRST_FD` now has `cmd_sent=1`, `firstFdBefore0x06=0`, and no `0xFE` keepalive races. TUNE raspiness still occurs, so the remaining visible `sunsdr.c` stream counters no longer correlate.
 - Run 4 showed that pre-priming one active silence `0xFD` after `0x06=1` made the result worse: 12/20 TUNE attempts were raspy. That candidate is rejected and removed.
 - Run 5 showed a clear high-drive effect for attempts 1-5, but did not explain the remaining low-drive failures. Current phase: expand from broad TX callback/VAC health into more specific managed Thetis TUNE generator state and TX monitor/RX path state around each TUNE attempt.
-- Run 6 held UI drive at 1/raw drive 30 and still reproduced intermittent TUNE raspiness. Stream and broad audio/VAC counters again did not correlate. Next run should compare the new `TUNE_AUDIO_STATE` labels around post-generator and native Tune/MOX ordering.
+- Run 6 held UI drive at 1/raw drive 30 and still reproduced intermittent TUNE raspiness. Stream and broad audio/VAC counters again did not correlate.
+- Run 7 added `TUNE_AUDIO_STATE` coverage and still did not show a clean-vs-raspy generator-state difference. The visible remaining suspect is state-transition ordering: each TUNE on/off currently sends native TUNE state twice, first in the TUNE handler and again through the MOX/PTT path.
 
 ## 2026-04-14 TUNE Run 1
 
@@ -227,6 +228,40 @@ Next validation:
 - Repeat 20 TUNE-only cycles with UI drive 1.
 - Compare `TUNE_AUDIO_STATE` labels for clean vs raspy attempts before changing behavior.
 
+## 2026-04-14 TUNE Run 7
+
+User test: 20 TUNE-only cycles after commit `bf074812` with managed TUNE generator handoff logging.
+
+Reported results:
+
+- Raspy: attempts 1, 3, 6, 7, 8, 10, 11, 12, 14, 19, 20.
+- Clean: attempts 2, 4, 5, 9, 13, 15, 16, 17, 18.
+- User is handling build/compile steps from this point forward.
+
+Log correlations:
+
+- All attempts 1-20 ran at `rawDrive=30`, matching UI drive 1.
+- No active-TX keepalive race observed: `feDuringTx=0`, `keepaliveRaces=0`.
+- No TX sequence discontinuities observed: `seqGaps=0`.
+- TX IQ ordering remained clean: `firstFdBefore0x06=0`.
+- TX callback health still did not correlate: `txCbNonfinite=0`, `txCbMaxGapMs=16`, and `txCbPostPeakMax=0.106154` on every attempt.
+- VAC1 counters were not a direct correlation. They stayed at `outUnder=1156`, `inOver=1156` for early attempts, then reset to zero before attempt 14; raspy attempts still occurred both before and after the reset.
+- `iqGateSkips` occurred on attempts 1, 4, 8, 12, and 20. Attempts 1, 8, 12, and 20 were raspy, but attempt 4 was clean, so this is not a direct correlation.
+- `firstFdDelayMs=0` occurred on attempts 6 and 13. Attempt 6 was raspy and attempt 13 was clean, so this is not a direct correlation.
+- `TUNE_AUDIO_STATE` lines were consistent across clean and raspy attempts: `postGenRun=1`, `postGenMode=0`, `toneFreq=-600.000`, `toneMag=0.999990`, `pulseEnabled=0`, `pulseOn=0`, `txDspMode=0`, `currentDspMode=0`, `pwr=1`, and `newPwr=1` during TUNE-on.
+
+Important observation:
+
+- The new handoff logging shows that each TUNE-on sends `SunSDRSetTune(1)` twice: once from the TUNE handler before MOX/PTT, then again from the MOX/PTT path before `SunSDRSetPTT(1)`.
+- Each TUNE-off similarly sends `SunSDRSetTune(0)` twice: once from the TUNE handler while PTT is still active, then again from the MOX/PTT-off path before `SunSDRSetPTT(0)`.
+- This duplicate native state transition does not prove causality, but after the stream, RX silence, drive, broad audio, and TUNE generator checks failed to correlate, it is the next smallest behavior candidate to simplify.
+
+Next validation:
+
+- A narrowly scoped behavior change was made in `console.cs`: the explicit TUNE-handler native `SunSDRSetTune(1/0)` calls remain responsible for TUNE, while the duplicate native TUNE call in the MOX/PTT handler is skipped while `_tuning` is active.
+- Normal non-TUNE MOX behavior is preserved by still sending `SunSDRSetTune(0)` for non-TUNE MOX on/off.
+- After user builds, repeat 20 TUNE-only cycles with UI drive 1 and compare the clean/raspy rate.
+
 ## Verification So Far
 
 - `git diff --check -- Project Files/Source/ChannelMaster/sunsdr.c`: passed.
@@ -242,6 +277,7 @@ Next validation:
 - After adding TUNE generator handoff diagnostics, `MSBuild ChannelMaster.vcxproj /t:ClCompile /p:SelectedFiles=sunsdr.c /p:Configuration=Debug /p:Platform=x64`: passed with 0 warnings and 0 errors.
 - After adding TUNE generator handoff diagnostics, `MSBuild ChannelMaster.vcxproj /t:ClCompile /p:SelectedFiles=network.c /p:Configuration=Debug /p:Platform=x64`: passed with 0 warnings and 0 errors.
 - `MSBuild Thetis.csproj /t:Build /p:Configuration=Debug /p:Platform=x64` reached the copy step with no C# compile errors reported, then failed because `bin/x64/Debug/Thetis.exe` was locked by the running `Thetis` process.
+- After the duplicate TUNE transition reduction, `git diff --check -- Project Files/Source/Console/console.cs SUNSDR_RASPY_TX_DEBUG.md`: passed. No build/compile was run because the user is handling build/compile steps from this point forward.
 
 ## Next Step
 
