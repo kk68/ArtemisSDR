@@ -421,6 +421,9 @@ namespace Thetis
             double tone_freq, double tone_mag, int pulse_enabled, int pulse_on,
             int tune_drive_source, int pwr, int new_pwr);
 
+        [DllImport("ChannelMaster.dll", CharSet = CharSet.Ansi, CallingConvention = CallingConvention.Cdecl)]
+        public static extern void nativeSunSDRLogTrace(String msg);
+
         [DllImport("ChannelMaster.dll", CallingConvention = CallingConvention.Cdecl)]
         public static extern void nativeSunSDRSetAntenna(int antenna);
 

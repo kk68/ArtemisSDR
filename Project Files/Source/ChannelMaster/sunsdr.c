@@ -2788,6 +2788,17 @@ void SunSDRSetTune(int tune)
         sdr.txPhase);
 }
 
+/* Simple passthrough so managed-side code (console.cs) can write one-liner
+ * trace events to the native sunsdr_debug.log. Added so we can tag
+ * TX_ATTEMPT triggers with their user-click source vs any programmatic
+ * source — user reported 12 recorded attempts when only 10 were
+ * consciously initiated, and we need provenance on the mismatch. */
+void SunSDRLogTrace(const char* msg)
+{
+    if (!msg) return;
+    sdr_logf("MANAGED_TRACE %s\n", msg);
+}
+
 void SunSDRLogTuneState(const char* label, int chk_tun, int chk_mox, int tuning, int mox,
     int tx_dsp_mode, int current_dsp_mode, int postgen_run, int postgen_mode,
     double tone_freq, double tone_mag, int pulse_enabled, int pulse_on,

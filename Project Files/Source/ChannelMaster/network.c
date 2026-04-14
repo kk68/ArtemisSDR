@@ -1566,6 +1566,11 @@ PORT void nativeSunSDRLogTuneState(char* label, int chk_tun, int chk_mox, int tu
 		tune_drive_source, pwr, new_pwr);
 }
 
+PORT void nativeSunSDRLogTrace(char* msg)
+{
+	SunSDRLogTrace(msg);
+}
+
 PORT void nativeSunSDRSetDrive(int raw)
 {
 	SunSDRSetDrive(raw);

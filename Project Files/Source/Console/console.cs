@@ -30108,6 +30108,19 @@ namespace Thetis
         {
             bool oldTune = _tuning; //MW0LGE_21k9d
 
+            // SUNSDR: trace each handler entry so we can tell how many user
+            // TUNE clicks happened vs whether any came from a non-click source
+            // (programmatic, auto-recovery, stuck UI). User noted 12 recorded
+            // attempts when only 10 were consciously initiated; this line
+            // answers the provenance question.
+            if (NetworkIO.CurrentRadioProtocol == RadioProtocol.SUNSDR)
+            {
+                string senderName = (sender == null) ? "null" :
+                    (sender is System.Windows.Forms.Control c ? c.Name : sender.GetType().Name);
+                NetworkIO.nativeSunSDRLogTrace(
+                    $"chkTUN_CheckedChanged sender={senderName} chkTUN.Checked={chkTUN.Checked} oldTune={oldTune} powerOn={PowerOn} chkMOX.Checked={chkMOX.Checked}");
+            }
+
             if (chkTUN.Checked)
             {
                 if (!PowerOn)
