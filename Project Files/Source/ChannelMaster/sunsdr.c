@@ -378,6 +378,76 @@ static int sunsdr_resample(int source, const double* in, int nsamples)
 /* ========== Helpers ========== */
 
 static const double NORM = 1.0 / 2147483648.0;
+
+static volatile LONG sunsdr_dbg_attempt_seq = 0;
+static volatile LONG sunsdr_dbg_active_tx_packets = 0;
+static volatile LONG sunsdr_dbg_active_tx_seq_gaps = 0;
+static volatile LONG sunsdr_dbg_idle_fe_during_tx = 0;
+static volatile LONG sunsdr_dbg_keepalive_tx_races = 0;
+static volatile LONG sunsdr_dbg_tx_attempt_id = 0;
+static ULONGLONG sunsdr_dbg_ptt_request_tick = 0;
+static ULONGLONG sunsdr_dbg_mox_cmd_tick = 0;
+static ULONGLONG sunsdr_dbg_first_fd_tick = 0;
+static ULONGLONG sunsdr_dbg_last_fd_tick = 0;
+static unsigned int sunsdr_dbg_last_fd_seq = 0;
+static double sunsdr_dbg_fd_gap_min_ms = 0.0;
+static double sunsdr_dbg_fd_gap_max_ms = 0.0;
+static double sunsdr_dbg_fd_gap_sum_ms = 0.0;
+static unsigned int sunsdr_dbg_fd_gap_count = 0;
+
+static const char* sunsdr_tx_mode_label(int tune)
+{
+    return tune ? "TUNE" : "MOX";
+}
+
+static void sunsdr_dbg_reset_tx_attempt_locked(int attempt_id)
+{
+    (void)attempt_id;
+    InterlockedExchange(&sunsdr_dbg_active_tx_packets, 0);
+    InterlockedExchange(&sunsdr_dbg_active_tx_seq_gaps, 0);
+    InterlockedExchange(&sunsdr_dbg_idle_fe_during_tx, 0);
+    InterlockedExchange(&sunsdr_dbg_keepalive_tx_races, 0);
+    sunsdr_dbg_ptt_request_tick = 0;
+    sunsdr_dbg_mox_cmd_tick = 0;
+    sunsdr_dbg_first_fd_tick = 0;
+    sunsdr_dbg_last_fd_tick = 0;
+    sunsdr_dbg_last_fd_seq = 0;
+    sunsdr_dbg_fd_gap_min_ms = 0.0;
+    sunsdr_dbg_fd_gap_max_ms = 0.0;
+    sunsdr_dbg_fd_gap_sum_ms = 0.0;
+    sunsdr_dbg_fd_gap_count = 0;
+}
+
+static void sunsdr_dbg_note_tx_packet(unsigned int seq)
+{
+    ULONGLONG now = GetTickCount64();
+    LONG count = InterlockedIncrement(&sunsdr_dbg_active_tx_packets);
+
+    if (count == 1) {
+        sunsdr_dbg_first_fd_tick = now;
+        sdr_logf("TX_FIRST_FD attempt=%ld seq=%u delay_from_ptt_ms=%llu delay_from_0x06_ms=%llu cmd_sent=%d\n",
+            sunsdr_dbg_tx_attempt_id,
+            seq,
+            sunsdr_dbg_ptt_request_tick ? (unsigned long long)(now - sunsdr_dbg_ptt_request_tick) : 0,
+            sunsdr_dbg_mox_cmd_tick ? (unsigned long long)(now - sunsdr_dbg_mox_cmd_tick) : 0,
+            sunsdr_dbg_mox_cmd_tick != 0);
+    } else {
+        double gap_ms = (double)(now - sunsdr_dbg_last_fd_tick);
+        if (sunsdr_dbg_fd_gap_count == 0 || gap_ms < sunsdr_dbg_fd_gap_min_ms) sunsdr_dbg_fd_gap_min_ms = gap_ms;
+        if (gap_ms > sunsdr_dbg_fd_gap_max_ms) sunsdr_dbg_fd_gap_max_ms = gap_ms;
+        sunsdr_dbg_fd_gap_sum_ms += gap_ms;
+        sunsdr_dbg_fd_gap_count++;
+
+        if (seq != sunsdr_dbg_last_fd_seq + 1) {
+            LONG gaps = InterlockedIncrement(&sunsdr_dbg_active_tx_seq_gaps);
+            sdr_logf("TX_FD_SEQ_GAP attempt=%ld prev=%u current=%u gaps=%ld\n",
+                sunsdr_dbg_tx_attempt_id, sunsdr_dbg_last_fd_seq, seq, gaps);
+        }
+    }
+
+    sunsdr_dbg_last_fd_seq = seq;
+    sunsdr_dbg_last_fd_tick = now;
+}
 /*
  * SunSDR2 DX needs extra native TX headroom at the top end, but a flat boost
  * overdrives low power settings badly. Apply a drive-dependent headroom curve:
@@ -392,22 +462,27 @@ static double sunsdr_tx_full_scale_for_drive(double drive)
     if (drive > 1.0) drive = 1.0;
 
     /*
-     * Coefficient 0.5 at drive=1.0 gives fs=1.50. Pre-clip post_peak=0.896*1.5=1.34
-     * With per-channel clipping at +/-1.0, the average envelope^2 rises to ~1.50
-     * (vs 1.22 at fs=1.34), which compensates for the ~3 dB power loss that came
-     * with the 8x TX rate reduction (1562 -> 195 pkts/sec). Target: LSB TUNE 100W
-     * slider -> ~95-100W on-air.
-     * Below drive=0.85 the curve stays flat to keep the calibrated Thetis power
-     * path clean at low-mid drive.
+     * Compound curve to hit 100W target at drive=1.0 without over-driving
+     * the mid-range. A gentle 0.5*drive^2 keeps low/mid boost moderate; a
+     * sharp 0.5*drive^10 kicks in only near drive=1.0 to push through to
+     * full power (~2.0 fs at the peak). Drive^10 is ~0 below drive=0.8 so
+     * the lower range is unaffected.
+     *   drive=1.0 -> fs=2.00  (aggressive clip for max power on TUNE)
+     *   drive=0.92 -> fs=1.64 (slider 75W)
+     *   drive=0.83 -> fs=1.42 (slider 50W)
+     *   drive=0.59 -> fs=1.18 (slider 25W)
+     *   drive=0.37 -> fs=1.07 (slider 10W)
      */
-    if (drive <= 0.85)
-        return 1.0;
-
-    t = (drive - 0.85) / 0.15;
-    if (t < 0.0) t = 0.0;
-    if (t > 1.0) t = 1.0;
-
-    return 1.0 + (0.5 * t * t * t);
+    (void)t;
+    double d2 = drive * drive;
+    double d4 = d2 * d2;
+    double d10 = d4 * d4 * d2;
+    /*
+     * Bumped d^10 coefficient from 0.5 -> 0.8 to push slider 100W from 90W
+     * observed to ~100W+. The d^10 term is near-zero below drive ~0.8 so it
+     * doesn't affect mid/low range much.
+     */
+    return 1.0 + (0.5 * d2) + (0.8 * d10);
 }
 
 static struct sockaddr_in sunsdr_stream_dest(void)
@@ -480,15 +555,18 @@ static void sunsdr_send_tx_packet(const double* iq)
 {
     unsigned char txbuf[SUNSDR_IQ_PKT_SIZE];
     struct sockaddr_in dest;
+    unsigned int seq;
 
     if (sdr.streamSock == INVALID_SOCKET || sdr.streamSock == 0)
         return;
 
-    sunsdr_build_tx_packet(txbuf, sdr.txSeq++, iq);
+    seq = sdr.txSeq++;
+    sunsdr_build_tx_packet(txbuf, seq, iq);
     dest = sunsdr_stream_dest();
     sendto(sdr.streamSock, (const char*)txbuf, SUNSDR_IQ_PKT_SIZE, 0,
         (struct sockaddr*)&dest, sizeof(dest));
     sdr.txAudioPackets++;
+    sunsdr_dbg_note_tx_packet(seq);
 }
 
 static void sunsdr_queue_tx_packet_locked(double I, double Q)
@@ -1575,8 +1653,16 @@ void SunSDRSetRX2(int enabled)
 
 void SunSDRSetTune(int tune)
 {
+    int old_tune = sdr.currentTune;
     sdr.currentTune = tune ? 1 : 0;
-    sdr_logf("SunSDRSetTune(%d)\n", sdr.currentTune);
+    sdr_logf("SunSDRSetTune(%d) old=%d ptt=%d attempt=%ld seq=%u txPackets=%u txPhase=%.4f\n",
+        sdr.currentTune,
+        old_tune,
+        sdr.currentPTT,
+        sunsdr_dbg_tx_attempt_id,
+        sdr.txSeq,
+        sdr.txAudioPackets,
+        sdr.txPhase);
 }
 
 void SunSDRSetDrive(int raw)
@@ -1654,6 +1740,14 @@ void SunSDRSetTxAntenna(int antenna)
 void SunSDRSetPTT(int ptt)
 {
     int new_ptt = ptt ? 1 : 0;
+    int attempt_id = 0;
+    int raw_drive = sdr.currentDriveRaw;
+    double drive = raw_drive >= 0 ? (double)raw_drive / 255.0 : 1.0;
+    double full_scale;
+
+    if (drive < 0.0) drive = 0.0;
+    if (drive > 1.0) drive = 1.0;
+    full_scale = sunsdr_tx_full_scale_for_drive(drive);
 
     if (!sdr.powered)
     {
@@ -1666,18 +1760,24 @@ void SunSDRSetPTT(int ptt)
 
     if (sdr.txLockInitialized) {
         EnterCriticalSection(&sdr.txLock);
-        sdr.txAudioPackets = 0;
-        sdr.txPhase = 0.0;
-        sdr.txPrevI = 0.0;
-        sdr.txPrevQ = 0.0;
-        sdr.txAccumCount = 0;
-        sdr.txAccumBoxI = 0.0;
-        sdr.txAccumBoxQ = 0.0;
-        sdr.txAccumBoxN = 0;
+        if (new_ptt) {
+            sdr.txAudioPackets = 0;
+            sdr.txPhase = 0.0;
+            sdr.txPrevI = 0.0;
+            sdr.txPrevQ = 0.0;
+            sdr.txAccumCount = 0;
+            sdr.txAccumBoxI = 0.0;
+            sdr.txAccumBoxQ = 0.0;
+            sdr.txAccumBoxN = 0;
+            attempt_id = InterlockedIncrement(&sunsdr_dbg_attempt_seq);
+            InterlockedExchange(&sunsdr_dbg_tx_attempt_id, attempt_id);
+            sunsdr_dbg_reset_tx_attempt_locked(attempt_id);
+            sunsdr_dbg_ptt_request_tick = GetTickCount64();
+        }
         LeaveCriticalSection(&sdr.txLock);
     }
 
-    sdr_logf("SunSDRSetPTT(%d) currentTune=%d rx1=%d rx2=%d tx=%d rxAnt=%d txAnt=%d pa=%d\n",
+    sdr_logf("SunSDRSetPTT(%d) currentTune=%d rx1=%d rx2=%d tx=%d rxAnt=%d txAnt=%d pa=%d seq=%u txPhase=%.4f txAccum=%d drive=%.3f rawDrive=%d fs=%.3f attempt=%ld\n",
         new_ptt,
         sdr.currentTune,
         sdr.currentRx1FreqHz,
@@ -1685,21 +1785,53 @@ void SunSDRSetPTT(int ptt)
         sdr.currentTxFreqHz,
         sdr.currentRxAntenna,
         sdr.currentTxAntenna,
-        sdr.currentPAEnabled);
+        sdr.currentPAEnabled,
+        sdr.txSeq,
+        sdr.txPhase,
+        sdr.txAccumCount,
+        drive,
+        raw_drive,
+        full_scale,
+        sunsdr_dbg_tx_attempt_id);
 
     if (new_ptt) {
+        sdr_logf("TX_ATTEMPT_BEGIN #%ld mode=%s ptt=%d tune=%d seq=%u txPhase=%.4f txAccum=%d drive=%.3f rawDrive=%d fs=%.3f\n",
+            sunsdr_dbg_tx_attempt_id,
+            sunsdr_tx_mode_label(sdr.currentTune),
+            new_ptt,
+            sdr.currentTune,
+            sdr.txSeq,
+            sdr.txPhase,
+            sdr.txAccumCount,
+            drive,
+            raw_drive,
+            full_scale);
         /*
          * TUNE and MOX follow the same wire path: re-assert current mode
          * (LSB/USB/AM/etc), PTT on, let the WDSP-generated IQ stream carry
          * the tune tone at full drive. Do NOT switch the radio to internal
          * tune mode 0x45 — that path generates a low-power internal carrier
          * and ignores our IQ stream, capping output at ~2.5W.
+         *
+         * Order is critical: update sdr.currentPTT BEFORE sending 0x06=1 so
+         * the keepalive thread (running in parallel) sees TX state
+         * immediately and stops sending 0xFE silence packets. If it sees
+         * currentPTT=0 after the radio is already in TX, it may inject one
+         * silence 0xFE packet INTO the active TX stream, causing a brief
+         * glitch heard as the intermittent "raspy" TUNE tone.
          */
+        sdr.lastTxWasTune = sdr.currentTune ? 1 : 0;
+        sdr.currentPTT = new_ptt;
         sunsdr_reassert_tx_state();
         sunsdr_send_config_block_state(0);
-        sdr.lastTxWasTune = sdr.currentTune ? 1 : 0;
         sunsdr_send_u32_cmd(SUNSDR_OP_MOX_PTT, 1);
-        sdr.currentPTT = new_ptt;
+        sunsdr_dbg_mox_cmd_tick = GetTickCount64();
+        sdr_logf("TX_ATTEMPT_0x06_SENT #%ld mode=%s seq=%u txPackets=%u delay_from_begin_ms=%llu\n",
+            sunsdr_dbg_tx_attempt_id,
+            sunsdr_tx_mode_label(sdr.lastTxWasTune),
+            sdr.txSeq,
+            sdr.txAudioPackets,
+            sunsdr_dbg_ptt_request_tick ? (unsigned long long)(sunsdr_dbg_mox_cmd_tick - sunsdr_dbg_ptt_request_tick) : 0);
         /*
          * Only write 0x24 PA_ENABLE on MOX-on when we're actually turning
          * PA ON (user has external PA toggled on). Writing 0x24=0 right
@@ -1712,6 +1844,29 @@ void SunSDRSetPTT(int ptt)
             sunsdr_send_u32_cmd(SUNSDR_OP_PA_ENABLE, 1);
         }
     } else {
+        double avg_fd_gap = sunsdr_dbg_fd_gap_count > 0 ? sunsdr_dbg_fd_gap_sum_ms / (double)sunsdr_dbg_fd_gap_count : 0.0;
+        unsigned long long first_fd_delay = (sunsdr_dbg_first_fd_tick && sunsdr_dbg_mox_cmd_tick && sunsdr_dbg_first_fd_tick >= sunsdr_dbg_mox_cmd_tick) ?
+            (unsigned long long)(sunsdr_dbg_first_fd_tick - sunsdr_dbg_mox_cmd_tick) : 0;
+        int first_fd_before_cmd = (sunsdr_dbg_first_fd_tick && sunsdr_dbg_mox_cmd_tick && sunsdr_dbg_first_fd_tick < sunsdr_dbg_mox_cmd_tick) ? 1 : 0;
+        sdr_logf("TX_ATTEMPT_END #%ld mode=%s result=user_clean_or_raspy ptt=%d tune=%d seq=%u txPackets=%u activeFD=%ld seqGaps=%ld feDuringTx=%ld keepaliveRaces=%ld firstFdDelayMs=%llu firstFdBefore0x06=%d fdGapMin=%.3f fdGapAvg=%.3f fdGapMax=%.3f fdGapCount=%u txPhase=%.4f txAccum=%d\n",
+            sunsdr_dbg_tx_attempt_id,
+            sunsdr_tx_mode_label(sdr.lastTxWasTune),
+            new_ptt,
+            sdr.currentTune,
+            sdr.txSeq,
+            sdr.txAudioPackets,
+            sunsdr_dbg_active_tx_packets,
+            sunsdr_dbg_active_tx_seq_gaps,
+            sunsdr_dbg_idle_fe_during_tx,
+            sunsdr_dbg_keepalive_tx_races,
+            first_fd_delay,
+            first_fd_before_cmd,
+            sunsdr_dbg_fd_gap_min_ms,
+            avg_fd_gap,
+            sunsdr_dbg_fd_gap_max_ms,
+            sunsdr_dbg_fd_gap_count,
+            sdr.txPhase,
+            sdr.txAccumCount);
         sdr.currentPTT = new_ptt;
         /*
          * On MOX-off, only write 0x24 PA_ENABLE=0 if we had written a 1
@@ -1789,7 +1944,17 @@ DWORD WINAPI SunSDRReadThread(LPVOID param)
     int rx_resample_outsize = 246;  /* matches sunsdr_resample output size */
     double* rx_silence_buf = (double*)calloc(2 * rx_resample_outsize, sizeof(double));
     double rx_feed_rate_target = 1562.5; /* expected packets/sec */
+    double rx_silence_accum = 0.0;
+    int prev_ptt_state = 0;
     ULONGLONG last_rx_pkt_tick = 0;
+    unsigned int dbg_tx_feed_buffers = 0;
+    unsigned int dbg_keepalive_fe_sent = 0;
+    unsigned int dbg_keepalive_tx_races = 0;
+    unsigned int dbg_rx_silence_injected = 0;
+    unsigned int dbg_real_fe_packets = 0;
+    unsigned int dbg_real_fd_packets = 0;
+    unsigned int dbg_xrouter_real_feeds = 0;
+    unsigned int dbg_xrouter_total_feeds = 0;
 
     sdr_logf("IQ read thread started\n");
     sdr_logf("TX pipeline keepalive: stream=%d, buf_size=%d, feed_rate=%d/sec, step=%.4f\n",
@@ -1813,6 +1978,7 @@ DWORD WINAPI SunSDRReadThread(LPVOID param)
                 tx_feed_accum += elapsed_ms * tx_feed_rate / 1000.0;
                 while (tx_feed_accum >= 1.0) {
                     Inbound(tx_stream_id, tx_buf_size, tx_silence_buf);
+                    dbg_tx_feed_buffers++;
                     tx_feed_accum -= 1.0;
                 }
 
@@ -1825,20 +1991,44 @@ DWORD WINAPI SunSDRReadThread(LPVOID param)
          * RX input rate at expected 384k samples/sec. This prevents fexchange0
          * from blocking on Sem_OutReady when SunSDR throttles the IQ stream
          * during TX (radio drops from 1562/sec to ~195/sec during MOX/TUNE). */
-        if (sdr.currentPTT && last_rx_pkt_tick > 0) {
-            ULONGLONG since_last_rx = now_tick - last_rx_pkt_tick;
-            if (since_last_rx >= 2) {
-                /* Inject one buffer of silence per 640us gap */
-                int gaps_to_fill = (int)(since_last_rx * 1562 / 1000);
-                if (gaps_to_fill > 32) gaps_to_fill = 32;  /* cap to prevent runaway */
-                for (int g = 0; g < gaps_to_fill; g++) {
-                    __try {
-                        xrouter(NULL, 0, 0, rx_resample_outsize, rx_silence_buf);
-                    } __except(EXCEPTION_EXECUTE_HANDLER) {
-                        break;
-                    }
+        /*
+         * RX silence injection during TX: inject silence BUFFERS at the
+         * expected steady rate (1562.5/sec), not in bursts.
+         *
+         * The original burst-mode implementation injected up to 32 buffers at
+         * once when the gap exceeded 2ms, producing a sawtooth input pattern
+         * into WDSP (long quiet periods followed by rapid-fire buffers). That
+         * jitter propagated through WDSP RX -> VAC mixer -> rmatch resampler
+         * -> PortAudio, and the cumulative phase drift in the rmatch
+         * resampler caused post-TX RX audio to sound raspy until the VAC
+         * was manually cycled.
+         *
+         * Steady-rate injection uses a phase accumulator (same technique as
+         * the TX keepalive accumulator above) to emit one silence buffer per
+         * 640us tick, smoothly. Reset the accumulator on PTT transitions
+         * so we don't carry cross-session drift.
+         */
+        if (sdr.currentPTT != prev_ptt_state) {
+            rx_silence_accum = 0.0;
+            prev_ptt_state = sdr.currentPTT;
+        }
+        if (sdr.currentPTT) {
+            if (elapsed_ms > 0.0) {
+                rx_silence_accum += elapsed_ms * rx_feed_rate_target / 1000.0;
+            }
+            /* Emit ONE silence buffer per tick, no bursts. Cap at 4 per loop
+             * iteration as a safety guard against very long loop delays. */
+            int emitted = 0;
+            while (rx_silence_accum >= 1.0 && emitted < 4) {
+                __try {
+                    xrouter(NULL, 0, 0, rx_resample_outsize, rx_silence_buf);
+                } __except(EXCEPTION_EXECUTE_HANDLER) {
+                    break;
                 }
-                last_rx_pkt_tick = now_tick;
+                rx_silence_accum -= 1.0;
+                dbg_rx_silence_injected++;
+                dbg_xrouter_total_feeds++;
+                emitted++;
             }
         }
 
@@ -1852,11 +2042,32 @@ DWORD WINAPI SunSDRReadThread(LPVOID param)
              */
             if (!sdr.currentPTT) {
                 struct sockaddr_in streamDest;
+                int ptt_before_send;
                 memcpy(&streamDest, &sdr.radioAddr, sizeof(streamDest));
                 streamDest.sin_port = htons((u_short)sdr.streamPort);
+                ptt_before_send = sdr.currentPTT;
                 sunsdr_build_tx_silence(txbuf, sdr.txSeq++);
+                if (ptt_before_send || sdr.currentPTT || txbuf[2] != SUNSDR_OP_IQ_RX_IDLE) {
+                    LONG fe_during_tx = sunsdr_dbg_idle_fe_during_tx;
+                    LONG keepalive_races = InterlockedIncrement(&sunsdr_dbg_keepalive_tx_races);
+                    dbg_keepalive_tx_races++;
+                    if ((ptt_before_send || sdr.currentPTT) && txbuf[2] == SUNSDR_OP_IQ_RX_IDLE) {
+                        fe_during_tx = InterlockedIncrement(&sunsdr_dbg_idle_fe_during_tx);
+                    }
+                    sdr_logf("TX_KEEPALIVE_RACE attempt=%ld ptt_before=%d ptt_after=%d op=0x%02X seq=%u feDuringTx=%ld keepaliveRaces=%ld\n",
+                        sunsdr_dbg_tx_attempt_id,
+                        ptt_before_send,
+                        sdr.currentPTT,
+                        txbuf[2],
+                        sdr.txSeq - 1,
+                        fe_during_tx,
+                        keepalive_races);
+                }
                 sendto(sdr.streamSock, (const char*)txbuf, SUNSDR_IQ_PKT_SIZE, 0,
                     (struct sockaddr*)&streamDest, sizeof(streamDest));
+                if (txbuf[2] == SUNSDR_OP_IQ_RX_IDLE) {
+                    dbg_keepalive_fe_sent++;
+                }
             }
             last_tx_audio_packets = sdr.txAudioPackets;
 
@@ -1868,10 +2079,38 @@ DWORD WINAPI SunSDRReadThread(LPVOID param)
         /* Log every second regardless */
         DWORD now = GetTickCount();
         if (now - last_log_time >= 1000) {
-            sdr_logf("IQ status: pkts=%d, timeouts=%d, keepRunning=%d, HaveSync=%d\n",
-                pkt_count, timeout_count, sdr.keepRunning, HaveSync);
+            sdr_logf("IQ status: pkts=%d, timeouts=%d, keepRunning=%d, HaveSync=%d txAttempt=%ld ptt=%d tune=%d txFeed=%u keepaliveFE=%u keepaliveRace=%u rxSilence=%u realFE=%u realFD=%u xrouterReal=%u xrouterTotal=%u rxAccum=%.3f txPackets=%u activeFD=%ld seqGaps=%ld feDuringTx=%ld keepaliveRaces=%ld\n",
+                pkt_count,
+                timeout_count,
+                sdr.keepRunning,
+                HaveSync,
+                sunsdr_dbg_tx_attempt_id,
+                sdr.currentPTT,
+                sdr.currentTune,
+                dbg_tx_feed_buffers,
+                dbg_keepalive_fe_sent,
+                dbg_keepalive_tx_races,
+                dbg_rx_silence_injected,
+                dbg_real_fe_packets,
+                dbg_real_fd_packets,
+                dbg_xrouter_real_feeds,
+                dbg_xrouter_total_feeds,
+                rx_silence_accum,
+                sdr.txAudioPackets,
+                sunsdr_dbg_active_tx_packets,
+                sunsdr_dbg_active_tx_seq_gaps,
+                sunsdr_dbg_idle_fe_during_tx,
+                sunsdr_dbg_keepalive_tx_races);
             last_log_time = now;
             timeout_count = 0;
+            dbg_tx_feed_buffers = 0;
+            dbg_keepalive_fe_sent = 0;
+            dbg_keepalive_tx_races = 0;
+            dbg_rx_silence_injected = 0;
+            dbg_real_fe_packets = 0;
+            dbg_real_fd_packets = 0;
+            dbg_xrouter_real_feeds = 0;
+            dbg_xrouter_total_feeds = 0;
         }
 
         if (n <= 0) {
@@ -1989,6 +2228,11 @@ DWORD WINAPI SunSDRReadThread(LPVOID param)
          */
         if (pktbuf[2] != SUNSDR_OP_IQ_STREAM && pktbuf[2] != 0xFD)
             continue;
+        if (pktbuf[2] == SUNSDR_OP_IQ_STREAM) {
+            dbg_real_fe_packets++;
+        } else {
+            dbg_real_fd_packets++;
+        }
 
         /* Extract 200 x 24-bit LE I/Q pairs from payload (offset 10) */
         unsigned char* payload = pktbuf + SUNSDR_IQ_HDR_SIZE;
@@ -2020,7 +2264,17 @@ DWORD WINAPI SunSDRReadThread(LPVOID param)
             if (out_n > 0) {
                 __try {
                     xrouter(NULL, 0, source, out_n, resampler[source].out);
-                    if (source == 0) last_rx_pkt_tick = GetTickCount64();
+                    if (source == 0) {
+                        last_rx_pkt_tick = GetTickCount64();
+                        dbg_xrouter_real_feeds++;
+                        dbg_xrouter_total_feeds++;
+                        if (sdr.currentPTT && rx_silence_accum > 0.0) {
+                            rx_silence_accum -= 1.0;
+                            if (rx_silence_accum < 0.0) {
+                                rx_silence_accum = 0.0;
+                            }
+                        }
+                    }
                 } __except(EXCEPTION_EXECUTE_HANDLER) {
                     sdr_logf("CRASH in xrouter at pkt %d (source=%d, out_n=%d)! Exception=0x%08X\n",
                         pkt_count, source, out_n, GetExceptionCode());
