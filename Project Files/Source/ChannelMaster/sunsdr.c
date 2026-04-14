@@ -1846,6 +1846,15 @@ void SunSDRSetPTT(int ptt)
             sdr.txSeq,
             sdr.txAudioPackets,
             sunsdr_dbg_ptt_request_tick ? (unsigned long long)(sunsdr_dbg_mox_cmd_tick - sunsdr_dbg_ptt_request_tick) : 0);
+        {
+            double tx_prime_iq[SUNSDR_IQ_COMPLEX_PER_PKT * 2];
+            memset(tx_prime_iq, 0, sizeof(tx_prime_iq));
+            sunsdr_send_tx_packet(tx_prime_iq);
+            sdr_logf("TX_PREPRIME_FD #%ld seq=%u txPackets=%u\n",
+                sunsdr_dbg_tx_attempt_id,
+                sdr.txSeq - 1,
+                sdr.txAudioPackets);
+        }
         InterlockedExchange(&sunsdr_tx_iq_enabled, 1);
         sdr_logf("TX_IQ_GATE_OPEN #%ld txPackets=%u gateSkips=%ld\n",
             sunsdr_dbg_tx_attempt_id,

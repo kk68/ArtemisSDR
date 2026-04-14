@@ -8,7 +8,7 @@ Intermittent raspy tone/audio during SunSDR TUNE and MOX/TX. Current report is r
 
 ## Current Status
 
-- Status: second TUNE-cycle data analyzed; RX silence underfeed is fixed, next candidate fix gates active TX IQ until after `0x06=1`.
+- Status: third TUNE-cycle data analyzed; RX silence underfeed and early active-IQ ordering are fixed, next candidate fix pre-primes one active silence `0xFD` immediately after `0x06=1`.
 - Primary file: `Project Files/Source/ChannelMaster/sunsdr.c`
 - First reproduction target: repeated TUNE on/off cycles, 2-3 seconds on and 2-3 seconds off.
 - Keep this tracker updated after every test or code change until the issue is resolved.
@@ -53,7 +53,8 @@ For clean vs raspy attempts, compare:
 - 2026-04-14 TUNE data did not support the idle keepalive race as the active failure: attempts 1-20 all ended with `feDuringTx=0`, `keepaliveRaces=0`, and `seqGaps=0`.
 - TX packet cadence also looked stable in the first run: `fdGapAvg` was about 5.10-5.12 ms and `fdGapMax` was 16 ms.
 - Run 2 confirmed the RX silence cap fix works mechanically: `rxSilence` is now about 1562-1563/sec during TX and `rxAccum` stays bounded below 1. This improved RX/VAC behavior, but TUNE raspiness remains.
-- Current candidate: active TX `0xFD` can race ahead of the `0x06=1` TX command. Add a TX IQ gate so `currentPTT` still stops idle `0xFE` immediately, but `sunsdr_tx_outbound` cannot emit active IQ until after `0x06=1` returns.
+- Run 3 confirmed the TX IQ gate fix works mechanically: `TX_FIRST_FD` now has `cmd_sent=1`, `firstFdBefore0x06=0`, and no `0xFE` keepalive races. TUNE raspiness still occurs, so the remaining visible `sunsdr.c` stream counters no longer correlate.
+- Current candidate: the radio still waits about 15-16 ms after `0x06=1` before the first active `0xFD` from the audio callback. Pre-prime one silence `0xFD` immediately after `0x06=1`, then open the live TX IQ gate.
 - If none correlate, expand diagnostics into VAC/ASIO and Thetis TX audio routing.
 
 ## 2026-04-14 TUNE Run 1
@@ -102,11 +103,36 @@ Code change after this run:
 - Added a private TX IQ gate in `sunsdr.c`: `currentPTT` still flips before `0x06=1` so the idle keepalive path stops, but `sunsdr_tx_outbound` will not send active `0xFD` packets until after `0x06=1` completes and `TX_IQ_GATE_OPEN` is logged.
 - Added `iqGateSkips` and explicit `firstFdBefore0x06` diagnostics so the next run can verify the gate is doing work and active TX packets no longer predate the command.
 
+## 2026-04-14 TUNE Run 3
+
+User test: 20 TUNE cycles after commit `1fba5507`.
+
+Reported results:
+
+- Raspy: attempts 2, 5, 6, 8, 10, 16, 19.
+- Clean: attempts 1, 3, 4, 7, 9, 11, 12, 13, 14, 15, 17, 18, 20.
+- RX raspy was reported after attempts 15, 16, and 17; RX was clean for the other listed attempts.
+
+Log correlations:
+
+- The log contains attempts 1-19; the written user report includes attempt 20 after the captured attempt list.
+- TX IQ gate worked: every logged `TX_FIRST_FD` had `cmd_sent=1`, and every `TX_ATTEMPT_END` had `firstFdBefore0x06=0`.
+- No active-TX keepalive race observed: `feDuringTx=0`, `keepaliveRaces=0`.
+- No TX sequence discontinuities observed: `seqGaps=0`.
+- RX silence injection remained healthy: sustained TX seconds stayed around `rxSilence=1562-1563`, `xrouterTotal=1562-1563`, and bounded `rxAccum`.
+- `iqGateSkips` appeared on some clean and raspy attempts, so it is not a direct correlation.
+- Steady-state TX audio callback amplitude/rate logs looked similar on clean and raspy attempts.
+
+Code change after this run:
+
+- Added `TX_PREPRIME_FD`: after `0x06=1` returns and before live TX IQ is ungated, send one active `0xFD` silence packet. This removes the initial 15-16 ms window where the radio is in TX but has not yet received any active TX IQ packet from the audio callback.
+
 Next validation:
 
 - Rebuild `ChannelMaster` Debug x64.
 - Repeat the same 20 TUNE cycles and record clean/raspy attempts.
-- Confirm every attempt logs `TX_ATTEMPT_0x06_SENT` before `TX_FIRST_FD`, with `cmd_sent=1` and `firstFdBefore0x06=0`.
+- Confirm every attempt logs `TX_PREPRIME_FD` immediately after `TX_ATTEMPT_0x06_SENT`.
+- Confirm first active `0xFD` delay is now near 0 ms from `0x06=1`, while `firstFdBefore0x06=0` remains true.
 - Confirm `iqGateSkips` is nonzero only near TX start when the callback arrives early, and does not continue growing during TX.
 - Continue checking `rxSilence`, `xrouterTotal`, and `rxAccum` to ensure the RX/VAC underfeed fix remains intact.
 
@@ -117,6 +143,7 @@ Next validation:
 - Full `ChannelMaster` link from this invocation failed because `PA19.lib` is searched under `Project Files/Source/build/x64/Debug`, while the existing dependency libs are under `Project Files/build/x64/Debug`.
 - After the RX silence cap change, `MSBuild ChannelMaster.vcxproj /t:ClCompile /p:SelectedFiles=sunsdr.c /p:Configuration=Debug /p:Platform=x64`: passed with 0 warnings and 0 errors.
 - After the TX IQ gate change, `MSBuild ChannelMaster.vcxproj /t:ClCompile /p:SelectedFiles=sunsdr.c /p:Configuration=Debug /p:Platform=x64`: passed with 0 warnings and 0 errors.
+- After the TX pre-prime change, `MSBuild ChannelMaster.vcxproj /t:ClCompile /p:SelectedFiles=sunsdr.c /p:Configuration=Debug /p:Platform=x64`: passed with 0 warnings and 0 errors.
 
 ## Next Step
 
