@@ -809,9 +809,64 @@ Catches future occurrences of the MOX #5 "no audio" pattern with concrete attemp
 | TUNE clean; MOX still has silent attempts AND `MOX_AUDIO_SILENCE_SUSTAINED` lines appear | WDSP is producing silence for some MOX entries; the flush isn't enough — possibly ASIO/mic device bind issue or WDSP TX chain not actually pulling from VAC. | Deep-dive MOX audio path (VAC IN → xvacIN → TXA feed). |
 | Both modes still problematic | Flush wasn't sufficient; lower-level rewrite needed. | Tier 3 waitable-timer pacing thread OR WDSP version bump / deeper refactor. |
 
+## 2026-04-14 Run 12 (post-Phase-C) — TUNE #8 raspy, log analysis yields nothing
+
+User ran TUNE test after Phase C bundle. Raspy recurred on attempt #8. Log pulled from `Thetis/Project Files/bin/x64/Debug/sunsdr_debug.log`.
+
+### Phase C confirmed running
+
+All six `TIMING_INIT` lines present. `TX_FLUSH_DONE attempt=N channel=10` log entry appears for every TUNE attempt 1-8. WDSP flush is running as designed on every PTT-on.
+
+### Per-attempt data for 8 attempts (1-7 clean, 8 raspy)
+
+| # | Grade | delay_from_ptt_ms | iqGateSkips | txCbRmsAvg | txCbRmsMax | fdGapMax | txCb |
+|---|---|---|---|---|---|---|---|
+| 1 | clean | 0 | 1 | 0.554 | 0.634 | 16 | 1374 |
+| 2 | clean | 16 | 1 | 0.571 | 0.634 | 16 | 1825 |
+| 3 | clean | 16 | 1 | 0.574 | 0.634 | 16 | 1837 |
+| 4 | clean | 15 | 1 | 0.587 | 0.634 | 16 | 2325 |
+| 5 | clean | 0 | 1 | 0.583 | 0.634 | 16 | 2210 |
+| 6 | clean | 0 | 1 | 0.616 | 0.634 | 16 | 6464 |
+| 7 | clean | 0 | 1 | 0.594 | 0.634 | 16 | 2812 |
+| **8** | **RASPY** | **16** | **1** | **0.611** | **0.634** | **16** | **4709** |
+
+**No discriminator.** Every counter for #8 falls inside the clean range. Same `iqGateSkips`, same `delay_from_ptt_ms` as several clean attempts, identical `txCbRmsMax`, similar `txCb`. First 5-6 TX callbacks of every attempt (including clean) have `pre_rms=0.000` (WDSP tone-gen ramp after the flush). VAC1 BEGIN state shows ring asymmetry but no worse for #8 than for clean attempts.
+
+### Dead end on counter-based diagnosis
+
+Seven rounds of counter instrumentation have now been added, and none of them discriminate clean from raspy TUNE. The residual raspy is in content we do not currently observe (the actual wire I/Q sample values). Further speculative fixes are unlikely to succeed without ground truth.
+
+### Next: ground-truth TX IQ recorder
+
+Landed in `sunsdr.c` — per-attempt capture of the first ~1024 ms of outgoing I/Q samples (post-scale, post-downsample, pre-24-bit-quantize) into a ring buffer, written to `sunsdr_tx_iq_<attempt>.raw` at PTT-off.
+
+Format: little-endian IEEE-754 double pairs (I, Q). Size: up to 40000 complex × 16 bytes = 640 KB per attempt.
+
+Post-test workflow: user reproduces the raspy (20 TUNE cycles), notes which attempt numbers went raspy. I read the `.raw` files for raspy attempts vs a sample of clean attempts, compute windowed FFT, compare:
+
+- **Harmonic energy at 2f / 3f / 5f / 7f of the -600 Hz fundamental** → nonlinear distortion (ALC / compressor / saturation).
+- **Noise-floor elevation** in the skirt around fundamental → filter ring residue (FIRCORE / bandpass).
+- **Amplitude envelope modulation** at low frequency → AAMIX slew state.
+- **Instantaneous frequency deviation** / phase wraps → resampler or sample-timing jitter.
+- **DC offset** or bias drift → integer-accumulator issue in our downsampler.
+
+This is the definitive test. Whichever signature appears in the raspy files but not the clean files pins the mechanism.
+
+### MIC sequence-error status bar (user sub-question)
+
+User observed their ANAN Thetis showing "Sequence errors... MIC..." in the status bar and asked if our SUNSDR integration is missing it.
+
+Upstream mechanism: `Project Files/Source/ChannelMaster/network.c:553-557` tracks `mic_in_seq_err` on the ANAN P1/P2 MIC-over-UDP stream. The radio (ANAN) sends mic audio TO the host over UDP with sequence numbers; Thetis validates them.
+
+For SUNSDR this pathway does not apply — our mic audio enters Thetis via VAC (PC audio device → Thetis internal), NOT over the wire. There is no wire-level MIC sequence to validate, so the upstream mechanism has nothing to check and never fires.
+
+Our RX IQ stream DOES have a sequence number and we track gaps as `seqGaps` in `TX_ATTEMPT_END` / `IQ status`. Current value: **0** across all 8 attempts in Run 12. So the SUNSDR RX sequence is clean — no gaps to worry about.
+
+**Action**: none needed as a raspy fix. Not a contributor. Optional UI polish (surface our existing `seqGaps` in the status bar the same way upstream surfaces `mic_in_seq_err`) can be added later as integration cleanup, but is not on the raspy critical path.
+
 ## Next Step
 
-User rebuild (all three projects including WDSP) + Run 12 per protocol above.
+Rebuild ChannelMaster + Thetis (no WDSP change this time — `sunsdr.c` only). Run 8-20 TUNE cycles, note which attempt numbers go raspy. Share: attempt numbers + content of `Thetis/Project Files/bin/x64/Debug/sunsdr_tx_iq_XXXX.raw` files (at least 1 raspy + 2 clean). Spectral comparison identifies the specific mechanism.
 
 User chose to skip histogram correlation and go straight to Phase B spectral capture since it is definitive regardless of the scheduler-stall question.
 

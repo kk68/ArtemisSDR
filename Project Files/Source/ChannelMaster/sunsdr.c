@@ -46,6 +46,102 @@ extern void getCMAevents(long* overFlowsIn, long* overFlowsOut, long* underFlows
  * of what state the previous MOX/TUNE session left behind. */
 extern __declspec(dllimport) void FlushChannelNow (int channel);
 
+/* TX IQ ground-truth recorder.
+ *
+ * Counters on MOX #5 (no audio on-air) and TUNE #8 (raspy, Run post-Phase C)
+ * showed NO discriminator between clean and failing attempts. Run 11's
+ * TX_CB_GAP_HIST proved scheduler preemption is no longer the driver. The
+ * Phase C TXA flush did not close the raspy. Hypothesis space for the
+ * residual failure is wide and log-inspection is no longer informative —
+ * need direct capture of the I/Q content we emit on the wire during the
+ * failing attempt, compared against a clean-attempt baseline from the
+ * same test run, to see whether the distortion is
+ *   (a) nonlinear (harmonics on the fundamental tone),
+ *   (b) wideband noise (filter-ring residue),
+ *   (c) amplitude modulation (AAMIX / ALC),
+ *   (d) phase jitter (resampler / sample timing),
+ * or something we have not considered.
+ *
+ * Buffer: 40000 complex = ~1024 ms at 39062.5 Hz TX rate. Captures the
+ * first second of each TX attempt. Writes to sunsdr_tx_iq_<attempt>.raw
+ * in the same directory as sunsdr_debug.log when the attempt ends.
+ * Format: little-endian IEEE-754 double pairs (I, Q). Exactly the post-
+ * scaling, post-downsampling values enqueued into the outgoing UDP
+ * payload — the ground truth of what the radio sees.
+ *
+ * Size: 40000 complex * 16 bytes = 640 KB per attempt. Acceptable.
+ */
+#define IQ_DUMP_MAX_COMPLEX 40000
+static double iq_dump_buf[IQ_DUMP_MAX_COMPLEX * 2];
+static volatile LONG iq_dump_count = 0;      /* number of complex samples captured */
+static LONG iq_dump_attempt_id = 0;
+static char iq_dump_dir[MAX_PATH] = {0};
+static volatile LONG iq_dump_enabled = 0;    /* 1 during PTT=1, 0 otherwise */
+
+static void iq_dump_init_path(void)
+{
+    char *slash;
+    DWORD len;
+    if (iq_dump_dir[0] != '\0') return;
+    len = GetModuleFileNameA(NULL, iq_dump_dir, (DWORD)sizeof(iq_dump_dir));
+    if (len == 0 || len >= sizeof(iq_dump_dir)) {
+        strncpy(iq_dump_dir, ".", sizeof(iq_dump_dir) - 1);
+        iq_dump_dir[sizeof(iq_dump_dir) - 1] = '\0';
+        return;
+    }
+    slash = strrchr(iq_dump_dir, '\\');
+    if (!slash) slash = strrchr(iq_dump_dir, '/');
+    if (slash) *slash = '\0';
+    else {
+        strncpy(iq_dump_dir, ".", sizeof(iq_dump_dir) - 1);
+        iq_dump_dir[sizeof(iq_dump_dir) - 1] = '\0';
+    }
+}
+
+static void iq_dump_reset(int attempt_id)
+{
+    InterlockedExchange(&iq_dump_count, 0);
+    iq_dump_attempt_id = attempt_id;
+    InterlockedExchange(&iq_dump_enabled, 1);
+}
+
+static void iq_dump_append(double I, double Q)
+{
+    LONG n;
+    int idx;
+    if (!InterlockedAnd(&iq_dump_enabled, 0xffffffff)) return;
+    n = InterlockedIncrement(&iq_dump_count);
+    if (n > IQ_DUMP_MAX_COMPLEX) return;
+    idx = (int)(n - 1) * 2;
+    iq_dump_buf[idx + 0] = I;
+    iq_dump_buf[idx + 1] = Q;
+}
+
+static void iq_dump_flush_to_disk(void)
+{
+    LONG n;
+    FILE *f;
+    char path[MAX_PATH];
+    InterlockedExchange(&iq_dump_enabled, 0);
+    n = InterlockedAnd(&iq_dump_count, 0xffffffff);
+    if (n <= 0) return;
+    if (n > IQ_DUMP_MAX_COMPLEX) n = IQ_DUMP_MAX_COMPLEX;
+    iq_dump_init_path();
+    _snprintf(path, sizeof(path), "%s\\sunsdr_tx_iq_%04ld.raw",
+        iq_dump_dir, iq_dump_attempt_id);
+    path[sizeof(path) - 1] = '\0';
+    f = fopen(path, "wb");
+    if (!f) {
+        sdr_logf("IQ_DUMP_FAIL attempt=%ld err=%d path=%s\n",
+            iq_dump_attempt_id, errno, path);
+        return;
+    }
+    fwrite(iq_dump_buf, sizeof(double), (size_t)n * 2, f);
+    fclose(f);
+    sdr_logf("IQ_DUMP_WROTE attempt=%ld complex_samples=%ld bytes=%zu path=%s\n",
+        iq_dump_attempt_id, n, (size_t)n * 2 * sizeof(double), path);
+}
+
 /* Debug log: async deferred logger.
  *
  * Callers invoke sdr_logf() as before. Instead of doing synchronous fprintf +
@@ -898,6 +994,11 @@ static void sunsdr_queue_tx_packet_locked(double I, double Q)
     sdr.txAccumBuf[2 * idx + 0] = I;
     sdr.txAccumBuf[2 * idx + 1] = Q;
     sdr.txAccumCount++;
+
+    /* Ground-truth IQ recording: this is the exact post-scaling, post-
+     * downsampling value that enters the outgoing UDP packet payload
+     * (before 24-bit LE quantization, but within 24-bit precision). */
+    iq_dump_append(I, Q);
 
     if (sdr.txAccumCount >= SUNSDR_IQ_COMPLEX_PER_PKT) {
         sunsdr_send_tx_packet(sdr.txAccumBuf);
@@ -2350,6 +2451,18 @@ void SunSDRSetPTT(int ptt)
             sdr_logf("TX_FLUSH_FAIL attempt=%d channel=%d exception=0x%08X\n",
                 attempt_id, tx_chan, GetExceptionCode());
         }
+        /* Arm the ground-truth IQ recorder for this attempt. Append happens
+         * inside sunsdr_queue_tx_packet_locked; flush to disk happens on
+         * PTT-off below. */
+        iq_dump_reset(attempt_id);
+    } else {
+        /* Flush the accumulated IQ buffer to sunsdr_tx_iq_<attempt>.raw
+         * (little-endian double I/Q pairs). Post-test analysis: compare
+         * clean-attempt vs raspy-attempt files spectrally (FFT on a 100 ms
+         * window) to identify whether the distortion signature is harmonic
+         * (ALC/compressor), wideband noise (FIR ring), AM (AAMIX slew),
+         * or phase jitter (rmatch / sample timing). */
+        iq_dump_flush_to_disk();
     }
 
     sdr_logf("SunSDRSetPTT(%d) currentTune=%d rx1=%d rx2=%d tx=%d rxAnt=%d txAnt=%d pa=%d seq=%u txPhase=%.4f txAccum=%d drive=%.3f rawDrive=%d fs=%.3f attempt=%ld\n",
