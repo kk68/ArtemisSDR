@@ -1978,6 +1978,15 @@ static void sunsdr_reassert_tx_state(void)
         sunsdr_send_u32_cmd(SUNSDR_OP_RX_ANT, (unsigned int)selector);
         sunsdr_send_u32_cmd(SUNSDR_OP_KEEPALIVE, 0);
     }
+
+    /* Send 0x24 before config block + PTT. Present in the EESDR
+     * "pa_on_in_tune" wire capture as part of the TUNE-entry sequence
+     * (0x17 -> 0x24 -> 0x18 -> 0x20 -> 0x09 -> 0x06). We were skipping
+     * it and seeing intermittent zero-RF TX attempts (2/10 failing).
+     * Exact function of 0x24 is not documented in our reverse-engineered
+     * protocol notes, but EESDR always sends it. Mirroring that. */
+    sunsdr_send_u32_cmd(0x24, 0);
+    sdr_logf("Reassert TX 0x24: arm-TX handshake\n");
 }
 
 static void sunsdr_reassert_rx_state(void)
