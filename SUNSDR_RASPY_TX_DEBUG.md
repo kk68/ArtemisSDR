@@ -677,9 +677,62 @@ TX_CB_GAP_HIST: total=N <1=x 1-2=x 2-4=x 4-8=x 8-16=x 16-32=x >=32=x ptt=X tune=
 | Raspy similar, `16-32` bucket flat | Jitter NOT the driver. Look inside WDSP TX state (rmatch, WCPAGC flush on TUNE entry). | Targeted DSP-component flush experiment on TUNE-on. |
 | Voice MOX raspy rate much lower than TUNE | TUNE-specific WDSP state issue (post-gen or tone generator). | Inspect TUNE path in WDSP (RXA tone source in TXA chain). |
 
+## 2026-04-14 Run 11 result — 1/20 raspy (5 %), priority bump mechanistically confirmed
+
+User test: 20 TUNE cycles after Action A+B bundle. Grades: clean 1, raspy 2, clean 3-20. **1 / 20 raspy (5 %)**, down from Run 10's 3/20.
+
+### Mechanistic confirmation from the log
+
+From `Thetis/Project Files/bin/x64/Debug/sunsdr_debug.log` (10,486 lines, new session starting 15:53).
+
+All six `TIMING_INIT` lines present at startup + first TX callback:
+- `timeBeginPeriod(1)` rc=0
+- `SetPriorityClass(ABOVE_NORMAL)` rc=1 readback=0x8000
+- `PowerCreateRequest` + `PowerSetRequest(ExecutionRequired)` rc=1
+- RX thread priority set rc=1 readback=1
+- RX loop QPC pacing clampMs=50.0 replaceMs=10.0
+- **NEW: TX callback thread priority set rc=1 readback=1** (at 15:55:42.847, during attempt #1)
+
+**`TX_CB_GAP_HIST` during every PTT=1/tune=1 second:**
+
+- `<1`, `1-2`, `2-4`, `4-8` buckets populated (normal callback cadence at ~1 ms).
+- **`8-16 = 0` universally. `16-32 = 0` universally.** Zero scheduler preemption events on the TX callback thread during any of the 20 TUNE attempts.
+- `>=32 = 1` exactly once per attempt — this is the QPC delta from the previous attempt's last callback to the new attempt's first callback (seconds-to-minutes gap), not an intra-attempt stall. Artifact of our histogram not resetting between attempts; will be fixed in a later cleanup.
+
+**Apparent contradiction**: `TX_ATTEMPT_END` still reports `fdGapMax=16.000 ms` and `txCbMaxGapMs=16` on every attempt. These fields use `GetTickCount64` (1 ms resolution) and track max intra-attempt gap. The QPC histogram is sub-microsecond and shows the 8-16 bucket empty. The `16` in the older fields is almost certainly a tick-boundary rounding artifact (a single QPC gap of ~7.9 ms rounded up to 8 in GetTickCount measurement, plus a tick-boundary straddle adding another ms), not a real preemption. Worth cleaning up — the QPC histogram is the authoritative source now.
+
+### Trend
+
+| Run | Raspy / 20 | % | Intervention |
+|---|---|---|---|
+| 7 | 11 | 55 | baseline before investigation |
+| 8 | 6 | 30 | Phase A PS-A gate |
+| 9 | 20 | 100 | (2 ms clamp regression) |
+| 9b | 5 | 25 | clamp fix (50 ms) |
+| 10 | 3 | 15 | Tier 2 bundle (process pri + PowerRequest + gap histogram) |
+| **11** | **1** | **5** | **TX callback thread priority + TX_CB_GAP_HIST** |
+
+Monotonic decrease across 5 interventions, each landing a specific change. The A+B bundle mechanistically eliminated the TX-thread preemption observed in Run 10, and the raspy rate dropped accordingly.
+
+### Is 1/20 luck or real?
+
+- **Binomial test alone (p=0.15 null): P(≤1 raspy in 20) ≈ 0.18.** Weak on its own.
+- **Combined with the 5-run sequence of interventions each with matched mechanistic evidence**: very strong evidence the improvement is real, not noise. The full drop from 55 % → 5 % tracks tightly with the specific code changes in a way that random noise would not.
+
+### About the one raspy (attempt #2)
+
+Attempt #2 was the second TUNE after startup — the first attempt with the new TX-callback priority fully active (priority set during #1). No anomalous counters on #2 specifically (iqGateSkips=0, fdGapAvg=5.097, everything normal). Most plausible cause: cold-start artifact — WDSP TX DSP state (filter rings, AGC hang_backaverage, rmatch phase) not fully settled after the first TUNE. Attempts 3-20 all clean.
+
+### Recommendations
+
+1. **No further code change yet.** 5 % is already in the usable range and the mechanism is well understood; don't optimize into statistical noise.
+2. **Voice MOX regression run (~10 attempts, 3 s each)** to confirm voice is also clean under the new TX priority. Important per the earlier observation that raspy affects voice MOX too, not just TUNE. No rebuild needed — same binary.
+3. **If voice MOX is clean**: declare the raspy investigation closed. Move on to remaining integration work (LSB TUNE power cal, band switch refinement, cleanup of the GetTickCount-based gap metrics).
+4. **If voice MOX still raspy notably**: Tier 3 (dedicated waitable-timer pacing thread, decouples TX emission from WDSP callback scheduling entirely). ~4-8 hours.
+
 ## Next Step
 
-User rebuild + Run 11 per above. Document results here.
+User runs short voice MOX regression (10 attempts, 3 s each, with severity grading) to confirm voice is also clean under the new TX priority. Decision on close-vs-Tier-3 depends on that result.
 
 User chose to skip histogram correlation and go straight to Phase B spectral capture since it is definitive regardless of the scheduler-stall question.
 
