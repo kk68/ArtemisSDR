@@ -579,6 +579,19 @@ static double sunsdr_dbg_tx_cb_peak_max = 0.0;
 static ULONGLONG sunsdr_dbg_tx_cb_last_tick = 0;
 static ULONGLONG sunsdr_dbg_tx_cb_max_gap_ms = 0;
 
+/* TX callback QPC gap tracking + histogram. The TX callback runs on the
+ * WDSP TX channel worker thread (spawned by cm_main/SendpOutboundTx), which
+ * is NOT the RX read thread we already boosted. Run 10 log showed RX loop
+ * never sees an 8+ ms gap during TUNE, but TX_ATTEMPT_END still reports
+ * fdGapMax=16.000 ms on every attempt — so the stall is on THIS thread.
+ *
+ * Buckets (ms): [0] <1, [1] 1-2, [2] 2-4, [3] 4-8, [4] 8-16, [5] 16-32, [6] >=32
+ * Normal: most callbacks sub-millisecond apart (nsamples=256 @ 192k = 1.33 ms).
+ * Scheduler tick events would show in [4]/[5]. >=32 is pathology. */
+#define SDR_TX_CB_HIST_BUCKETS 7
+static LARGE_INTEGER sunsdr_dbg_tx_cb_last_qpc = {0};
+static volatile LONG sunsdr_dbg_tx_cb_gap_hist[SDR_TX_CB_HIST_BUCKETS] = {0};
+
 static const char* sunsdr_tx_mode_label(int tune)
 {
     return tune ? "TUNE" : "MOX";
@@ -982,6 +995,41 @@ static void sunsdr_tx_outbound(int id, int nsamples, double* buff)
     {
         ULONGLONG now_tick = GetTickCount64();
         LONG cb_count = InterlockedIncrement(&sunsdr_dbg_tx_cb_count);
+        static BOOL tx_cb_priority_set = FALSE;
+        LARGE_INTEGER qpc_freq_local;
+        LARGE_INTEGER now_qpc;
+
+        /* First TX callback: self-elevate this thread to ABOVE_NORMAL so the
+         * WDSP TX channel worker stops losing quanta to UI / background.
+         * Run 10 evidence: RX loop histogram shows zero stalls (that thread
+         * is already boosted), but fdGapMax=16.000 ms on every TX_ATTEMPT_END
+         * means this thread is still being preempted. Addressed here. */
+        if (!tx_cb_priority_set) {
+            BOOL sp_ok = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
+            int sp_val = GetThreadPriority(GetCurrentThread());
+            sdr_logf("TIMING_INIT: TX callback thread priority set rc=%d readback=%d (ABOVE_NORMAL=1)\n",
+                (int)sp_ok, sp_val);
+            tx_cb_priority_set = TRUE;
+        }
+
+        /* QPC-based per-callback gap bucketed into the TX callback histogram.
+         * Emitted once per second from the RX loop's per-second log block. */
+        QueryPerformanceCounter(&now_qpc);
+        QueryPerformanceFrequency(&qpc_freq_local);
+        if (sunsdr_dbg_tx_cb_last_qpc.QuadPart > 0 && qpc_freq_local.QuadPart > 0) {
+            double gap_ms_qpc = (double)(now_qpc.QuadPart - sunsdr_dbg_tx_cb_last_qpc.QuadPart)
+                * 1000.0 / (double)qpc_freq_local.QuadPart;
+            int bi;
+            if (gap_ms_qpc < 1.0) bi = 0;
+            else if (gap_ms_qpc < 2.0) bi = 1;
+            else if (gap_ms_qpc < 4.0) bi = 2;
+            else if (gap_ms_qpc < 8.0) bi = 3;
+            else if (gap_ms_qpc < 16.0) bi = 4;
+            else if (gap_ms_qpc < 32.0) bi = 5;
+            else bi = 6;
+            InterlockedIncrement(&sunsdr_dbg_tx_cb_gap_hist[bi]);
+        }
+        sunsdr_dbg_tx_cb_last_qpc = now_qpc;
 
         if (sunsdr_dbg_tx_cb_last_tick > 0 && now_tick >= sunsdr_dbg_tx_cb_last_tick) {
             ULONGLONG gap_ms = now_tick - sunsdr_dbg_tx_cb_last_tick;
@@ -2644,6 +2692,25 @@ DWORD WINAPI SunSDRReadThread(LPVOID param)
                 }
                 sdr_logf("RX_GAP_HIST: total=%u <1=%u 1-2=%u 2-4=%u 4-8=%u 8-16=%u 16-32=%u >=32=%u ptt=%d tune=%d\n",
                     total, d[0], d[1], d[2], d[3], d[4], d[5], d[6],
+                    sdr.currentPTT, sdr.currentTune);
+            }
+            {
+                /* TX callback gap histogram: scheduler stalls on the WDSP TX
+                 * channel worker thread. Expected normal: mostly <1 and 1-2.
+                 * Any counts in 8-16 / 16-32 reveal TX-thread preemption
+                 * events that correlate with raspy attempts. */
+                static unsigned int tx_cb_hist_prev[SDR_TX_CB_HIST_BUCKETS] = {0};
+                unsigned int td[SDR_TX_CB_HIST_BUCKETS];
+                unsigned int ttotal = 0;
+                int tbi;
+                for (tbi = 0; tbi < SDR_TX_CB_HIST_BUCKETS; tbi++) {
+                    unsigned int cur = (unsigned int)sunsdr_dbg_tx_cb_gap_hist[tbi];
+                    td[tbi] = cur - tx_cb_hist_prev[tbi];
+                    tx_cb_hist_prev[tbi] = cur;
+                    ttotal += td[tbi];
+                }
+                sdr_logf("TX_CB_GAP_HIST: total=%u <1=%u 1-2=%u 2-4=%u 4-8=%u 8-16=%u 16-32=%u >=32=%u ptt=%d tune=%d\n",
+                    ttotal, td[0], td[1], td[2], td[3], td[4], td[5], td[6],
                     sdr.currentPTT, sdr.currentTune);
             }
             {

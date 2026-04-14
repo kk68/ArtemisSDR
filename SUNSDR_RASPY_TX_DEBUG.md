@@ -604,6 +604,129 @@ Code audit result:
 
 **Decision (user-approved)**: Drop for now. Revisit post-raspy as architectural cleanup (cleaner code, modest CPU reduction, aligned with radio rate, no custom-resampler maintenance burden). Detailed audit + file list stored in memory `project_native_312_5k_rate_refactor.md`.
 
+## 2026-04-14 Run 10 log analysis — scheduler stall is on the TX callback thread
+
+User rejected the original Phase B plan (packet capture from ExpertSDR3 TUNE) as misaligned: the raspy also affects voice MOX, not just TUNE, and Thetis generates its own TUNE tone so capturing EESDR TUNE was irrelevant. Re-evaluated based on the actual Run 10 log at `Thetis/Project Files/bin/x64/Debug/sunsdr_debug.log` (28,428 lines, 3.7 MB).
+
+### Findings
+
+1. **All five `TIMING_INIT` log lines present** at startup: `timeBeginPeriod(1)` rc=0, `SetPriorityClass(ABOVE_NORMAL)` rc=1 readback=0x8000, `PowerSetRequest(ExecutionRequired)` rc=1, RX thread priority set rc=1 readback=1, RX loop QPC pacing clampMs=50.0. Tier 1 + Tier 2 changes all took effect.
+
+2. **RX read thread is pristine during TUNE.** `RX_GAP_HIST` lines during every PTT=1/tune=1 second show:
+   - `<1`, `1-2`, `2-4`, `4-8` buckets all populated (normal: ~170 counts in `4-8` matching the 5.12 ms radio throttle cadence).
+   - **`8-16=0`, `16-32=0`, `>=32=0` universally.** Zero scheduler preemption events on the RX read thread across all 20 TUNE attempts.
+
+3. **But `fdGapMax=16.000 ms` on every TX_ATTEMPT_END** (clean AND raspy alike). That gap is measured between outgoing FD packets emitted from `sunsdr_tx_outbound`, the **WDSP TX callback** — which runs on a different cm_main-spawned worker thread that we **never boosted**. Smoking gun: scheduler jitter moved off the RX thread and is now on the TX callback thread.
+
+4. **Per-attempt discriminator analysis across the 20 TUNE attempts** (via TX_FIRST_FD / TX_ATTEMPT_END):
+
+   | # | Grade | delay_from_ptt_ms | delay_from_0x06_ms | iqGateSkips | fdGapMax |
+   |---|---|---|---|---|---|
+   | 11 | RASPY | 16 | 16 | 1 | 16 |
+   | 14 | RASPY | 15 | 0 | **4** (anomalous) | 16 |
+   | 15 | RASPY | 16 | 16 | 1 | 16 |
+   | 7 | clean | 16 | 16 | 1 | 16 |
+   | 17 | clean | 16 | 16 | 1 | 16 |
+
+   No single logged variable cleanly discriminates raspy from clean. The 16 ms delays appear in both groups. The discriminator must be inside WDSP TX DSP state, not our packet layer. `iqGateSkips=4` on raspy #14 is anomalous (others 0-2) but only 1 of 3 raspy attempts exhibit it.
+
+5. **Bonus**: log contains 5 voice MOX attempts (#22-26) from later in the session. User has raspy in MOX too (not documented, but the data is there for future correlation).
+
+### Hypothesis confirmed to act on
+
+The TX callback thread (WDSP TX channel worker) is still at NORMAL priority and is being preempted. Boost it, add a TX-callback gap histogram so we can see the preemptions directly.
+
+## 2026-04-14 Action A+B landed — ready for Run 11
+
+Two changes in `sunsdr.c`:
+
+### A. Self-elevate TX callback thread priority to ABOVE_NORMAL on first entry
+
+At the top of the diagnostic block inside `sunsdr_tx_outbound`, a `static BOOL tx_cb_priority_set = FALSE` gates a one-time `SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL)`. Logs `TIMING_INIT: TX callback thread priority set rc=1 readback=1 (ABOVE_NORMAL=1)` on the first TX callback of the session. Directly attacks the observed 16 ms `fdGapMax` / `txCbMaxGapMs` values.
+
+### B. TX callback QPC gap histogram
+
+New file-static array `sunsdr_dbg_tx_cb_gap_hist[7]` (Interlocked-incremented) and `sunsdr_dbg_tx_cb_last_qpc`. Each `sunsdr_tx_outbound` call computes the QPC delta since the previous callback, buckets into `<1 / 1-2 / 2-4 / 4-8 / 8-16 / 16-32 / >=32 ms`, and increments atomically. Emitted once per second from the RX loop's per-second log block as:
+
+```
+TX_CB_GAP_HIST: total=N <1=x 1-2=x 2-4=x 4-8=x 8-16=x 16-32=x >=32=x ptt=X tune=Y
+```
+
+### Expected shapes
+
+- TX callback fires at ~1000+/sec during active TX. Normal: counts concentrated in `<1` and `1-2` buckets.
+- Any scheduler preemption on the TX thread shows in `8-16` or `16-32` buckets. Each such event is a candidate raspy trigger.
+- Pre-fix Run 10 (what we don't have yet, but will): expect some `16-32` counts during PTT=1.
+- Post-fix Run 11: expect `16-32` counts to collapse if the priority bump works.
+
+### Run 11 verification (user)
+
+1. Rebuild ChannelMaster + Thetis Debug x64.
+2. Start Thetis with SUNSDR2 DX. On first MOX/TUNE, confirm in `sunsdr_debug.log`:
+   `TIMING_INIT: TX callback thread priority set rc=1 readback=1 (ABOVE_NORMAL=1)` appears.
+3. Run 20 TUNE cycles. Record clean/slight/moderate/heavy per attempt.
+4. Optional: also do a short voice MOX sequence (say "testing testing testing one two three" for ~3 s, 10 cycles) to capture the voice-MOX raspy rate under the new priority.
+5. Inspect `TX_CB_GAP_HIST` lines during PTT=1 windows — compare `8-16` / `16-32` / `>=32` bucket counts against Run 10 (we'll have both in the log from the same session).
+
+### Run 11 decision matrix
+
+| Outcome | Interpretation | Next |
+|---|---|---|
+| Raspy drops further, `16-32` bucket flat during TUNE | Priority bump closed the TX-callback preemption. Likely path to stability. | Continue testing voice MOX and transient scenarios; consider closing. |
+| Raspy similar, `16-32` still lights up on raspy attempts | Priority bump alone not enough; scheduler is preempting anyway. | Tier 3: dedicated waitable-timer TX pacing thread decoupled from WDSP callback entirely. |
+| Raspy similar, `16-32` bucket flat | Jitter NOT the driver. Look inside WDSP TX state (rmatch, WCPAGC flush on TUNE entry). | Targeted DSP-component flush experiment on TUNE-on. |
+| Voice MOX raspy rate much lower than TUNE | TUNE-specific WDSP state issue (post-gen or tone generator). | Inspect TUNE path in WDSP (RXA tone source in TXA chain). |
+
 ## Next Step
 
-Histogram correlation still outstanding: need `RX_GAP_HIST` snippets from `sunsdr_debug.log` covering raspy attempts 11, 14, 15 vs clean samples to pick between Tier 3 (waitable-timer pacing thread, ~4-8 hours) and Phase B (spectral capture, ~2-4 hours).
+User rebuild + Run 11 per above. Document results here.
+
+User chose to skip histogram correlation and go straight to Phase B spectral capture since it is definitive regardless of the scheduler-stall question.
+
+### Capture script
+
+Created `sunsdr-re/scripts/windows/Capture-RaspyTuneCycles.ps1`. Reuses the existing `Invoke-SunSDRCapture` function. Parameters default to:
+
+- 20 TUNE cycles, 3 s on / 5 s off each (wide 5 s gaps so each attempt is cleanly separable in the wire trace and WAV spectrogram).
+- 10 s pre-action lead-in, 160 s action window (20 × 8 s), 10 s post-action tail → ~180 s total capture.
+- TargetIp 10.0.3.50 (radio), Interface must be supplied (user memory: interface 10 faces the radio network 10.0.3.x).
+
+Run from PowerShell as administrator (dumpcap requires elevation on Windows):
+
+```
+cd c:\Users\kosta\ham\SUNSDR\sunsdr-re\scripts\windows
+.\Capture-RaspyTuneCycles.ps1 -Interface 10
+```
+
+### Protocol for the user
+
+1. **Before running the script**: Start Anan RX audio WAV recording on the right-side Thetis (it has a wav recorder). Note the WAV file path so we can find it after.
+2. **Open a text file** (or a spreadsheet column) to grade each attempt. Format: one line per cycle, `<number> <grade>`, e.g. `1 0`, `2 2`, `3 0`... where `0=clean / 1=slight / 2=moderate / 3=heavy`.
+3. **Run the PowerShell script**. It will print "ACTION WINDOW START" when the pre-action lead-in finishes.
+4. **During the action window** (160 s): Press TUNE for 3 s, release, wait 5 s, repeat — 20 times. After each cycle, record the severity grade.
+5. **After the script ends**: stop the WAV recording. Report back:
+   - `pcap_path` (from script output)
+   - `tsv_path` (from script output)
+   - WAV file path
+   - The 20 severity grades
+
+### What I'll do with the data
+
+For each of the 20 attempts, extract the `0xFD` TX packets from the pcap's action window, decode to I/Q floats, apply windowed FFT at the known TUNE tone frequency (-600 Hz by default), and compute per-attempt metrics:
+
+- Fundamental tone purity (how close to a single spectral line).
+- Harmonic energy at 2f / 3f / 5f / 7f relative to the fundamental.
+- Noise floor ±100 Hz around the fundamental.
+- Amplitude modulation envelope at 10-100 Hz rates.
+- Any sudden amplitude step within the attempt window.
+
+Tabulate per-attempt metrics against the user's severity grades. Cross-reference with the WAV spectrogram for the same window. The resulting decision tree picks the DSP-component culprit:
+
+- Harmonics dominate → ALC (`WCPAGC`) or clipping. Fix candidate: `flush_wcpagc` + reset hang_backaverage on TUNE-on.
+- Noise floor elevated uniformly → FIRCORE bandpass ring residue or `xiqc`. Fix: `flush_fircore` on bp0/bp1/bp2.
+- Amplitude modulation at envelope rate → AAMIX slew. Fix: `flush_aaslew`.
+- Phase jitter / frequency drift → rmatch resampler state (the prime suspect based on Run 9b/10 evidence). Fix: `xrmatchIN`/`xrmatchOUT` flush.
+
+## Next Step
+
+User runs `Capture-RaspyTuneCycles.ps1` with 20 TUNE cycles + WAV recording + severity grading. Then sends back pcap + tsv + WAV path + grade list for spectral analysis.
