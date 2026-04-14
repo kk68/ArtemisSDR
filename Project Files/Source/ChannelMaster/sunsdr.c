@@ -226,6 +226,14 @@ static HANDLE tx_pace_ptt_event = NULL;   /* signalled on PTT=1, reset on PTT=0 
 static volatile LONG tx_pace_stop = 0;
 static volatile LONG tx_pace_ready = 0;
 
+/* Last emitted packet — repeated on underrun so the radio's DAC always
+ * has a packet every 5.12 ms tick (no on-wire silence gaps that would
+ * surface as audible pulses). Protected by tx_pace_last_valid + the
+ * pacing thread being the only writer. */
+static unsigned char tx_pace_last_packet[SUNSDR_IQ_PKT_SIZE];
+static volatile LONG tx_pace_last_valid = 0;
+static volatile LONG tx_pace_repeats = 0;
+
 static DWORD WINAPI tx_pace_thread_proc(LPVOID lp)
 {
     LARGE_INTEGER due;
@@ -252,6 +260,30 @@ static DWORD WINAPI tx_pace_thread_proc(LPVOID lp)
         WaitForSingleObject(tx_pace_ptt_event, INFINITE);
         if (InterlockedAnd(&tx_pace_stop, 0xffffffff)) break;
 
+        /* Pre-buffer: wait until the producer has stashed at least
+         * TX_PACE_PREBUFFER packets in the ring before we start emitting.
+         * Steady-state producer rate is ~195 pps (matching consumer),
+         * but WDSP callback jitter can leave holes of up to 16 ms. A
+         * head-start of 4 packets (~20 ms buffer depth) absorbs those
+         * holes without on-wire silence gaps. Cap the wait so TX still
+         * starts even if the producer is pathologically slow. */
+        {
+            int wait_ms = 0;
+            const int prebuf = 4;
+            const int max_wait_ms = 40;  /* don't wait longer than 40 ms */
+            while (sdr.currentPTT && !InterlockedAnd(&tx_pace_stop, 0xffffffff)) {
+                LONG h = InterlockedAnd(&tx_pace_head, 0xffffffff);
+                LONG t = InterlockedAnd(&tx_pace_tail, 0xffffffff);
+                LONG avail = (h >= t) ? (h - t) : (TX_PACE_RING_SLOTS - t + h);
+                if (avail >= prebuf) break;
+                if (wait_ms >= max_wait_ms) break;
+                Sleep(1);
+                wait_ms++;
+            }
+            sdr_logf("TX_PACE_WARMUP waited_ms=%d target_prebuf=%d\n",
+                wait_ms, prebuf);
+        }
+
         /* Inner loop: emit at exactly 5.12 ms cadence while PTT=1. */
         while (sdr.currentPTT && !InterlockedAnd(&tx_pace_stop, 0xffffffff)) {
             due.QuadPart = TX_PACE_TICK_100NS;
@@ -271,39 +303,68 @@ static DWORD WINAPI tx_pace_thread_proc(LPVOID lp)
             }
 
             {
+                struct sockaddr_in dest = sunsdr_stream_dest();
                 LONG t = InterlockedAnd(&tx_pace_tail, 0xffffffff);
                 LONG h = InterlockedAnd(&tx_pace_head, 0xffffffff);
-                if (t == h) {
-                    InterlockedIncrement(&tx_pace_underruns);
+                int had_packet = (t != h);
+                const unsigned char* pkt_to_send = NULL;
+
+                if (sdr.streamSock == INVALID_SOCKET || sdr.streamSock == 0)
                     continue;
-                }
-                {
-                    struct sockaddr_in dest = sunsdr_stream_dest();
-                    unsigned int seq;
 
-                    if (sdr.streamSock == INVALID_SOCKET || sdr.streamSock == 0)
+                if (had_packet) {
+                    pkt_to_send = tx_pace_ring[t];
+                    /* Cache this packet so we can repeat it on a future
+                     * underrun instead of producing an on-wire gap. */
+                    memcpy(tx_pace_last_packet, tx_pace_ring[t], SUNSDR_IQ_PKT_SIZE);
+                    InterlockedExchange(&tx_pace_last_valid, 1);
+                } else {
+                    /* Underrun — ring empty. If we've emitted anything this
+                     * session, repeat the last-known packet to keep the
+                     * radio's DAC fed on its strict 5.12 ms cadence. This
+                     * turns a 5 ms on-wire silence gap (audible "pulse")
+                     * into a one-tick content repeat (much less audible;
+                     * adjacent packets of a steady tone are nearly
+                     * identical anyway). */
+                    InterlockedIncrement(&tx_pace_underruns);
+                    if (InterlockedAnd(&tx_pace_last_valid, 0xffffffff)) {
+                        pkt_to_send = tx_pace_last_packet;
+                        InterlockedIncrement(&tx_pace_repeats);
+                    } else {
+                        /* Nothing to repeat yet — skip this tick. Only
+                         * happens at very first tick post-PTT-on before
+                         * the producer has delivered anything. */
                         continue;
+                    }
+                }
 
-                    /* Packet content + header (including seq) already built
-                     * by the producer. Send verbatim. */
-                    sendto(sdr.streamSock, (const char*)tx_pace_ring[t], SUNSDR_IQ_PKT_SIZE, 0,
-                        (struct sockaddr*)&dest, sizeof(dest));
+                sendto(sdr.streamSock, (const char*)pkt_to_send, SUNSDR_IQ_PKT_SIZE, 0,
+                    (struct sockaddr*)&dest, sizeof(dest));
 
+                {
                     /* Reconstruct seq from the buffer for the packet-gap
                      * diagnostic so our existing fdGap* stats remain valid. */
-                    seq = (unsigned int)tx_pace_ring[t][6] |
-                          ((unsigned int)tx_pace_ring[t][7] << 8);
+                    unsigned int seq = (unsigned int)pkt_to_send[6] |
+                                       ((unsigned int)pkt_to_send[7] << 8);
                     sdr.txAudioPackets++;
                     sunsdr_dbg_note_tx_packet(seq);
                     InterlockedIncrement(&tx_pace_emitted);
                 }
-                InterlockedExchange(&tx_pace_tail, (t + 1) % TX_PACE_RING_SLOTS);
+
+                if (had_packet) {
+                    InterlockedExchange(&tx_pace_tail, (t + 1) % TX_PACE_RING_SLOTS);
+                }
             }
         }   /* end inner while (PTT=1) */
+
+        /* PTT just dropped — reset last-packet cache so the next TX
+         * session doesn't start by repeating a stale packet from the
+         * previous session. */
+        InterlockedExchange(&tx_pace_last_valid, 0);
     }       /* end outer while (stop) */
 
-    sdr_logf("TX_PACE_EXIT drops=%ld underruns=%ld emitted=%ld\n",
-        tx_pace_drops, tx_pace_underruns, tx_pace_emitted);
+    sdr_logf("TX_PACE_EXIT drops=%ld underruns=%ld repeats=%ld emitted=%ld\n",
+        tx_pace_drops, tx_pace_underruns, tx_pace_repeats, tx_pace_emitted);
     return 0;
 }
 
