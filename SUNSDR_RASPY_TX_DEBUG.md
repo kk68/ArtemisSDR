@@ -547,6 +547,51 @@ User chose Tier 2 bundle over Phase B. Three changes applied to `sunsdr.c`:
 | Raspy similar, `16-32` bucket empty — no evidence of scheduler stalls | Raspy is NOT scheduler-driven. Move to Phase B (wire capture + spectral) to identify the actual DSP-component culprit. | Phase B. |
 | `<1` bucket populated during TUNE (not 4-8) | recv loop is looping faster than radio packets — something's wrong with the socket recv pacing. | Debug recv pattern before interpreting raspy. |
 
+## 2026-04-14 Run 10 result — Tier 2 bundle reduced raspy to 3/20 (15 %)
+
+User test: 20 TUNE cycles at UI drive 1 after Tier 2 bundle (process priority ABOVE_NORMAL + PowerRequest ExecutionRequired + gap histogram).
+
+Reported results:
+
+- Pure clean: 1, 3, 4, 5, 6, 7, 8, 10, 12, 13, 16, 17, 18, 20 — **14 / 20**
+- Clean-with-note: 2, 9, 19 — 3 / 20
+- Raspy: 11, 14, 15 — **3 / 20 (15 %)**
+
+Progression now stands at:
+
+| Run | Raspy / 20 | % | Change |
+|---|---|---|---|
+| 7 | 11 | 55 | baseline before investigation |
+| 8 | 6 | 30 | Phase A PS-A gate |
+| 9 | 20 | 100 | (clamp bug regression) |
+| 9b | 5 | 25 | clamp fix |
+| 10 | 3 | 15 | Tier 2 bundle |
+
+Each landing continues to help; ~10 pp improvement this round.
+
+### VAC1 startup snapshot (from user screenshot)
+
+`TO VAC (Out)`: Underflows=73, Overflows=0, VarRatio=0.9931, RingBuf=66-68 % full.
+`FROM VAC (In)`: Underflows=0, Overflows=100, VarRatio=1.0063, RingBuf=32-34 % full.
+
+Interpretation:
+
+- **Var Ratios within ±1 % of target** → rmatch resampler is locked correctly on both sides.
+- **73/100 underflow-overflow counts are one-shot startup priming artifacts**, not steady-state. User confirmed "no noticeable VAC problems" during TUNE, i.e., counters did not climb during the test.
+- **Asymmetric fill (Out ~67 %, In ~33 %)** is expected: Out is driven by our 1562.5/sec silence feed to match WDSP demand; In is driven by mic audio (idle = mostly empty).
+
+Net: VAC is healthy during TUNE after the Tier 2 bundle.
+
+### Outstanding data for correlation
+
+The Tier 2 bundle added `RX_GAP_HIST` lines once per second inside `SunSDRReadThread`. To confirm whether the remaining 3/20 raspy attempts are scheduler-driven, we need the histograms from `sunsdr_debug.log` covering attempts 11, 14, 15 (raspy) vs a sample of clean attempts. Specifically compare `16-32` and `>=32` bucket counts during TUNE-on windows.
+
+Possible outcomes:
+
+- **Raspy correlates with `16-32` bucket hits**: scheduler still preempting inside TUNE. Tier 3 (dedicated waitable-timer pacing thread decoupled from `recv()`) is the next fix.
+- **Raspy uncorrelated with histogram**: jitter is not the driver. Proceed to Phase B (wire capture + spectral) to find the DSP-component fingerprint.
+- **Histogram all in `4-8` bucket on raspy attempts**: scheduler is clean, problem is elsewhere (WDSP internal state) → Phase B.
+
 ## Next Step
 
-User rebuild + Run 10 per the verification protocol above. Document results here. Decision matrix determines whether we move to Tier 3 or Phase B.
+Awaiting user's next message (they indicated a point to make about this run). Then either (a) user supplies log snippets for histogram correlation, or (b) we proceed based on the point.
