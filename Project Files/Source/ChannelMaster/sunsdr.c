@@ -46,9 +46,14 @@ extern void getCMAevents(long* overFlowsIn, long* overFlowsOut, long* underFlows
  * of what state the previous MOX/TUNE session left behind. */
 extern __declspec(dllimport) void FlushChannelNow (int channel);
 
-/* Forward declaration — sdr_logf() is defined later in this file, but the
- * iq_dump_* helpers defined immediately below need to call it. */
+/* Forward declarations — the iq_dump and tx_pace helpers defined
+ * immediately below need these, but they're defined much later in
+ * this file. */
 static void sdr_logf(const char* fmt, ...);
+static void sunsdr_build_tx_packet(unsigned char* buf, unsigned int seq, const double* iq);
+static void sunsdr_send_tx_packet(const double* iq);
+static struct sockaddr_in sunsdr_stream_dest(void);
+static void sunsdr_dbg_note_tx_packet(unsigned int seq);
 
 /* TX IQ ground-truth recorder.
  *
@@ -75,9 +80,15 @@ static void sdr_logf(const char* fmt, ...);
  *
  * Size: 40000 complex * 16 bytes = 640 KB per attempt. Acceptable.
  */
-#define IQ_DUMP_MAX_COMPLEX 40000
+/* 200000 complex ~= 5.12 s at 39062.5 Hz. Earlier 40000-cap (1024 ms) hid
+ * the fact that the raspy might manifest LATER in an attempt — all dump
+ * files ended up exactly the same size (cap hit) even though attempts
+ * differed in length, so any comparison beyond 1024 ms was impossible.
+ * At ~3.2 MB per attempt x ~20 attempts = ~64 MB of disk per session. OK. */
+#define IQ_DUMP_MAX_COMPLEX 200000
 static double iq_dump_buf[IQ_DUMP_MAX_COMPLEX * 2];
 static volatile LONG iq_dump_count = 0;      /* number of complex samples captured */
+static volatile LONG iq_dump_dropped = 0;    /* samples dropped because cap was hit */
 static LONG iq_dump_attempt_id = 0;
 static char iq_dump_dir[MAX_PATH] = {0};
 static volatile LONG iq_dump_enabled = 0;    /* 1 during PTT=1, 0 otherwise */
@@ -105,6 +116,7 @@ static void iq_dump_init_path(void)
 static void iq_dump_reset(int attempt_id)
 {
     InterlockedExchange(&iq_dump_count, 0);
+    InterlockedExchange(&iq_dump_dropped, 0);
     iq_dump_attempt_id = attempt_id;
     InterlockedExchange(&iq_dump_enabled, 1);
 }
@@ -115,7 +127,15 @@ static void iq_dump_append(double I, double Q)
     int idx;
     if (!InterlockedAnd(&iq_dump_enabled, 0xffffffff)) return;
     n = InterlockedIncrement(&iq_dump_count);
-    if (n > IQ_DUMP_MAX_COMPLEX) return;
+    if (n > IQ_DUMP_MAX_COMPLEX) {
+        /* Cap hit — count drops so we can tell post-hoc whether the
+         * attempt was longer than the buffer. Do NOT spin-log here,
+         * this is called at 39062.5 Hz. */
+        InterlockedIncrement(&iq_dump_dropped);
+        /* Leave iq_dump_count growing so flush-to-disk can see how many
+         * samples we TRIED to capture vs how many fit. */
+        return;
+    }
     idx = (int)(n - 1) * 2;
     iq_dump_buf[idx + 0] = I;
     iq_dump_buf[idx + 1] = Q;
@@ -142,8 +162,225 @@ static void iq_dump_flush_to_disk(void)
     }
     fwrite(iq_dump_buf, sizeof(double), (size_t)n * 2, f);
     fclose(f);
-    sdr_logf("IQ_DUMP_WROTE attempt=%ld complex_samples=%ld bytes=%zu path=%s\n",
-        iq_dump_attempt_id, n, (size_t)n * 2 * sizeof(double), path);
+    {
+        LONG dropped = InterlockedAnd(&iq_dump_dropped, 0xffffffff);
+        LONG total_tried = n + dropped;
+        sdr_logf("IQ_DUMP_WROTE attempt=%ld complex_samples=%ld dropped=%ld total_tried=%ld cap=%d bytes=%zu path=%s\n",
+            iq_dump_attempt_id, n, dropped, total_tried, IQ_DUMP_MAX_COMPLEX,
+            (size_t)n * 2 * sizeof(double), path);
+    }
+}
+
+/* ============================================================
+ * Tier 3 — TX packet pacing thread
+ *
+ * EESDR voice-MOX + TUNE wire captures (20260413_171304 and
+ * 20260409_090411 in sunsdr-re/captures/) show EESDR emits TX packets
+ * with stdev 0.098 ms, max 6.30 ms, ZERO gaps over 8 ms. Our Thetis
+ * emission shows fdGapMax=16.000 ms on every TUNE attempt — a 16x
+ * worse jitter driven by scheduler-tick events on the WDSP TX callback
+ * thread. The radio's DAC expects samples at a steady 5.12 ms cadence
+ * (195.3125 pps, 200 samples/pkt at 39062.5 Hz); when our emission
+ * bursts (one packet 16 ms late then the next immediate), the DAC
+ * either underruns or gets jammed, producing the audible "raspy"
+ * distortion that only occasionally manifests depending on where the
+ * burst lands in the tone/voice waveform.
+ *
+ * Solution: decouple wire emission from WDSP callback scheduling.
+ * WDSP callback builds the packet and pushes to a small ring. A
+ * dedicated pacing thread at THREAD_PRIORITY_TIME_CRITICAL waits on
+ * a CREATE_WAITABLE_TIMER_HIGH_RESOLUTION timer set to 5.12 ms and
+ * pops exactly one packet per tick, sending it to the wire.
+ *
+ * Invariant: exactly one FD packet per 5.12 ms tick while PTT=1.
+ * Under-supply (ring empty): skip the tick (log underrun).
+ * Over-supply (ring full): drop the incoming packet (log drop).
+ */
+#define TX_PACE_RING_SLOTS 32                 /* 32 pkts * 5.12 ms = 163 ms buffer depth */
+#define TX_PACE_TICK_100NS ((LONGLONG)-51200) /* 5.12 ms in negative 100ns units (relative) */
+
+/* Some older Windows SDKs don't define these flags. Provide fallbacks so
+ * the code still compiles; at runtime CreateWaitableTimerExW will just
+ * ignore unknown bits and we'll get the default ~15 ms timer (which is
+ * why we still have timeBeginPeriod(1) for a safety net). */
+#ifndef CREATE_WAITABLE_TIMER_HIGH_RESOLUTION
+#define CREATE_WAITABLE_TIMER_HIGH_RESOLUTION 0x00000002
+#endif
+#ifndef CREATE_WAITABLE_TIMER_MANUAL_RESET
+#define CREATE_WAITABLE_TIMER_MANUAL_RESET    0x00000001
+#endif
+
+static unsigned char tx_pace_ring[TX_PACE_RING_SLOTS][SUNSDR_IQ_PKT_SIZE];
+static volatile LONG tx_pace_head = 0;         /* next producer slot */
+static volatile LONG tx_pace_tail = 0;         /* next consumer slot */
+static volatile LONG tx_pace_drops = 0;        /* packets dropped due to ring full */
+static volatile LONG tx_pace_underruns = 0;    /* ticks with empty ring (during PTT=1) */
+static volatile LONG tx_pace_emitted = 0;      /* packets emitted by pacing thread */
+static HANDLE tx_pace_timer = NULL;
+static HANDLE tx_pace_thread = NULL;
+static volatile LONG tx_pace_stop = 0;
+static volatile LONG tx_pace_ready = 0;
+
+static DWORD WINAPI tx_pace_thread_proc(LPVOID lp)
+{
+    LARGE_INTEGER due;
+    BOOL sp_ok;
+    int sp_val;
+    (void)lp;
+
+    /* Time-critical so the radio's DAC pacing is robust against UI /
+     * background / AV scans. Without this, we'd just repeat the exact
+     * scheduler-jitter problem on a different thread. */
+    sp_ok = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
+    sp_val = GetThreadPriority(GetCurrentThread());
+    sdr_logf("TX_PACE_INIT thread priority rc=%d readback=%d (TIME_CRITICAL=15)\n",
+        (int)sp_ok, sp_val);
+
+    while (!InterlockedAnd(&tx_pace_stop, 0xffffffff)) {
+        due.QuadPart = TX_PACE_TICK_100NS;
+        if (!SetWaitableTimer(tx_pace_timer, &due, 0, NULL, NULL, FALSE)) {
+            sdr_logf("TX_PACE_ERR SetWaitableTimer failed err=%lu\n", GetLastError());
+            Sleep(5);
+            continue;
+        }
+        WaitForSingleObject(tx_pace_timer, INFINITE);
+        if (InterlockedAnd(&tx_pace_stop, 0xffffffff)) break;
+
+        /* Only emit FD packets while TX is active. RX/idle keepalives are
+         * still produced by SunSDRReadThread at their own cadence. */
+        if (!sdr.currentPTT) {
+            /* Also drain the ring so stale packets don't get emitted on the
+             * next PTT-on. (Producer may have pushed packets between
+             * PTT-off and ring drain.) */
+            InterlockedExchange(&tx_pace_tail, InterlockedAnd(&tx_pace_head, 0xffffffff));
+            continue;
+        }
+
+        {
+            LONG t = InterlockedAnd(&tx_pace_tail, 0xffffffff);
+            LONG h = InterlockedAnd(&tx_pace_head, 0xffffffff);
+            if (t == h) {
+                InterlockedIncrement(&tx_pace_underruns);
+                continue;
+            }
+            {
+                struct sockaddr_in dest = sunsdr_stream_dest();
+                unsigned int seq;
+
+                if (sdr.streamSock == INVALID_SOCKET || sdr.streamSock == 0)
+                    continue;
+
+                /* Packet content + header (including seq) already built by
+                 * the producer. Send verbatim. */
+                sendto(sdr.streamSock, (const char*)tx_pace_ring[t], SUNSDR_IQ_PKT_SIZE, 0,
+                    (struct sockaddr*)&dest, sizeof(dest));
+
+                /* Reconstruct seq from the buffer for the packet-gap
+                 * diagnostic so our existing fdGap* stats remain valid. */
+                seq = (unsigned int)tx_pace_ring[t][6] |
+                      ((unsigned int)tx_pace_ring[t][7] << 8);
+                sdr.txAudioPackets++;
+                sunsdr_dbg_note_tx_packet(seq);
+                InterlockedIncrement(&tx_pace_emitted);
+            }
+            InterlockedExchange(&tx_pace_tail, (t + 1) % TX_PACE_RING_SLOTS);
+        }
+    }
+
+    sdr_logf("TX_PACE_EXIT drops=%ld underruns=%ld emitted=%ld\n",
+        tx_pace_drops, tx_pace_underruns, tx_pace_emitted);
+    return 0;
+}
+
+static void tx_pace_start(void)
+{
+    DWORD tid;
+    if (InterlockedAnd(&tx_pace_ready, 0xffffffff)) return;
+
+    tx_pace_head = 0;
+    tx_pace_tail = 0;
+    InterlockedExchange(&tx_pace_drops, 0);
+    InterlockedExchange(&tx_pace_underruns, 0);
+    InterlockedExchange(&tx_pace_emitted, 0);
+    InterlockedExchange(&tx_pace_stop, 0);
+
+    /* CREATE_WAITABLE_TIMER_HIGH_RESOLUTION: Windows 10 1803+. Gives
+     * sub-millisecond scheduling precision on SetWaitableTimer.
+     * Fallback to default flags if the high-res flag isn't honored —
+     * CreateWaitableTimerEx returns NULL in that case, and we retry
+     * without the flag. */
+    tx_pace_timer = CreateWaitableTimerExW(NULL, NULL,
+        CREATE_WAITABLE_TIMER_HIGH_RESOLUTION | CREATE_WAITABLE_TIMER_MANUAL_RESET,
+        TIMER_ALL_ACCESS);
+    if (!tx_pace_timer) {
+        sdr_logf("TX_PACE_INIT high-res timer unavailable (err=%lu), falling back to default\n",
+            GetLastError());
+        tx_pace_timer = CreateWaitableTimerW(NULL, TRUE, NULL);
+    }
+    if (!tx_pace_timer) {
+        sdr_logf("TX_PACE_INIT FAIL could not create timer err=%lu\n", GetLastError());
+        return;
+    }
+
+    tx_pace_thread = CreateThread(NULL, 0, tx_pace_thread_proc, NULL, 0, &tid);
+    if (!tx_pace_thread) {
+        sdr_logf("TX_PACE_INIT FAIL could not create thread err=%lu\n", GetLastError());
+        CloseHandle(tx_pace_timer);
+        tx_pace_timer = NULL;
+        return;
+    }
+
+    InterlockedExchange(&tx_pace_ready, 1);
+    sdr_logf("TX_PACE_INIT started tid=%lu ring_slots=%d tick_us=%lld\n",
+        (unsigned long)tid, TX_PACE_RING_SLOTS, (long long)(-TX_PACE_TICK_100NS / 10));
+}
+
+static void tx_pace_stop_and_join(void)
+{
+    if (!InterlockedAnd(&tx_pace_ready, 0xffffffff)) return;
+    InterlockedExchange(&tx_pace_stop, 1);
+    if (tx_pace_timer) CancelWaitableTimer(tx_pace_timer);
+    if (tx_pace_thread) {
+        WaitForSingleObject(tx_pace_thread, 2000);
+        CloseHandle(tx_pace_thread);
+        tx_pace_thread = NULL;
+    }
+    if (tx_pace_timer) {
+        CloseHandle(tx_pace_timer);
+        tx_pace_timer = NULL;
+    }
+    InterlockedExchange(&tx_pace_ready, 0);
+}
+
+/* Producer side — called from WDSP callback (sunsdr_queue_tx_packet_locked)
+ * when a complete 200-complex-sample packet has been accumulated in
+ * sdr.txAccumBuf. Builds the wire packet into the next ring slot and
+ * advances head. If the ring is full, increment drop counter and return
+ * without advancing head (silently discard the new packet to preserve
+ * the pacing thread's steady tick). */
+static void tx_pace_push_packet_locked(const double* iq)
+{
+    LONG h, next, t;
+    unsigned int seq;
+
+    if (!InterlockedAnd(&tx_pace_ready, 0xffffffff)) {
+        /* Pacing thread not running — fallback to legacy direct send
+         * so TX still works in the unlikely startup race. */
+        sunsdr_send_tx_packet(iq);
+        return;
+    }
+
+    h = InterlockedAnd(&tx_pace_head, 0xffffffff);
+    next = (h + 1) % TX_PACE_RING_SLOTS;
+    t = InterlockedAnd(&tx_pace_tail, 0xffffffff);
+    if (next == t) {
+        InterlockedIncrement(&tx_pace_drops);
+        return;
+    }
+
+    seq = sdr.txSeq++;
+    sunsdr_build_tx_packet(tx_pace_ring[h], seq, iq);
+    InterlockedExchange(&tx_pace_head, next);
 }
 
 /* Debug log: async deferred logger.
@@ -1005,7 +1242,26 @@ static void sunsdr_queue_tx_packet_locked(double I, double Q)
     iq_dump_append(I, Q);
 
     if (sdr.txAccumCount >= SUNSDR_IQ_COMPLEX_PER_PKT) {
-        sunsdr_send_tx_packet(sdr.txAccumBuf);
+        /* Tier 3 — push to pacing ring instead of sending directly.
+         *
+         * EESDR reference captures show stdev 0.098 ms on inter-packet
+         * gaps and NO packets over 8 ms apart. Our emission when done
+         * from the WDSP callback shows fdGapMax=16.000 ms on every
+         * attempt — the scheduler-tick jitter gets baked directly into
+         * our wire cadence. That mismatch is the suspected cause of
+         * the radio's DAC hiccups that produce the intermittent
+         * raspy.
+         *
+         * tx_pace_push_packet_locked builds the full wire packet into
+         * the next ring slot; a dedicated TIME_CRITICAL pacing thread
+         * consumes from the ring at exactly 5.12 ms intervals via a
+         * HIGH_RESOLUTION waitable timer, matching EESDR's reference
+         * cadence.
+         *
+         * If the pacing thread isn't running (race at init, or if the
+         * timer couldn't be created), tx_pace_push_packet_locked falls
+         * back to sunsdr_send_tx_packet for backward compatibility. */
+        tx_pace_push_packet_locked(sdr.txAccumBuf);
         sdr.txAccumCount = 0;
     }
 }
@@ -1914,6 +2170,10 @@ void SunSDRDestroy(void)
     sdr_logf("SunSDRDestroy() called!\n");
     sdr.keepRunning = 0;
 
+    /* Stop the TX pacing thread BEFORE closing the stream socket, so
+     * the pacing loop's final sendto can't hit an already-closed handle. */
+    tx_pace_stop_and_join();
+
     if (sdr.hKeepaliveThread) {
         WaitForSingleObject(sdr.hKeepaliveThread, 2000);
         CloseHandle(sdr.hKeepaliveThread);
@@ -2138,6 +2398,14 @@ int SunSDRPowerOn(void)
         sdr_logf("TIMING_INIT: RX thread priority set rc=%d readback=%d (ABOVE_NORMAL=1)\n",
             (int)sp_ok, sp_val);
     }
+
+    /* Start the Tier 3 TX pacing thread + high-resolution waitable timer.
+     * Decouples wire emission cadence from the WDSP TX callback's
+     * scheduling jitter so we match EESDR's sub-ms inter-packet stdev.
+     * See tx_pace_thread_proc for the loop. Safe to start here because
+     * sdr.streamSock is open and sdr.currentPTT is 0 at this point, so
+     * the pacing thread will tick but emit nothing until first TX. */
+    tx_pace_start();
 
     /* Tell Thetis we have sync so it doesn't kill the connection */
     HaveSync = 1;

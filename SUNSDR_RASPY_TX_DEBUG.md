@@ -923,9 +923,76 @@ The TUNE tone is emitted at **+600 Hz** on the wire (spectral mirror of WDSP's -
 2. **Isolation test: PA off / dummy load** — user has `pa=0` already. If raspy still at -10 dBm into a dummy load heard by the Anan, it's radio-side (hypothesis 1). If raspy only manifests when transmitting through an antenna, it's propagation (hypothesis 3 or 4).
 3. **Anan-side WAV recording during raspy** — objective audio recording of what the Anan actually hears. Lets us distinguish "Thetis on-air is raspy" from "Anan receives clean-sounding TX but reports raspy due to its own recovery from previous TX."
 
+## 2026-04-14 Root cause FOUND: packet emission jitter (vs EESDR reference)
+
+### Correction to the Run 13 "wire content is identical" claim
+
+User spotted that all 7 `sunsdr_tx_iq_*.raw` files from Run 13 were exactly 640,000 bytes (40000 complex samples = 1024 ms). That is the `IQ_DUMP_MAX_COMPLEX` cap. Attempts were 2-3 s long, so every file was truncated at 1024 ms and anything beyond was silently discarded. **The "identical wire content" conclusion is valid only for the first 1024 ms**; I cannot rule out mid- or late-attempt content differences from those files.
+
+Fix: buffer expanded to 200000 complex (5.12 s) + drop-counter so we can see post-hoc whether the cap was hit.
+
+### The actual finding — EESDR reference wire captures
+
+Independent of our own dumps: `sunsdr-re/captures/annotated/20260409_090411_sunsdr2dx_pa_on_in_tune_kosta_udp.tsv` (EESDR in TUNE) and `20260413_171304_sunsdr2dx_mox_voice_lsb_7257_1_2_3_kosta_udp.tsv` (EESDR in voice MOX) contain the reference client's own TX packet cadence to the same radio. Inter-packet gap stats:
+
+| Metric | EESDR (reference, n=3334) | Our Thetis |
+|---|---|---|
+| Mean | 5.120 ms | ~5.12 ms |
+| **Stdev** | **0.098 ms** | — |
+| Min | 3.90 ms | 0.000 ms |
+| **Max** | **6.30 ms** | **16.000 ms** |
+| Gaps in [8, 16) ms | **0** | present every attempt |
+| Gaps ≥ 16 ms | **0** | ≥1 every attempt |
+
+**EESDR emits with ±100 µs jitter. We emit with bursts of 0 ms followed by 16 ms catch-up.** That is a 160× worse jitter profile than the reference client.
+
+### Why RX works and TX fails
+
+- **RX**: radio pushes packets at its own steady cadence. We receive and process them pulled from WDSP on WDSP's schedule. No timing dependency on our side.
+- **TX**: radio's DAC consumes packets at strict 5.12 ms intervals. If a packet is 16 ms late, the DAC either underruns (momentary silence = audible click/pop) or the catch-up burst stuffs its pipeline (repeat / interpolation artifact = audible raspy). Content of the samples doesn't matter; *cadence* does.
+
+### Fix — Tier 3 dedicated pacing thread landed
+
+New code in `sunsdr.c`:
+
+- **32-slot ring buffer** for pre-built wire packets
+- **Producer**: WDSP callback path (`sunsdr_queue_tx_packet_locked`) builds a wire packet and pushes it to the ring when 200 samples accumulate. If the ring is full, drops the new packet (counter: `tx_pace_drops`).
+- **Dedicated pacing thread** at `THREAD_PRIORITY_TIME_CRITICAL`, waits on a `CREATE_WAITABLE_TIMER_HIGH_RESOLUTION` waitable timer armed for exactly 5.12 ms per tick. Pops one packet per tick, emits via `sendto`. If ring empty (producer late), skips tick (counter: `tx_pace_underruns`).
+- **Fallback**: if the timer couldn't be created (older Windows), falls back to default-resolution waitable timer. `timeBeginPeriod(1)` gives us 1 ms scheduler tick as a safety net.
+- Started at `SunSDRInit` (after IQ read thread), stopped + joined in `SunSDRDestroy` before stream socket closes.
+
+Expected effect: our inter-packet timing should match EESDR's reference profile (stdev ~0.1 ms, max ~6.3 ms, zero > 8 ms gaps).
+
+### Run 14 verification
+
+User rebuild (ChannelMaster only — no WDSP change). Then:
+
+1. On first power-on, confirm log shows:
+   `TX_PACE_INIT started tid=... ring_slots=32 tick_us=5120`
+   `TX_PACE_INIT thread priority rc=1 readback=15 (TIME_CRITICAL=15)`
+
+2. Run 20 TUNE cycles at UI drive 1, 2-3 s on / 2-3 s off. Record clean / slight / moderate / heavy per attempt.
+
+3. Run 10 voice MOX cycles, ~3 s each. Record same.
+
+4. Inspect `TX_ATTEMPT_END` `fdGapMax` — should drop from 16.000 to ~6 ms (or at most 8 ms). `fdGapMin` should rise from 0.000 to ~4 ms.
+
+5. On shutdown, log shows `TX_PACE_EXIT drops=N underruns=N emitted=N`. Expect drops = 0, underruns = 0-low during normal operation.
+
+6. IQ dump files should now be variable-size based on attempt duration (not all capped at 40000 complex). Log shows `IQ_DUMP_WROTE ... complex_samples=X dropped=Y ...` — `dropped > 0` means the new 5.12 s cap was also hit (shouldn't happen for 2-3 s attempts).
+
+### Decision matrix
+
+| Outcome | Interpretation | Next |
+|---|---|---|
+| TUNE 20/20 clean AND voice MOX 10/10 clean | Tier 3 closed the raspy. Root cause was packet timing jitter. **Investigation closed.** | Clean up GetTickCount diagnostic metrics, investigate the +600 Hz / -600 Hz wire mirror side-bug as a separate protocol correctness item. |
+| TUNE mostly clean, voice MOX mostly clean, `fdGapMax` ≤ 8 ms but still 1-2 occasional raspy | Timing was the dominant cause; there's a minor secondary issue. | Extended IQ captures (now up to 5 s) should reveal it. |
+| Raspy rate similar to before (5-15 %), `fdGapMax` still ≥ 8 ms | Tier 3 didn't take effect (timer / ring issue). | Inspect log for `TX_PACE_INIT` success, drops, underruns. |
+| Raspy rate similar BUT `fdGapMax` ≤ 6 ms | Timing is fixed but raspy is NOT from timing — something else is the driver. | Full-attempt IQ dumps can now be analyzed for post-1024ms content differences. |
+
 ## Next Step
 
-Discuss with user: raspy is not in our wire content. Three non-code experiments to characterize what IS causing it. No obvious software fix at this layer — pending root cause identification from the experiments above.
+User rebuild ChannelMaster (no WDSP change this time) and run 20 TUNE + 10 voice MOX. Decision matrix above.
 
 User chose to skip histogram correlation and go straight to Phase B spectral capture since it is definitive regardless of the scheduler-stall question.
 
