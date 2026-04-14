@@ -2763,9 +2763,12 @@ void SunSDRSetPTT(int ptt)
          * inside sunsdr_queue_tx_packet_locked; flush to disk happens on
          * PTT-off below. */
         iq_dump_reset(attempt_id);
-        /* Wake the Tier 3 pacing thread so it starts the 5.12 ms emit loop.
-         * During RX/idle it was blocked on this event with zero CPU cost. */
-        if (tx_pace_ptt_event) SetEvent(tx_pace_ptt_event);
+        /* NOTE: we do NOT signal tx_pace_ptt_event here — sdr.currentPTT
+         * is still 0 at this point in SunSDRSetPTT (it's set near the end
+         * of this function after all protocol handshakes). Signalling now
+         * would wake the pacing thread, which would see currentPTT=0,
+         * exit its inner loop, consume the auto-reset event, and sleep
+         * forever. We signal at the end of SunSDRSetPTT instead. */
     } else {
         /* Flush the accumulated IQ buffer to sunsdr_tx_iq_<attempt>.raw
          * (little-endian double I/Q pairs). Post-test analysis: compare
@@ -2900,6 +2903,13 @@ void SunSDRSetPTT(int ptt)
     }
 
     sdr.currentPTT = new_ptt;
+
+    /* Tier 3 pacing thread wake-up. Must happen AFTER sdr.currentPTT is
+     * set to 1 — the thread checks currentPTT in its inner loop and would
+     * exit immediately if we signalled while currentPTT was still 0. */
+    if (new_ptt && tx_pace_ptt_event) {
+        SetEvent(tx_pace_ptt_event);
+    }
 }
 
 /* ========== IQ Receive Thread ========== */
