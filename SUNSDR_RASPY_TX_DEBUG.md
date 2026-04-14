@@ -279,12 +279,142 @@ Next validation:
 - `MSBuild Thetis.csproj /t:Build /p:Configuration=Debug /p:Platform=x64` reached the copy step with no C# compile errors reported, then failed because `bin/x64/Debug/Thetis.exe` was locked by the running `Thetis` process.
 - After the duplicate TUNE transition reduction, `git diff --check -- Project Files/Source/Console/console.cs SUNSDR_RASPY_TX_DEBUG.md`: passed. No build/compile was run because the user is handling build/compile steps from this point forward.
 
+## 2026-04-14 PS-A Hard-Disable for SUNSDR (Phase A of new plan)
+
+Two new clarifications from the user drove a new direction:
+- Raspy is heard on the Anan on-air, not in Thetis MON → variability is in wire TX IQ (upstream of our packet code, must be WDSP output).
+- Severity is a gradient (clean → slight → moderate → heavy) → implicates IIR/leak-accumulator state (ALC hang/decay, FIR ring buffers) not a binary race.
+
+Before deeper WDSP-side instrumentation, the user asked to rule out PureSignal (PS-A) completely. Investigation found NO SUNSDR gate on any PS-A state transition — `PSForm.Mox` setter fires `puresignal.SetPSMox` unconditionally on every MOX, `PSForm.PSEnabled` setter toggles `PSRunCal` with no radio check, `PSLoop` polls `SetPSControl`/`GetPSMaxTX`/`GetInfo` every 10 ms, and `xiqc(txa[channel].iqc.p0)` sits in the TX DSP chain at `wdsp/TXA.c:587` (it is a no-op when `run=0`, so keeping the PS state machine from ever setting `run=1` is sufficient to bypass it).
+
+### Changes applied (uncommitted as of this entry)
+
+- **`Project Files/Source/Console/PSForm.cs`**
+  - `Mox` setter: when `NetworkIO.CurrentRadioProtocol == RadioProtocol.SUNSDR`, early-return before `puresignal.SetPSMox(...)`. Logs `PS_GATE_MOX_SUNSDR_SKIP` once per session.
+  - `PSEnabled` setter: when SUNSDR, force `value = false` so the OFF branch always runs (PSRunCal = false, SetPureSignal(0), router bit cleared). Logs `PS_GATE_ENABLED_SUNSDR_FORCE_OFF` once.
+  - `PSLoop`: when SUNSDR and `run` is true, skip the `timer1code()`/`timer2code()` calls and sleep 100 ms. Logs `PS_GATE_LOOP_SUNSDR_SKIP` once.
+
+- **`Project Files/Source/Console/console.cs`**
+  - Model-change path (around line 14871, right after `txtVFOAFreq_LostFocus`): when `HardwareSpecific.Model == HPSDRModel.SUNSDR2DX`, uncheck `chkFWCATUBypass`, force `psform.AutoCalEnabled = false` and `psform.PSEnabled = false`.
+  - `chkFWCATUBypass_CheckedChanged` (around line 43879): early-return with the checkbox forced unchecked when SUNSDR is active. Logs `PS_GATE_CHECKBOX_SUNSDR_FORCE_OFF` once.
+
+### Verification plan for Run 8
+
+1. Rebuild ChannelMaster and Thetis Debug x64.
+2. Confirm in `sunsdr_debug.log` (or the managed debug stream) that the three/four `PS_GATE_*` log lines appear once at startup/first MOX.
+3. Confirm PS-A button cannot be enabled for SUNSDR.
+4. Run 20 TUNE-only cycles at UI drive 1 (rawDrive 30), 2-3 seconds on, 2-3 seconds off. Record clean/raspy classification with severity grade per attempt: `0=clean`, `1=slight`, `2=moderate`, `3=heavy`.
+5. Update this file with Run 8 results.
+
+### Decision after Run 8
+
+- If all 20 attempts are clean (or clearly cleaner than Run 7 where 11/20 were raspy): root cause confirmed as PS-A. Document and close the raspy investigation.
+- If still intermittently raspy: PS-A is ruled out. Proceed to Phase B — wire capture of 20 TUNE cycles + WAV recording from the Anan + per-attempt severity grading + spectral analysis of the captured IQ to identify whether the distortion signature is harmonics (nonlinear), wideband noise (filter ring residue), amplitude modulation (AAMIX slew), or phase jitter.
+
+## 2026-04-14 TUNE Run 8 (after PS-A hard disable — Phase A)
+
+User test: 20 TUNE cycles after the PS-A gates added in PSForm.cs and console.cs.
+
+Reported results:
+
+- Raspy: attempts 3, 5, 6, 8, 14, 20 (6 / 20).
+- Clean: 1, 2, 4, 9, 10, 12, 13, 15, 16, 17, 18, 19 (12 / 20).
+- Clean-with-notes (partial raspy / gradient): 7, 11 (2 / 20).
+
+Compared to Run 7: 11 raspy -> Run 8: 6 raspy. ~15 percentage-point improvement, but raspy is clearly NOT resolved. PS-A was contributing a little but is not the root cause.
+
+Log correlations:
+
+- Every attempt (#2-#21 in the native log) shows `fdGapMax=16.000`, `txCbMaxGapMs=16`, regardless of clean/raspy. The 16 ms max gap corresponds to the Windows scheduler tick granularity. This is the consistent jitter source across all attempts.
+- `fdGapAvg` sits at 5.10-5.13 ms (expected ~5.12 ms at 195.3 pkts/sec), tight enough that average cadence is healthy.
+- All previously-vetted counters remained clean: `feDuringTx=0`, `keepaliveRaces=0`, `seqGaps=0`, `firstFdBefore0x06=0`, `txCbNonfinite=0`.
+- No new correlations visible in the existing counters between clean and raspy.
+
+Decision: PS-A is largely ruled out. Given severity-gradient + on-air-only + identical counters + 16 ms scheduler ticks present on every attempt, the next hypothesis is **CPU / scheduler jitter caused by synchronous `sdr_logf` file I/O**. Each call does `fopen`/`fprintf`/`fflush`, synchronous, and can stall the caller thread for 2-50 ms depending on disk / OS state. With ~100-200 `sdr_logf` calls per second during TX (TX attempt diag, audio diag, callback, telemetry), the calling thread can be blocked inside fflush exactly when it needs to be emitting the next TX packet.
+
+## 2026-04-14 CPU Fix Part 1: Async deferred logger
+
+In `Project Files/Source/ChannelMaster/sunsdr.c`:
+
+- Added a ring-buffered log writer. Producers (all `sdr_logf` call sites) now format the message with timestamp into a stack buffer, then memcpy it into a 4096-entry ring under a critical section, and signal a writer-thread wake event.
+- Writer thread runs at `THREAD_PRIORITY_BELOW_NORMAL`, wakes on event (with 100 ms safety timeout), drains the ring, and issues one `fflush` per drain pass. This moves the synchronous I/O cost off the IQ read thread / TX callback / PTT handler thread.
+- Lazy-start on first `sdr_logf` call so no caller-side init changes were needed. Ring-full policy drops the newest message and reports drops on next drain. Sync fallback remains for the failure path.
+- Stopped cleanly from `SunSDRDestroy` before `fclose`, so exit-time messages flush.
+
+Why: Removes the 5-10% CPU baseline from synchronous fprintf+fflush AND removes the unpredictable 2-50 ms disk stalls that coincidentally land inside TX-critical sections. Both effects were candidate contributors to the intermittent raspy pattern.
+
+How to apply (user): rebuild ChannelMaster Debug x64 and re-run 20 TUNE cycles.
+
+Next validation (Run 9):
+
+- Rebuild ChannelMaster Debug x64.
+- Run 20 TUNE-only cycles at UI drive 1, 2-3 seconds on/off.
+- Record clean / slight / moderate / heavy per attempt.
+- Compare raspy count vs Run 8.
+  - If Run 9 shows raspy drop significantly (e.g. <=3 of 20): logger-induced timing jitter was the root cause (or a major contributor).
+  - If Run 9 matches Run 8 (~6 raspy): logger is not the cause; move to Part 2 (gate per-sample sqrt diagnostics) and/or Phase B (wire capture + spectral diagnosis).
+- Also check the log: `sdr_log: dropped N messages` lines would indicate the ring is undersized (need to grow) — shouldn't normally happen.
+
+## Contributing Factor: High CPU Load (parked, 2026-04-14)
+
+User raised on 2026-04-14 that this custom Thetis build is running at ~36 % CPU in normal operation. The upstream Thetis runs at roughly 7-10 % CPU in comparable conditions, and even at that baseline upstream users see occasional ADC errors on the ANAN family when a background process steals cycles. A 3-4x CPU overhead on this SUNSDR build could plausibly be causing intermittent timing problems: late TX packet emissions, late keepalive ticks, late RX silence injection, late PTT state transitions. Any of those could surface as raspy TX, raspy RX, or dropped audio that looks random to our instrumentation.
+
+Not acting on this now — the current investigation line (PS-A disable in Phase A, spectral capture in Phase B, targeted flush in Phase C) stays. But it is explicitly ON THE LIST for later as both a detection target and an optimization target.
+
+Future work ideas to action later:
+
+- **Detect**: add a lightweight per-loop timing monitor in `SunSDRReadThread` that records wall-clock gaps between RX packet arrivals, keepalive ticks, and TX audio callbacks. If any gap exceeds its expected period by more than a threshold (e.g. 2 × expected), increment a counter and log once per second. Surface the counter in the existing `IQ status` log line so we can correlate clean vs raspy attempts against scheduler hiccups.
+- **Detect**: log OS-level process CPU% and thread priority at startup and periodically during TX sessions. If CPU% > 50 or the IQ read thread isn't at `ABOVE_NORMAL`/`HIGH` priority, warn in the log.
+- **Reduce**: audit hot paths for allocations or debug prints that could spike CPU during TX. `sdr_logf` in particular runs synchronously with `fprintf`+`fflush` on every log line — heavy logging during a TUNE test would slow the read thread. Consider a ring-buffered deferred logger.
+- **Reduce**: profile where the 3-4x overhead comes from. Candidates: the xrouter silence injection doing 1562 calls/sec, the TX feed keepalive doing 750 Inbound calls/sec, the instrumented TX audio callback doing per-sample math (sqrt + boxcar), telemetry parsing, and the managed debug side of the TUNE handoff.
+- **Alert**: when the debug logger detects a timing anomaly, include a marker in the TX attempt summary so the user can see it without grepping.
+
+## 2026-04-14 Timing Hardening — Tier 1 (bundled with async logger for Run 9)
+
+Evidence review: Run 8's `fdGapMax=16.000 ms` on every TUNE attempt — clean and raspy alike — pins a 16 ms stall event per attempt regardless of outcome. That is exactly the Windows default scheduler tick (~15.6 ms). The raspy vs clean distinction is then explained by **where** each 16 ms stall lands relative to the `rx_silence_accum` / `tx_feed_accum` state: some stalls produce a clean catch-up, others straddle a WDSP block boundary and produce a 2-3x burst silence injection that phase-shifts the rmatch resampler feeding TXA. That is the gradient-severity mechanism.
+
+An audit of `sunsdr.c` confirmed:
+- `timeBeginPeriod(1)` is never called — process runs at the 15.6 ms default tick.
+- RX read thread at NORMAL priority (sunsdr.c:1867), competes with UI/background.
+- RX silence injection uses `GetTickCount64()`-based `elapsed_ms` — inherits the scheduler-tick resolution.
+- No `elapsed_ms` clamp — a stall of N ms yields N ms of catch-up injection.
+
+### Changes applied (uncommitted as of this entry)
+
+In `Project Files/Source/ChannelMaster/sunsdr.c`:
+
+1. **`#include <mmsystem.h>` + `#pragma comment(lib, "winmm.lib")`** at the top of the file — no `ChannelMaster.vcxproj` edit needed.
+2. **`timeBeginPeriod(1)` at top of `SunSDRInit`**, paired with **`timeEndPeriod(1)` in `SunSDRDestroy`** before async-logger shutdown. Logs `TIMING_INIT: timeBeginPeriod(1) rc=<code> qpcFreq=<hz>` and `TIMING_DEINIT: timeEndPeriod(1) called`. Drops process-wide scheduler tick from ~15.6 ms to ~1 ms.
+3. **RX read thread priority**: after `CreateThread` for `SunSDRReadThread`, call `SetThreadPriority(..., THREAD_PRIORITY_ABOVE_NORMAL)`. Logs `TIMING_INIT: RX thread priority set rc=<ok> readback=<val>`.
+4. **QPC-based pacing inside `SunSDRReadThread`**: replaced `GetTickCount64()`-driven `elapsed_ms` with `QueryPerformanceCounter`/`QueryPerformanceFrequency`. Retired `last_service_tick` / `now_tick` locals, replaced with `last_service_qpc` / `now_qpc` (LARGE_INTEGER). Logs `TIMING_INIT: RX loop QPC pacing qpcFreq=<hz> clampMs=<val> expectedPeriodMs=<val>` once at thread start.
+5. **`elapsed_ms` clamp**: `elapsed_clamp_ms = 2.0 ms` (2x `expected_period_ms` of 1 ms). When `elapsed_ms > clamp`, replace with `expected_period_ms` and increment `dbg_elapsed_clamps`. Emits `TIMING_CLAMP: elapsed_ms clamped N times in last 1s (total=M). Loop stalled > 2.0 ms.` once per second, only when clamps occurred. Under-feeding WDSP by one block is benign; over-feeding bursts are what drive the raspy.
+
+### Why bundle with the async logger
+
+Per user decision 2026-04-14, Tier 1 is shipped **together** with the async logger (already landed) in a single Run 9 test. Trade-off accepted: if Run 9 is clean, attribution between the two changes is ambiguous. Acceptable to get to a result faster. If Run 9 is still raspy, Tier 2 (gap histogram, process priority, power request) and Phase B (spectral capture) are the fallbacks.
+
+### Run 9 verification (user)
+
+1. Rebuild ChannelMaster + Thetis Debug x64.
+2. Start Thetis with SUNSDR2 DX selected. In `sunsdr_debug.log` confirm four `TIMING_INIT` lines appear:
+   - `TIMING_INIT: timeBeginPeriod(1) rc=0 qpcFreq=<nonzero>`
+   - `TIMING_INIT: RX thread priority set rc=1 readback=1`
+   - `TIMING_INIT: RX loop QPC pacing qpcFreq=<nonzero> clampMs=2.000 expectedPeriodMs=1.000`
+3. Confirm no `sdr_log: dropped N messages` lines.
+4. Run 20 TUNE-only cycles at UI drive 1 (rawDrive 30), 2-3 s on / 2-3 s off. Record clean / slight / moderate / heavy per attempt.
+5. After the test, inspect `TX_ATTEMPT_END` lines per attempt — compare `fdGapMax` distribution vs Run 8 baseline (16.000 ms on every attempt). Expect a large drop.
+6. Count `TIMING_CLAMP` occurrences across the 20-cycle window. Heavy clamping means there's a stall source beyond the scheduler tick — itself a useful finding.
+7. Update this file with **Run 9** results.
+
+### Run 9 decision matrix
+
+| Outcome | Interpretation | Next |
+|---|---|---|
+| Clean >= 18/20, fdGapMax << 16 ms | Timing was the root cause. Attribution ambiguous between async logger and Tier 1, but acceptable. | Close investigation; optionally revert async logger briefly to confirm attribution. |
+| Clean improved vs Run 8 but not resolved | Timing is contributory but not sole driver. | Proceed to Tier 2 (gap histogram, process priority, power request), then Phase B (spectral capture). |
+| No improvement, fdGapMax still ~16 ms | timeBeginPeriod(1) did not take effect, or scheduler wakes are gated elsewhere. | Check TIMING_INIT log. Add Tier 2 gap histogram to locate the stall. |
+| Worse than Run 8 | Regression: thread priority or clamp introduced new jitter. | Revert Tier 1 items one at a time to narrow. |
+
 ## Next Step
 
-Run the repeated 20-cycle TUNE test and update this file with:
-
-- number of attempts
-- clean/raspy classification for each attempt
-- key stream log correlations: `firstFdBefore0x06`, `feDuringTx`, `keepaliveRaces`, `seqGaps`, `rxSilence`, `xrouterTotal`, `rxAccum`
-- key audio log correlations: `txCb*` fields and `TX_AUDIO_DIAG BEGIN/END` VAC/ASIO/rmatch counter deltas
-- the next chosen fix candidate
+Rebuild ChannelMaster + Thetis Debug x64 and execute the Run 9 verification protocol above. Update this document with Run 9 results and the decision matrix outcome.

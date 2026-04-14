@@ -24,6 +24,8 @@ of the License, or (at your option) any later version.
 #include <math.h>
 #include <string.h>
 #include <ws2tcpip.h>
+#include <mmsystem.h>
+#pragma comment(lib, "winmm.lib")
 #include "sunsdr.h"
 #include "network.h"
 #include "router.h"
@@ -38,10 +40,44 @@ extern IVAC pvac[];
 extern void getIVACdiags(int id, int type, int* underflows, int* overflows, double* var, int* ringsize, int* nring);
 extern void getCMAevents(long* overFlowsIn, long* overFlowsOut, long* underFlowsIn, long* underFlowsOut);
 
-/* Debug log */
+/* Debug log: async deferred logger.
+ *
+ * Callers invoke sdr_logf() as before. Instead of doing synchronous fprintf +
+ * fflush on the caller's thread, the formatted message is placed into a ring
+ * buffer and a dedicated low-priority writer thread drains the ring to the
+ * log file with batched fflush. This removes the unpredictable 2-50 ms disk
+ * stalls that synchronous fflush imposes on the IQ read / TX callback / PTT
+ * transition paths.
+ *
+ * Design:
+ * - Fixed 4096-slot ring, each slot holds a pre-formatted line up to 512
+ *   bytes (including timestamp and caller newline).
+ * - Producer path: GetLocalTime + vsnprintf into stack buffer, then memcpy
+ *   under a critical section into the ring slot. Signal a manual-reset event.
+ * - Writer thread: waits on the event (100 ms timeout as safety), drains the
+ *   ring, batches fputs, issues one fflush per drain pass.
+ * - Ring-full policy: drop newest, increment dropped counter, emit a summary
+ *   line from the writer thread on next pass.
+ * - If the writer thread isn't running yet (pre-init), fall back to the
+ *   legacy synchronous path so early startup messages still reach the file.
+ */
 static FILE* sdr_log = NULL;
 static int sdr_log_initialized = 0;
 static char sdr_log_path[MAX_PATH];
+
+#define SDR_LOG_RING_SIZE 4096
+#define SDR_LOG_ENTRY_MAX 512
+
+static char sdr_log_ring[SDR_LOG_RING_SIZE][SDR_LOG_ENTRY_MAX];
+static volatile unsigned sdr_log_ring_head = 0;  /* next write slot */
+static volatile unsigned sdr_log_ring_tail = 0;  /* next read slot  */
+static CRITICAL_SECTION sdr_log_ring_cs;
+static int sdr_log_cs_init = 0;
+static HANDLE sdr_log_wake = NULL;
+static HANDLE sdr_log_thread = NULL;
+static volatile LONG sdr_log_dropped = 0;
+static volatile int sdr_log_stop = 0;
+static volatile int sdr_log_async_ready = 0;
 
 static void sdr_log_build_path(void)
 {
@@ -92,16 +128,145 @@ static void sdr_log_open(void) {
         }
     }
 }
+
+static DWORD WINAPI sdr_log_writer_thread(LPVOID param) {
+    (void)param;
+    /* Writer thread: drains ring buffer and writes to file with batched flush. */
+    while (!sdr_log_stop) {
+        WaitForSingleObject(sdr_log_wake, 100);
+
+        /* Drain loop: pop one entry at a time from the ring. */
+        for (;;) {
+            char local[SDR_LOG_ENTRY_MAX];
+            int have = 0;
+
+            EnterCriticalSection(&sdr_log_ring_cs);
+            if (sdr_log_ring_tail != sdr_log_ring_head) {
+                memcpy(local, sdr_log_ring[sdr_log_ring_tail], SDR_LOG_ENTRY_MAX);
+                local[SDR_LOG_ENTRY_MAX - 1] = '\0';
+                sdr_log_ring_tail = (sdr_log_ring_tail + 1) % SDR_LOG_RING_SIZE;
+                have = 1;
+            }
+            LeaveCriticalSection(&sdr_log_ring_cs);
+
+            if (!have) break;
+
+            if (!sdr_log) sdr_log_open();
+            if (sdr_log) fputs(local, sdr_log);
+        }
+
+        /* One batched flush per drain pass. */
+        if (sdr_log) fflush(sdr_log);
+
+        /* Report drops, if any. */
+        {
+            LONG dropped = InterlockedExchange(&sdr_log_dropped, 0);
+            if (dropped > 0 && sdr_log) {
+                fprintf(sdr_log, "sdr_log: dropped %ld messages (ring full)\n", dropped);
+                fflush(sdr_log);
+            }
+        }
+    }
+
+    /* Final drain on shutdown. */
+    EnterCriticalSection(&sdr_log_ring_cs);
+    while (sdr_log_ring_tail != sdr_log_ring_head) {
+        if (sdr_log) fputs(sdr_log_ring[sdr_log_ring_tail], sdr_log);
+        sdr_log_ring_tail = (sdr_log_ring_tail + 1) % SDR_LOG_RING_SIZE;
+    }
+    LeaveCriticalSection(&sdr_log_ring_cs);
+    if (sdr_log) fflush(sdr_log);
+
+    return 0;
+}
+
+static void sdr_log_async_start(void) {
+    if (sdr_log_async_ready) return;
+    if (!sdr_log_cs_init) {
+        InitializeCriticalSection(&sdr_log_ring_cs);
+        sdr_log_cs_init = 1;
+    }
+    if (!sdr_log_wake) {
+        sdr_log_wake = CreateEvent(NULL, FALSE, FALSE, NULL);  /* auto-reset */
+        if (!sdr_log_wake) return;
+    }
+    sdr_log_stop = 0;
+    if (!sdr_log_thread) {
+        sdr_log_thread = CreateThread(NULL, 0, sdr_log_writer_thread, NULL, 0, NULL);
+        if (sdr_log_thread) {
+            SetThreadPriority(sdr_log_thread, THREAD_PRIORITY_BELOW_NORMAL);
+        }
+    }
+    if (sdr_log_thread) {
+        sdr_log_async_ready = 1;
+    }
+}
+
+static void sdr_log_async_stop(void) {
+    sdr_log_async_ready = 0;
+    sdr_log_stop = 1;
+    if (sdr_log_wake) SetEvent(sdr_log_wake);
+    if (sdr_log_thread) {
+        WaitForSingleObject(sdr_log_thread, 2000);
+        CloseHandle(sdr_log_thread);
+        sdr_log_thread = NULL;
+    }
+    if (sdr_log_wake) {
+        CloseHandle(sdr_log_wake);
+        sdr_log_wake = NULL;
+    }
+}
+
 static void sdr_logf(const char* fmt, ...) {
     va_list ap;
-    if (!sdr_log) sdr_log_open();
-    if (!sdr_log) return;
-    SYSTEMTIME st; GetLocalTime(&st);
-    fprintf(sdr_log, "[%02d:%02d:%02d.%03d] ", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
-    va_start(ap, fmt);
-    vfprintf(sdr_log, fmt, ap);
-    va_end(ap);
-    fflush(sdr_log);
+    SYSTEMTIME st;
+    char local[SDR_LOG_ENTRY_MAX];
+    int prefix_len;
+    int remaining;
+
+    GetLocalTime(&st);
+    prefix_len = _snprintf(local, SDR_LOG_ENTRY_MAX,
+        "[%02d:%02d:%02d.%03d] ",
+        st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
+    if (prefix_len < 0 || prefix_len >= SDR_LOG_ENTRY_MAX) prefix_len = 0;
+
+    remaining = SDR_LOG_ENTRY_MAX - prefix_len - 1;
+    if (remaining > 0) {
+        va_start(ap, fmt);
+        _vsnprintf(local + prefix_len, remaining, fmt, ap);
+        va_end(ap);
+    }
+    local[SDR_LOG_ENTRY_MAX - 1] = '\0';  /* ensure null-terminated on overflow */
+
+    /* Lazy-start the writer thread on first log call so callers don't need to
+     * remember to init. Protected by async_ready flag (simple single-writer
+     * check; multi-caller race is bounded by the CS InitializeCriticalSection
+     * being idempotent via sdr_log_cs_init flag). */
+    if (!sdr_log_async_ready) {
+        sdr_log_async_start();
+    }
+
+    if (sdr_log_async_ready) {
+        unsigned next;
+        EnterCriticalSection(&sdr_log_ring_cs);
+        next = (sdr_log_ring_head + 1) % SDR_LOG_RING_SIZE;
+        if (next == sdr_log_ring_tail) {
+            /* Ring full — drop this message. */
+            LeaveCriticalSection(&sdr_log_ring_cs);
+            InterlockedIncrement(&sdr_log_dropped);
+        } else {
+            memcpy(sdr_log_ring[sdr_log_ring_head], local, SDR_LOG_ENTRY_MAX);
+            sdr_log_ring_head = next;
+            LeaveCriticalSection(&sdr_log_ring_cs);
+            SetEvent(sdr_log_wake);
+        }
+    } else {
+        /* Fallback sync path — only used if async setup failed. */
+        if (!sdr_log) sdr_log_open();
+        if (!sdr_log) return;
+        fputs(local, sdr_log);
+        fflush(sdr_log);
+    }
 }
 #include "cmbuffs.h"
 
@@ -1394,8 +1559,27 @@ int SunSDRInit(const char* radioIP, int ctrlPort, int streamPort)
 {
     WSADATA wsaData;
     int optval;
+    MMRESULT tbp_rc;
+    LARGE_INTEGER qpc_freq_check;
+
+    /* Explicitly start the async logger writer thread BEFORE any sdr_logf
+     * calls, so we deterministically route through the non-blocking path.
+     * This is idempotent — safe to call once per session from the single
+     * init path, avoiding any lazy-start race in the lock setup. */
+    sdr_log_async_start();
+
+    /* Timer-resolution boost: Windows default scheduler tick is ~15.6 ms,
+     * which translated directly into the observed fdGapMax=16.000 ms on every
+     * TUNE attempt. timeBeginPeriod(1) drops the system-wide tick to ~1 ms
+     * for the lifetime of this process, shrinking GetTickCount* resolution,
+     * Sleep granularity, recv timeout granularity, and thread-scheduling
+     * granularity by ~16x. Paired with timeEndPeriod(1) in SunSDRDestroy. */
+    tbp_rc = timeBeginPeriod(1);
+    QueryPerformanceFrequency(&qpc_freq_check);
 
     sdr_logf("SunSDRInit(%s, %d, %d)\n", radioIP, ctrlPort, streamPort);
+    sdr_logf("TIMING_INIT: timeBeginPeriod(1) rc=%u (0=OK) qpcFreq=%lld\n",
+        (unsigned)tbp_rc, (long long)qpc_freq_check.QuadPart);
     if (sdr.ctrlSock || sdr.streamSock || sdr.hReadThread || sdr.hKeepaliveThread || sdr.rxBuf) {
         sdr_logf("SunSDRInit() cleaning up previous session state before re-init\n");
         SunSDRDestroy();
@@ -1528,6 +1712,18 @@ void SunSDRDestroy(void)
         DeleteCriticalSection(&sdr.txLock);
         sdr.txLockInitialized = 0;
     }
+
+    /* Release the 1 ms timer resolution we requested in SunSDRInit. Paired
+     * with timeBeginPeriod(1). Do this before stopping the async logger so
+     * the release still benefits from the boosted resolution during log
+     * drain and thread joins. */
+    timeEndPeriod(1);
+    sdr_logf("TIMING_DEINIT: timeEndPeriod(1) called\n");
+
+    /* Stop the async logger writer thread and flush any pending entries
+     * BEFORE closing the file handle. */
+    sdr_logf("SunSDRDestroy: stopping async log writer\n");
+    sdr_log_async_stop();
 
     if (sdr_log) {
         fclose(sdr_log);
@@ -1691,6 +1887,16 @@ int SunSDRPowerOn(void)
 
     /* Start IQ read thread */
     sdr.hReadThread = CreateThread(NULL, 0, SunSDRReadThread, NULL, 0, NULL);
+
+    /* Bump the RX read thread above NORMAL so it wins CPU against UI and
+     * other background work. Not TIME_CRITICAL — that risks UI starvation.
+     * ABOVE_NORMAL is the standard for latency-sensitive audio. */
+    if (sdr.hReadThread) {
+        BOOL sp_ok = SetThreadPriority(sdr.hReadThread, THREAD_PRIORITY_ABOVE_NORMAL);
+        int sp_val = GetThreadPriority(sdr.hReadThread);
+        sdr_logf("TIMING_INIT: RX thread priority set rc=%d readback=%d (ABOVE_NORMAL=1)\n",
+            (int)sp_ok, sp_val);
+    }
 
     /* Tell Thetis we have sync so it doesn't kill the connection */
     HaveSync = 1;
@@ -2131,7 +2337,19 @@ DWORD WINAPI SunSDRReadThread(LPVOID param)
     int pkt_count = 0;
     int telemetry_count = 0;
     unsigned int last_tx_audio_packets = 0;
-    ULONGLONG last_service_tick;
+    /* QPC-based pacing: sub-us resolution, immune to Windows scheduler-tick
+     * granularity. Replaces GetTickCount64() which had ~16 ms resolution and
+     * directly caused the observed fdGapMax=16.000 ms on every TUNE (Run 8).
+     * `expected_period_ms` is the planned RX-loop iteration period used for
+     * the `elapsed_ms` clamp — 1 ms matches the new timeBeginPeriod(1) tick
+     * and is a conservative floor. */
+    LARGE_INTEGER qpc_freq = {0};
+    LARGE_INTEGER last_service_qpc = {0};
+    LARGE_INTEGER now_qpc = {0};
+    double expected_period_ms = 1.0;
+    double elapsed_clamp_ms = expected_period_ms * 2.0;
+    unsigned int dbg_elapsed_clamps = 0;
+    unsigned int dbg_elapsed_clamps_prev_sec = 0;
     double tx_feed_accum = 0.0;
     double tx_keepalive_accum = 0.0;
     (void)param;
@@ -2186,12 +2404,32 @@ DWORD WINAPI SunSDRReadThread(LPVOID param)
         (char*)&timeout_ms, sizeof(timeout_ms));
 
     DWORD last_log_time = GetTickCount();
-    last_service_tick = GetTickCount64();
+    QueryPerformanceFrequency(&qpc_freq);
+    QueryPerformanceCounter(&last_service_qpc);
+    sdr_logf("TIMING_INIT: RX loop QPC pacing qpcFreq=%lld clampMs=%.3f expectedPeriodMs=%.3f\n",
+        (long long)qpc_freq.QuadPart, elapsed_clamp_ms, expected_period_ms);
     int timeout_count = 0;
 
     while (sdr.keepRunning) {
-        ULONGLONG now_tick = GetTickCount64();
-        double elapsed_ms = (double)(now_tick - last_service_tick);
+        double elapsed_ms;
+        QueryPerformanceCounter(&now_qpc);
+        if (qpc_freq.QuadPart > 0) {
+            elapsed_ms = (double)(now_qpc.QuadPart - last_service_qpc.QuadPart)
+                * 1000.0 / (double)qpc_freq.QuadPart;
+        } else {
+            elapsed_ms = 0.0;
+        }
+
+        /* Clamp pathologically long gaps (scheduler stall, page fault, AV
+         * scan, radio packet drought during TX). Without this, a 50 ms stall
+         * translates to a 50 ms catch-up burst in rx_silence_accum /
+         * tx_feed_accum, producing a sawtooth injection pattern that is the
+         * suspected driver of the raspy TUNE distortion. Under-feeding WDSP
+         * by one block is benign; over-feeding (burst) is not. */
+        if (elapsed_ms > elapsed_clamp_ms) {
+            dbg_elapsed_clamps++;
+            elapsed_ms = expected_period_ms;
+        }
 
         if (elapsed_ms > 0.0) {
                 tx_feed_accum += elapsed_ms * tx_feed_rate / 1000.0;
@@ -2202,7 +2440,7 @@ DWORD WINAPI SunSDRReadThread(LPVOID param)
                 }
 
             tx_keepalive_accum += elapsed_ms * tx_keepalive_rate / 1000.0;
-            last_service_tick = now_tick;
+            last_service_qpc = now_qpc;
         }
 
         /* RX silence padding: if no real RX packet has arrived for >2ms (would
@@ -2301,6 +2539,12 @@ DWORD WINAPI SunSDRReadThread(LPVOID param)
         /* Log every second regardless */
         DWORD now = GetTickCount();
         if (now - last_log_time >= 1000) {
+            unsigned int clamps_this_sec = dbg_elapsed_clamps - dbg_elapsed_clamps_prev_sec;
+            dbg_elapsed_clamps_prev_sec = dbg_elapsed_clamps;
+            if (clamps_this_sec > 0) {
+                sdr_logf("TIMING_CLAMP: elapsed_ms clamped %u times in last 1s (total=%u). Loop stalled > %.1f ms.\n",
+                    clamps_this_sec, dbg_elapsed_clamps, elapsed_clamp_ms);
+            }
             sdr_logf("IQ status: pkts=%d, timeouts=%d, keepRunning=%d, HaveSync=%d txAttempt=%ld ptt=%d tune=%d txIqGate=%ld txFeed=%u keepaliveFE=%u keepaliveRace=%u rxSilence=%u realFE=%u realFD=%u xrouterReal=%u xrouterTotal=%u rxAccum=%.3f txPackets=%u activeFD=%ld seqGaps=%ld feDuringTx=%ld keepaliveRaces=%ld iqGateSkips=%ld firstFdBefore0x06=%ld\n",
                 pkt_count,
                 timeout_count,

@@ -186,6 +186,7 @@ namespace Thetis
         }
         private volatile bool _bPSRunning = false;
         private volatile bool _ps_closing = false;
+        private static bool _ps_sunsdr_loop_skip_logged = false;
         private void PSLoop()
         {
             _bPSRunning = true;
@@ -198,7 +199,21 @@ namespace Thetis
                 int sleepDuration;
                 bool run = !_ps_closing && _power && !IsDisposed && IsHandleCreated;
 
-                if (run)
+                // SUNSDR: skip timer1/timer2 polling entirely. These drive the
+                // PureSignal state machine (SetPSControl, GetPSMaxTX, GetInfo),
+                // which is not used for SunSDR TX and would inject 10/100 ms
+                // WDSP-side traffic that could race the TUNE/MOX transition.
+                // Still honor the sleep so the thread stays responsive to shutdown.
+                if (run && NetworkIO.CurrentRadioProtocol == RadioProtocol.SUNSDR)
+                {
+                    if (!_ps_sunsdr_loop_skip_logged)
+                    {
+                        _ps_sunsdr_loop_skip_logged = true;
+                        Debug.Print("PS_GATE_LOOP_SUNSDR_SKIP: PSForm PSLoop skipping timer1/timer2 for SUNSDR protocol");
+                    }
+                    sleepDuration = 100;
+                }
+                else if (run)
                 {
                     timer1code();
                     if (nCount == 0)
@@ -232,11 +247,25 @@ namespace Thetis
         //}
 
         private static bool _psenabled = false;
+        private static bool _ps_sunsdr_enabled_forced_off_logged = false;
         public bool PSEnabled
         {
             get { return _psenabled; }
             set
             {
+                // SUNSDR: PureSignal is hard-disabled. Force the OFF path regardless
+                // of caller's value so PSRunCal and related feedback/router state
+                // stay in the disabled configuration for the whole session.
+                if (NetworkIO.CurrentRadioProtocol == RadioProtocol.SUNSDR)
+                {
+                    if (!_ps_sunsdr_enabled_forced_off_logged)
+                    {
+                        _ps_sunsdr_enabled_forced_off_logged = true;
+                        Debug.Print("PS_GATE_ENABLED_SUNSDR_FORCE_OFF: PSForm.PSEnabled setter forcing OFF for SUNSDR protocol");
+                    }
+                    value = false;
+                }
+
                 _psenabled = value;
 
                 if (_psenabled)
@@ -261,10 +290,10 @@ namespace Thetis
                     unsafe { cmaster.LoadRouterControlBit((void*)0, 0, 0, 0); }
                     console.radio.GetDSPTX(0).PSRunCal = false;
                 }
-                                               
+
                 // console.EnableDup();
                 if (console.path_Illustrator != null)
-                    console.path_Illustrator.pi_Changed();                
+                    console.path_Illustrator.pi_Changed();
             }
         }
 
@@ -338,12 +367,26 @@ namespace Thetis
         private readonly Object _objLocker = new Object();
 
         private static bool _mox = false;
+        private static bool _ps_sunsdr_mox_skip_logged = false;
         public bool Mox
         {
             get { return _mox; }
             set
             {
                 _mox = value;
+                // SUNSDR: PureSignal is not used. Skip the SetPSMox WDSP call so
+                // the PS state machine doesn't race the SunSDR native TX path
+                // and introduce intermittent TUNE/MOX audio artifacts on-air.
+                // Log once per session so we can confirm the gate fires.
+                if (NetworkIO.CurrentRadioProtocol == RadioProtocol.SUNSDR)
+                {
+                    if (!_ps_sunsdr_mox_skip_logged)
+                    {
+                        _ps_sunsdr_mox_skip_logged = true;
+                        Debug.Print("PS_GATE_MOX_SUNSDR_SKIP: PSForm.Mox setter bypassing puresignal.SetPSMox for SUNSDR protocol");
+                    }
+                    return;
+                }
                 puresignal.SetPSMox(_txachannel, value);
             }
         }

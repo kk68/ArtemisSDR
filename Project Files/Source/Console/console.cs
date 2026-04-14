@@ -14871,6 +14871,20 @@ namespace Thetis
             if (!IsSetupFormNull && HardwareSpecific.OldModel != HardwareSpecific.Model)
                 txtVFOAFreq_LostFocus(this, EventArgs.Empty);
 
+            // SUNSDR: PureSignal is not supported on this protocol. Force the
+            // PS-A UI unchecked and the internal PS state to disabled whenever
+            // the selected radio is SUNSDR2DX, so no PS-A code path can arm.
+            if (HardwareSpecific.Model == HPSDRModel.SUNSDR2DX)
+            {
+                if (chkFWCATUBypass.Checked)
+                    chkFWCATUBypass.Checked = false;
+                if (psform != null)
+                {
+                    psform.AutoCalEnabled = false;
+                    psform.PSEnabled = false;
+                }
+            }
+
             cmaster.CMSetTXOutputLevelRun();
 
             //do always, to update everything
@@ -43876,9 +43890,25 @@ namespace Thetis
         }
 
         private bool _puresignal_auto_old_state = false;
+        private bool _ps_sunsdr_checkbox_forced_off_logged = false;
         private void chkFWCATUBypass_CheckedChanged(object sender, EventArgs e)
         {
             //PS-A button
+
+            // SUNSDR: PureSignal is hard-disabled. If the user managed to tick
+            // this while SUNSDR is active, force it back off (will re-enter this
+            // handler once from the programmatic uncheck). Never allow PS-A
+            // AutoCal or feedback state to arm for SUNSDR.
+            if (NetworkIO.CurrentRadioProtocol == RadioProtocol.SUNSDR && chkFWCATUBypass.Checked)
+            {
+                if (!_ps_sunsdr_checkbox_forced_off_logged)
+                {
+                    _ps_sunsdr_checkbox_forced_off_logged = true;
+                    System.Diagnostics.Debug.Print("PS_GATE_CHECKBOX_SUNSDR_FORCE_OFF: forcing chkFWCATUBypass unchecked for SUNSDR protocol");
+                }
+                chkFWCATUBypass.Checked = false;
+                return;
+            }
 
             bool oldState = psform.AutoCalEnabled;
             psform.AutoCalEnabled = chkFWCATUBypass.Checked;
