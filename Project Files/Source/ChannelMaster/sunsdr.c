@@ -189,33 +189,90 @@ static void iq_dump_append(double I, double Q)
     iq_dump_buf[idx + 1] = Q;
 }
 
-static void iq_dump_flush_to_disk(void)
+/* Per-attempt snapshot buffer handed off to the background writer.
+ * Allocated each PTT-off, freed by the writer thread. Decouples the
+ * PTT-off hot path (where SunSDRSetPTT is mid-flight and the pacing
+ * thread is still emitting) from the 2-3 MB disk write. */
+typedef struct iq_dump_job {
+    double *buf;              /* malloc'd copy of the captured samples */
+    LONG   n_complex;         /* number of complex samples in buf */
+    LONG   dropped;
+    LONG   attempt_id;
+} iq_dump_job_t;
+
+static DWORD WINAPI iq_dump_writer_thread_proc(LPVOID p)
 {
-    LONG n;
+    iq_dump_job_t *job = (iq_dump_job_t *)p;
     FILE *f;
     char path[MAX_PATH];
-    InterlockedExchange(&iq_dump_enabled, 0);
-    n = InterlockedAnd(&iq_dump_count, 0xffffffff);
-    if (n <= 0) return;
-    if (n > IQ_DUMP_MAX_COMPLEX) n = IQ_DUMP_MAX_COMPLEX;
+
     iq_dump_init_path();
     _snprintf(path, sizeof(path), "%s\\sunsdr_tx_iq_%04ld.raw",
-        iq_dump_dir, iq_dump_attempt_id);
+        iq_dump_dir, job->attempt_id);
     path[sizeof(path) - 1] = '\0';
+
     f = fopen(path, "wb");
     if (!f) {
         sdr_logf("IQ_DUMP_FAIL attempt=%ld err=%d path=%s\n",
-            iq_dump_attempt_id, errno, path);
+            job->attempt_id, errno, path);
+    } else {
+        fwrite(job->buf, sizeof(double), (size_t)job->n_complex * 2, f);
+        fclose(f);
+        sdr_logf("IQ_DUMP_WROTE attempt=%ld complex_samples=%ld dropped=%ld cap=%d bytes=%zu path=%s (async)\n",
+            job->attempt_id, job->n_complex, job->dropped, IQ_DUMP_MAX_COMPLEX,
+            (size_t)job->n_complex * 2 * sizeof(double), path);
+    }
+
+    free(job->buf);
+    free(job);
+    return 0;
+}
+
+static void iq_dump_flush_to_disk(void)
+{
+    LONG n;
+    iq_dump_job_t *job;
+    HANDLE h;
+
+    /* Stop the producer from writing more samples first. */
+    InterlockedExchange(&iq_dump_enabled, 0);
+
+    n = InterlockedAnd(&iq_dump_count, 0xffffffff);
+    if (n <= 0) return;
+    if (n > IQ_DUMP_MAX_COMPLEX) n = IQ_DUMP_MAX_COMPLEX;
+
+    /* Copy the captured samples into a dedicated heap buffer so the
+     * writer thread is decoupled from iq_dump_buf. iq_dump_buf is
+     * overwritten by the next attempt's iq_dump_reset. */
+    job = (iq_dump_job_t *)malloc(sizeof(iq_dump_job_t));
+    if (!job) {
+        sdr_logf("IQ_DUMP_FAIL attempt=%ld could not alloc job\n", iq_dump_attempt_id);
         return;
     }
-    fwrite(iq_dump_buf, sizeof(double), (size_t)n * 2, f);
-    fclose(f);
-    {
-        LONG dropped = InterlockedAnd(&iq_dump_dropped, 0xffffffff);
-        LONG total_tried = n + dropped;
-        sdr_logf("IQ_DUMP_WROTE attempt=%ld complex_samples=%ld dropped=%ld total_tried=%ld cap=%d bytes=%zu path=%s\n",
-            iq_dump_attempt_id, n, dropped, total_tried, IQ_DUMP_MAX_COMPLEX,
-            (size_t)n * 2 * sizeof(double), path);
+    job->buf = (double *)malloc((size_t)n * 2 * sizeof(double));
+    if (!job->buf) {
+        sdr_logf("IQ_DUMP_FAIL attempt=%ld could not alloc %zu bytes\n",
+            iq_dump_attempt_id, (size_t)n * 2 * sizeof(double));
+        free(job);
+        return;
+    }
+    memcpy(job->buf, iq_dump_buf, (size_t)n * 2 * sizeof(double));
+    job->n_complex = n;
+    job->dropped = InterlockedAnd(&iq_dump_dropped, 0xffffffff);
+    job->attempt_id = iq_dump_attempt_id;
+
+    /* Fire-and-forget writer thread. Do NOT block SunSDRSetPTT while
+     * we write 2-3 MB to disk — that was keeping the radio keyed for
+     * 100+ ms past tune-off, producing an audible silent tail on
+     * long attempts (attempt 13 diagnosis 2026-04-14). */
+    h = CreateThread(NULL, 0, iq_dump_writer_thread_proc, job, 0, NULL);
+    if (h) {
+        CloseHandle(h);  /* detach */
+    } else {
+        sdr_logf("IQ_DUMP_FAIL attempt=%ld CreateThread err=%lu\n",
+            iq_dump_attempt_id, GetLastError());
+        free(job->buf);
+        free(job);
     }
 }
 
