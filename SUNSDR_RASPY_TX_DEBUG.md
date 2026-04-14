@@ -8,7 +8,7 @@ Intermittent raspy tone/audio during SunSDR TUNE and MOX/TX. Current report is r
 
 ## Current Status
 
-- Status: fourth TUNE-cycle data analyzed; TX pre-prime made TUNE results worse and has been removed. Audio-layer diagnostics have been added for the next TUNE run.
+- Status: fifth TUNE-cycle data analyzed. Attempts 1-5 were all raspy at high raw drive 196; attempts 6-20 ran at raw drive 30 and still had intermittent TUNE raspiness. Current stream counters and broad audio/VAC counters do not explain the low-drive failures.
 - Primary file: `Project Files/Source/ChannelMaster/sunsdr.c`
 - First reproduction target: repeated TUNE on/off cycles, 2-3 seconds on and 2-3 seconds off.
 - Keep this tracker updated after every test or code change until the issue is resolved.
@@ -64,7 +64,7 @@ For clean vs raspy attempts, compare:
 - Run 2 confirmed the RX silence cap fix works mechanically: `rxSilence` is now about 1562-1563/sec during TX and `rxAccum` stays bounded below 1. This improved RX/VAC behavior, but TUNE raspiness remains.
 - Run 3 confirmed the TX IQ gate fix works mechanically: `TX_FIRST_FD` now has `cmd_sent=1`, `firstFdBefore0x06=0`, and no `0xFE` keepalive races. TUNE raspiness still occurs, so the remaining visible `sunsdr.c` stream counters no longer correlate.
 - Run 4 showed that pre-priming one active silence `0xFD` after `0x06=1` made the result worse: 12/20 TUNE attempts were raspy. That candidate is rejected and removed.
-- Current phase: diagnostics are now expanded above `sunsdr.c` stream timing into TX callback sample health and VAC/ASIO/rmatch counters. If these do not correlate, the next layer is managed Thetis TUNE generator state and TX monitor/RX path state around each TUNE attempt.
+- Run 5 showed a clear high-drive effect for attempts 1-5, but did not explain the remaining low-drive failures. Current phase: expand from broad TX callback/VAC health into more specific managed Thetis TUNE generator state and TX monitor/RX path state around each TUNE attempt.
 
 ## 2026-04-14 TUNE Run 1
 
@@ -159,14 +159,35 @@ Code change after this run:
 
 - Removed the `TX_PREPRIME_FD` behavior from `sunsdr.c`. The prior RX silence cap and TX IQ gate fixes remain.
 
+## 2026-04-14 TUNE Run 5
+
+User test: 20 TUNE cycles after commit `4f0e7035` with audio-layer diagnostics.
+
+Reported results:
+
+- Raspy: attempts 1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 14, 18.
+- Clean: attempts 10, 12, 13, 15, 16, 17, 19, 20.
+- RX was clean except attempt 11, which was reported RX raspy.
+
+Log correlations:
+
+- Attempts 1-5 ran at high raw drive 196 (`drive=0.769`, `fs=1.353`) and were all raspy. They also logged `txCbPostPeakMax=0.931893`.
+- Before attempt 6, the log shows a manual drive reduction sequence down to raw drive 30. Attempts 6-20 ran at raw drive 30 (`drive=0.118`, `fs=1.007`) with `txCbPostPeakMax=0.106154`.
+- The high-drive state likely explains attempts 1-5, but not the remaining low-drive raspy attempts 6, 7, 8, 9, 11, 14, and 18.
+- No active-TX keepalive race observed: `feDuringTx=0`, `keepaliveRaces=0` for attempts 1-20.
+- No TX sequence discontinuities observed: `seqGaps=0` for attempts 1-20.
+- TX IQ ordering remained clean: `firstFdBefore0x06=0` for attempts 1-20.
+- TX callback health did not correlate with low-drive raspiness: `txCbNonfinite=0`, `txCbMaxGapMs=16`, and RMS/peak values were similar across low-drive clean and raspy attempts.
+- VAC/ASIO diagnostics did not correlate with low-drive raspiness. VAC1 had early counters during attempts 1-12, then counters reset to 0 before attempt 13; raspy attempts still occurred with zero VAC1 underflow/overflow counters.
+- Attempt 16 was clean despite `iqGateSkips=11`, so gate skips are still not a failure correlation.
+- Attempts 6, 10, 18, and 20 had `firstFdDelayMs=0`; attempts 6 and 18 were raspy, while 10 and 20 were clean, so first-FD delay is still not a direct correlation.
+
 Next validation:
 
 - Rebuild `ChannelMaster` Debug x64.
 - Repeat the same 20 TUNE cycles and record clean/raspy attempts.
-- Confirm `TX_PREPRIME_FD` is no longer present.
-- Confirm `firstFdBefore0x06=0`, `feDuringTx=0`, `keepaliveRaces=0`, and `seqGaps=0` remain clean with the TX IQ gate.
-- Keep checking `rxSilence`, `xrouterTotal`, and `rxAccum` to ensure the RX/VAC underfeed fix remains intact.
-- Compare the new `txCb*` and `TX_AUDIO_DIAG` fields between raspy and clean attempts before attempting another behavior change.
+- Keep raw drive consistent for the next 20 attempts so the high-drive effect does not mask the intermittent low-drive failure.
+- Add next-layer diagnostics before attempting another behavior change: managed Thetis TUNE generator state, `TXPostGen*` timing, and TX monitor/RX path state around each TUNE attempt.
 
 ## Verification So Far
 
