@@ -385,6 +385,9 @@ static volatile LONG sunsdr_dbg_active_tx_seq_gaps = 0;
 static volatile LONG sunsdr_dbg_idle_fe_during_tx = 0;
 static volatile LONG sunsdr_dbg_keepalive_tx_races = 0;
 static volatile LONG sunsdr_dbg_tx_attempt_id = 0;
+static volatile LONG sunsdr_tx_iq_enabled = 0;
+static volatile LONG sunsdr_dbg_tx_iq_gate_skips = 0;
+static volatile LONG sunsdr_dbg_first_fd_before_cmd = 0;
 static ULONGLONG sunsdr_dbg_ptt_request_tick = 0;
 static ULONGLONG sunsdr_dbg_mox_cmd_tick = 0;
 static ULONGLONG sunsdr_dbg_first_fd_tick = 0;
@@ -407,6 +410,8 @@ static void sunsdr_dbg_reset_tx_attempt_locked(int attempt_id)
     InterlockedExchange(&sunsdr_dbg_active_tx_seq_gaps, 0);
     InterlockedExchange(&sunsdr_dbg_idle_fe_during_tx, 0);
     InterlockedExchange(&sunsdr_dbg_keepalive_tx_races, 0);
+    InterlockedExchange(&sunsdr_dbg_tx_iq_gate_skips, 0);
+    InterlockedExchange(&sunsdr_dbg_first_fd_before_cmd, 0);
     sunsdr_dbg_ptt_request_tick = 0;
     sunsdr_dbg_mox_cmd_tick = 0;
     sunsdr_dbg_first_fd_tick = 0;
@@ -425,6 +430,9 @@ static void sunsdr_dbg_note_tx_packet(unsigned int seq)
 
     if (count == 1) {
         sunsdr_dbg_first_fd_tick = now;
+        if (sunsdr_dbg_mox_cmd_tick == 0) {
+            InterlockedExchange(&sunsdr_dbg_first_fd_before_cmd, 1);
+        }
         sdr_logf("TX_FIRST_FD attempt=%ld seq=%u delay_from_ptt_ms=%llu delay_from_0x06_ms=%llu cmd_sent=%d\n",
             sunsdr_dbg_tx_attempt_id,
             seq,
@@ -604,7 +612,10 @@ static void sunsdr_tx_outbound(int id, int nsamples, double* buff)
 
     EnterCriticalSection(&sdr.txLock);
 
-    if (!sdr.powered || !sdr.currentPTT || buff == NULL || nsamples <= 0) {
+    if (!sdr.powered || !sdr.currentPTT || !sunsdr_tx_iq_enabled || buff == NULL || nsamples <= 0) {
+        if (sdr.powered && sdr.currentPTT && !sunsdr_tx_iq_enabled && buff != NULL && nsamples > 0) {
+            InterlockedIncrement(&sunsdr_dbg_tx_iq_gate_skips);
+        }
         LeaveCriticalSection(&sdr.txLock);
         return;
     }
@@ -1439,6 +1450,7 @@ int SunSDRPowerOn(void)
     sdr.powered = 1;
     sdr.keepRunning = 1;
     sdr.currentPTT = 0;
+    InterlockedExchange(&sunsdr_tx_iq_enabled, 0);
     sdr.currentRx1FreqHz = 0;
     sdr.currentRx2FreqHz = 0;
     sdr.currentRX2Enabled = 0;
@@ -1547,6 +1559,7 @@ void SunSDRPowerOff(void)
     sdr.keepRunning = 0;
     sdr.powered = 0;
     sdr.currentPTT = 0;
+    InterlockedExchange(&sunsdr_tx_iq_enabled, 0);
     sdr.currentTune = 0;
     sdr.currentMode = -1;
     sdr.currentDriveRaw = -1;
@@ -1752,6 +1765,7 @@ void SunSDRSetPTT(int ptt)
     if (!sdr.powered)
     {
         sdr.currentPTT = new_ptt;
+        InterlockedExchange(&sunsdr_tx_iq_enabled, 0);
         return;
     }
 
@@ -1761,6 +1775,7 @@ void SunSDRSetPTT(int ptt)
     if (sdr.txLockInitialized) {
         EnterCriticalSection(&sdr.txLock);
         if (new_ptt) {
+            InterlockedExchange(&sunsdr_tx_iq_enabled, 0);
             sdr.txAudioPackets = 0;
             sdr.txPhase = 0.0;
             sdr.txPrevI = 0.0;
@@ -1814,11 +1829,10 @@ void SunSDRSetPTT(int ptt)
          * and ignores our IQ stream, capping output at ~2.5W.
          *
          * Order is critical: update sdr.currentPTT BEFORE sending 0x06=1 so
-         * the keepalive thread (running in parallel) sees TX state
-         * immediately and stops sending 0xFE silence packets. If it sees
-         * currentPTT=0 after the radio is already in TX, it may inject one
-         * silence 0xFE packet INTO the active TX stream, causing a brief
-         * glitch heard as the intermittent "raspy" TUNE tone.
+         * the keepalive thread sees TX state immediately and stops sending
+         * 0xFE silence packets. Keep a separate TX IQ gate closed until after
+         * 0x06=1 completes so the audio callback cannot send active 0xFD IQ
+         * before the radio has been commanded into TX.
          */
         sdr.lastTxWasTune = sdr.currentTune ? 1 : 0;
         sdr.currentPTT = new_ptt;
@@ -1832,6 +1846,11 @@ void SunSDRSetPTT(int ptt)
             sdr.txSeq,
             sdr.txAudioPackets,
             sunsdr_dbg_ptt_request_tick ? (unsigned long long)(sunsdr_dbg_mox_cmd_tick - sunsdr_dbg_ptt_request_tick) : 0);
+        InterlockedExchange(&sunsdr_tx_iq_enabled, 1);
+        sdr_logf("TX_IQ_GATE_OPEN #%ld txPackets=%u gateSkips=%ld\n",
+            sunsdr_dbg_tx_attempt_id,
+            sdr.txAudioPackets,
+            sunsdr_dbg_tx_iq_gate_skips);
         /*
          * Only write 0x24 PA_ENABLE on MOX-on when we're actually turning
          * PA ON (user has external PA toggled on). Writing 0x24=0 right
@@ -1847,8 +1866,9 @@ void SunSDRSetPTT(int ptt)
         double avg_fd_gap = sunsdr_dbg_fd_gap_count > 0 ? sunsdr_dbg_fd_gap_sum_ms / (double)sunsdr_dbg_fd_gap_count : 0.0;
         unsigned long long first_fd_delay = (sunsdr_dbg_first_fd_tick && sunsdr_dbg_mox_cmd_tick && sunsdr_dbg_first_fd_tick >= sunsdr_dbg_mox_cmd_tick) ?
             (unsigned long long)(sunsdr_dbg_first_fd_tick - sunsdr_dbg_mox_cmd_tick) : 0;
-        int first_fd_before_cmd = (sunsdr_dbg_first_fd_tick && sunsdr_dbg_mox_cmd_tick && sunsdr_dbg_first_fd_tick < sunsdr_dbg_mox_cmd_tick) ? 1 : 0;
-        sdr_logf("TX_ATTEMPT_END #%ld mode=%s result=user_clean_or_raspy ptt=%d tune=%d seq=%u txPackets=%u activeFD=%ld seqGaps=%ld feDuringTx=%ld keepaliveRaces=%ld firstFdDelayMs=%llu firstFdBefore0x06=%d fdGapMin=%.3f fdGapAvg=%.3f fdGapMax=%.3f fdGapCount=%u txPhase=%.4f txAccum=%d\n",
+        int first_fd_before_cmd = (int)sunsdr_dbg_first_fd_before_cmd;
+        InterlockedExchange(&sunsdr_tx_iq_enabled, 0);
+        sdr_logf("TX_ATTEMPT_END #%ld mode=%s result=user_clean_or_raspy ptt=%d tune=%d seq=%u txPackets=%u activeFD=%ld seqGaps=%ld feDuringTx=%ld keepaliveRaces=%ld iqGateSkips=%ld firstFdDelayMs=%llu firstFdBefore0x06=%d fdGapMin=%.3f fdGapAvg=%.3f fdGapMax=%.3f fdGapCount=%u txPhase=%.4f txAccum=%d\n",
             sunsdr_dbg_tx_attempt_id,
             sunsdr_tx_mode_label(sdr.lastTxWasTune),
             new_ptt,
@@ -1859,6 +1879,7 @@ void SunSDRSetPTT(int ptt)
             sunsdr_dbg_active_tx_seq_gaps,
             sunsdr_dbg_idle_fe_during_tx,
             sunsdr_dbg_keepalive_tx_races,
+            sunsdr_dbg_tx_iq_gate_skips,
             first_fd_delay,
             first_fd_before_cmd,
             sunsdr_dbg_fd_gap_min_ms,
@@ -1867,7 +1888,6 @@ void SunSDRSetPTT(int ptt)
             sunsdr_dbg_fd_gap_count,
             sdr.txPhase,
             sdr.txAccumCount);
-        sdr.currentPTT = new_ptt;
         /*
          * On MOX-off, only write 0x24 PA_ENABLE=0 if we had written a 1
          * on MOX-on (i.e. the user has the external PA enabled). Otherwise
@@ -1879,6 +1899,7 @@ void SunSDRSetPTT(int ptt)
         sunsdr_send_u32_cmd(SUNSDR_OP_MOX_PTT, 0);
         sunsdr_send_config_block_state(1);
         sunsdr_reassert_rx_state();
+        sdr.currentPTT = new_ptt;
         sdr.lastTxWasTune = 0;
         sdr.pendingTuneReleaseConfig = 0;
     }
@@ -2082,7 +2103,7 @@ DWORD WINAPI SunSDRReadThread(LPVOID param)
         /* Log every second regardless */
         DWORD now = GetTickCount();
         if (now - last_log_time >= 1000) {
-            sdr_logf("IQ status: pkts=%d, timeouts=%d, keepRunning=%d, HaveSync=%d txAttempt=%ld ptt=%d tune=%d txFeed=%u keepaliveFE=%u keepaliveRace=%u rxSilence=%u realFE=%u realFD=%u xrouterReal=%u xrouterTotal=%u rxAccum=%.3f txPackets=%u activeFD=%ld seqGaps=%ld feDuringTx=%ld keepaliveRaces=%ld\n",
+            sdr_logf("IQ status: pkts=%d, timeouts=%d, keepRunning=%d, HaveSync=%d txAttempt=%ld ptt=%d tune=%d txIqGate=%ld txFeed=%u keepaliveFE=%u keepaliveRace=%u rxSilence=%u realFE=%u realFD=%u xrouterReal=%u xrouterTotal=%u rxAccum=%.3f txPackets=%u activeFD=%ld seqGaps=%ld feDuringTx=%ld keepaliveRaces=%ld iqGateSkips=%ld firstFdBefore0x06=%ld\n",
                 pkt_count,
                 timeout_count,
                 sdr.keepRunning,
@@ -2090,6 +2111,7 @@ DWORD WINAPI SunSDRReadThread(LPVOID param)
                 sunsdr_dbg_tx_attempt_id,
                 sdr.currentPTT,
                 sdr.currentTune,
+                sunsdr_tx_iq_enabled,
                 dbg_tx_feed_buffers,
                 dbg_keepalive_fe_sent,
                 dbg_keepalive_tx_races,
@@ -2103,7 +2125,9 @@ DWORD WINAPI SunSDRReadThread(LPVOID param)
                 sunsdr_dbg_active_tx_packets,
                 sunsdr_dbg_active_tx_seq_gaps,
                 sunsdr_dbg_idle_fe_during_tx,
-                sunsdr_dbg_keepalive_tx_races);
+                sunsdr_dbg_keepalive_tx_races,
+                sunsdr_dbg_tx_iq_gate_skips,
+                sunsdr_dbg_first_fd_before_cmd);
             last_log_time = now;
             timeout_count = 0;
             dbg_tx_feed_buffers = 0;
