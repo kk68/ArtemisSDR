@@ -1979,14 +1979,12 @@ static void sunsdr_reassert_tx_state(void)
         sunsdr_send_u32_cmd(SUNSDR_OP_KEEPALIVE, 0);
     }
 
-    /* Send 0x24 before config block + PTT. Present in the EESDR
-     * "pa_on_in_tune" wire capture as part of the TUNE-entry sequence
-     * (0x17 -> 0x24 -> 0x18 -> 0x20 -> 0x09 -> 0x06). We were skipping
-     * it and seeing intermittent zero-RF TX attempts (2/10 failing).
-     * Exact function of 0x24 is not documented in our reverse-engineered
-     * protocol notes, but EESDR always sends it. Mirroring that. */
-    sunsdr_send_u32_cmd(0x24, 0);
-    sdr_logf("Reassert TX 0x24: arm-TX handshake\n");
+    /* NOTE: 0x24 was added here in a previous commit based on the
+     * "pa_on_in_tune" capture, but that capture is "Enable PA while
+     * already in TUNE", not a TUNE-entry capture. The real TUNE-entry
+     * reference (20260408_141031_tun_on) contains NO 0x24. Removed.
+     * The TX freq (0x09) is also moved OUT of this function and sent
+     * AFTER 0x06 in the PTT-on path to match EESDR ordering. */
 }
 
 static void sunsdr_reassert_rx_state(void)
@@ -2945,6 +2943,15 @@ void SunSDRSetPTT(int ptt)
             sdr.txAccumBoxI = 0.0;
             sdr.txAccumBoxQ = 0.0;
             sdr.txAccumBoxN = 0;
+            /* Reset the wire packet sequence counter to 0. EESDR reference
+             * captures (voice MOX and TUNE) show the TX stream seq restarts
+             * at 0 for every new TX session. Without this we were handing
+             * the radio FD packets with carried-over seq (e.g., 18507 on
+             * attempt 9) and the radio intermittently discarded them as
+             * out-of-order, keying up but producing unmodulated carrier
+             * (user-visible as "radio in TX but no tone"). Resetting seq
+             * here ensures each session starts seq=0 matching EESDR. */
+            sdr.txSeq = 0;
             attempt_id = InterlockedIncrement(&sunsdr_dbg_attempt_seq);
             InterlockedExchange(&sunsdr_dbg_tx_attempt_id, attempt_id);
             sunsdr_dbg_reset_tx_attempt_locked(attempt_id);
