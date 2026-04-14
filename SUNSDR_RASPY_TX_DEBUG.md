@@ -592,6 +592,18 @@ Possible outcomes:
 - **Raspy uncorrelated with histogram**: jitter is not the driver. Proceed to Phase B (wire capture + spectral) to find the DSP-component fingerprint.
 - **Histogram all in `4-8` bucket on raspy attempts**: scheduler is clean, problem is elsewhere (WDSP internal state) → Phase B.
 
+## 2026-04-14 Native 312.5 kHz rate refactor — evaluated, parked
+
+User raised: could we run WDSP natively at 312.5 kHz RX instead of resampling radio IQ up to 384 kHz? Would reduce resample stages and potentially help timing/raspy.
+
+Code audit result:
+
+- **Feasibility**: Fine. WDSP accepts arbitrary rates as doubles. rmatch handles 312500/48000 = 6.5104 via polyphase. wcpAGC.h `MAX_SAMPLE_RATE = 384000.0` sizes the AGC ring conservatively; 312500 fits under it.
+- **Scope**: LARGE (~36-44 hours, 1-1.5 weeks). Touches `sunsdr.c` resampler (lines 485-548, 509-511), `cmaster.c` / `cmsetup.c` rate tables, `netInterface.c` / `cmUtilities.c` mic-decimation tables, `console.cs` hardcoded TX rate, ivac.c rmatch phase alignment, full-mode regression testing.
+- **Raspy ROI**: Negligible. The resampler we'd remove (`sunsdr_resample`) is stateless linear-interp with a single phase double reset on PTT — not a candidate for gradient-severity state drift. WDSP's stateful `rmatch` resampler stays regardless of input rate; Run 9b/10 evidence points at rmatch phase drift from silence-injection bursts after scheduler-tick stalls. Silence injection and scheduler jitter are unchanged by input rate.
+
+**Decision (user-approved)**: Drop for now. Revisit post-raspy as architectural cleanup (cleaner code, modest CPU reduction, aligned with radio rate, no custom-resampler maintenance burden). Detailed audit + file list stored in memory `project_native_312_5k_rate_refactor.md`.
+
 ## Next Step
 
-Awaiting user's next message (they indicated a point to make about this run). Then either (a) user supplies log snippets for histogram correlation, or (b) we proceed based on the point.
+Histogram correlation still outstanding: need `RX_GAP_HIST` snippets from `sunsdr_debug.log` covering raspy attempts 11, 14, 15 vs clean samples to pick between Tier 3 (waitable-timer pacing thread, ~4-8 hours) and Phase B (spectral capture, ~2-4 hours).
