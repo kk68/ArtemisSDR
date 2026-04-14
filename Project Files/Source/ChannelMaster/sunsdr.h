@@ -159,6 +159,10 @@ void SunSDRSetMode(int mode);
 void SunSDRSetPTT(int ptt);
 void SunSDRSetRX2(int enabled);
 void SunSDRSetTune(int tune);
+void SunSDRLogTuneState(const char* label, int chk_tun, int chk_mox, int tuning, int mox,
+    int tx_dsp_mode, int current_dsp_mode, int postgen_run, int postgen_mode,
+    double tone_freq, double tone_mag, int pulse_enabled, int pulse_on,
+    int tune_drive_source, int pwr, int new_pwr);
 void SunSDRSetDrive(int raw);
 void SunSDRSetAntenna(int antenna);
 void SunSDRSetTxAntenna(int antenna);

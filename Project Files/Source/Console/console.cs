@@ -30062,6 +30062,32 @@ namespace Thetis
             get { return _tune_pulse_enabled; }
             set { _tune_pulse_enabled = value; }
         }
+
+        private void LogSunSDRTuneAudioState(string label, int newPwr)
+        {
+            if (NetworkIO.CurrentRadioProtocol != RadioProtocol.SUNSDR)
+                return;
+
+            var tx = radio.GetDSPTX(0);
+            NetworkIO.nativeSunSDRLogTuneState(
+                label,
+                chkTUN.Checked ? 1 : 0,
+                chkMOX.Checked ? 1 : 0,
+                _tuning ? 1 : 0,
+                _mox ? 1 : 0,
+                (int)Audio.TXDSPMode,
+                (int)tx.CurrentDSPMode,
+                tx.TXPostGenRun,
+                tx.TXPostGenMode,
+                tx.TXPostGenToneFreq,
+                tx.TXPostGenToneMag,
+                _tune_pulse_enabled ? 1 : 0,
+                _tune_pulse_on ? 1 : 0,
+                (int)_tuneDrivePowerSource,
+                ptbPWR.Value,
+                newPwr);
+        }
+
         private async void chkTUN_CheckedChanged(object sender, System.EventArgs e)
         {
             bool oldTune = _tuning; //MW0LGE_21k9d
@@ -30126,6 +30152,7 @@ namespace Thetis
                     radio.GetDSPTX(0).TXPostGenToneMag = MAX_TONE_MAG;
                     radio.GetDSPTX(0).TXPostGenRun = 1;
                 }
+                LogSunSDRTuneAudioState("TUNE_ON_POSTGEN_SET", -1);
 
                 // remember old power //MW0LGE_22b
                 if (_tuneDrivePowerSource == DrivePowerSource.FIXED)
@@ -30138,7 +30165,8 @@ namespace Thetis
                     PWRSliderLimitEnabled = false;
                     PWR = new_pwr;
                 }
-                //          
+                LogSunSDRTuneAudioState("TUNE_ON_POST_POWER", new_pwr);
+                //
 
                 old_dsp_mode = radio.GetDSPTX(0).CurrentDSPMode;                // save current mode
                 switch (old_dsp_mode)
@@ -30167,11 +30195,14 @@ namespace Thetis
 
                 if (NetworkIO.CurrentRadioProtocol == RadioProtocol.SUNSDR)
                 {
+                    LogSunSDRTuneAudioState("TUNE_ON_PRE_NATIVE_TUNE", new_pwr);
                     NetworkIO.nativeSunSDRSetMode((int)Audio.TXDSPMode);
                     NetworkIO.nativeSunSDRSetTune(1);
+                    LogSunSDRTuneAudioState("TUNE_ON_POST_NATIVE_TUNE_PRE_MOX", new_pwr);
                 }
 
                 chkMOX.Checked = true;
+                LogSunSDRTuneAudioState("TUNE_ON_AFTER_CHKMOX", new_pwr);
 
                 await Task.Delay(100); // MW0LGE_21k8
                 // go for it
@@ -30197,12 +30228,18 @@ namespace Thetis
                 _tune_pulse_on = false;
 
                 if (NetworkIO.CurrentRadioProtocol == RadioProtocol.SUNSDR)
+                {
+                    LogSunSDRTuneAudioState("TUNE_OFF_PRE_NATIVE_TUNE", -1);
                     NetworkIO.nativeSunSDRSetTune(0);
+                    LogSunSDRTuneAudioState("TUNE_OFF_POST_NATIVE_TUNE", -1);
+                }
 
                 chkMOX.Checked = false;                                         // we're done
+                LogSunSDRTuneAudioState("TUNE_OFF_AFTER_CHKMOX", -1);
                 await Task.Delay(100);
 
                 radio.GetDSPTX(0).TXPostGenRun = 0;
+                LogSunSDRTuneAudioState("TUNE_OFF_POSTGEN_STOP", -1);
 
                 chkTUN.BackColor = SystemColors.Control;
 

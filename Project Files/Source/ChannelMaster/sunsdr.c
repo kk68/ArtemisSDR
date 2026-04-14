@@ -1834,6 +1834,37 @@ void SunSDRSetTune(int tune)
         sdr.txPhase);
 }
 
+void SunSDRLogTuneState(const char* label, int chk_tun, int chk_mox, int tuning, int mox,
+    int tx_dsp_mode, int current_dsp_mode, int postgen_run, int postgen_mode,
+    double tone_freq, double tone_mag, int pulse_enabled, int pulse_on,
+    int tune_drive_source, int pwr, int new_pwr)
+{
+    sdr_logf("TUNE_AUDIO_STATE label=%s chkTun=%d chkMox=%d tuning=%d mox=%d txDspMode=%d currentDspMode=%d postGenRun=%d postGenMode=%d toneFreq=%.3f toneMag=%.6f pulseEnabled=%d pulseOn=%d tuneDriveSource=%d pwr=%d newPwr=%d attempt=%ld ptt=%d tune=%d seq=%u txPackets=%u txPhase=%.4f rawDrive=%d\n",
+        label ? label : "unknown",
+        chk_tun,
+        chk_mox,
+        tuning,
+        mox,
+        tx_dsp_mode,
+        current_dsp_mode,
+        postgen_run,
+        postgen_mode,
+        tone_freq,
+        tone_mag,
+        pulse_enabled,
+        pulse_on,
+        tune_drive_source,
+        pwr,
+        new_pwr,
+        sunsdr_dbg_tx_attempt_id,
+        sdr.currentPTT,
+        sdr.currentTune,
+        sdr.txSeq,
+        sdr.txAudioPackets,
+        sdr.txPhase,
+        sdr.currentDriveRaw);
+}
+
 void SunSDRSetDrive(int raw)
 {
     if (raw < 0) raw = 0;

@@ -1555,6 +1555,17 @@ PORT void nativeSunSDRSetTune(int tune)
 	SunSDRSetTune(tune);
 }
 
+PORT void nativeSunSDRLogTuneState(char* label, int chk_tun, int chk_mox, int tuning, int mox,
+	int tx_dsp_mode, int current_dsp_mode, int postgen_run, int postgen_mode,
+	double tone_freq, double tone_mag, int pulse_enabled, int pulse_on,
+	int tune_drive_source, int pwr, int new_pwr)
+{
+	SunSDRLogTuneState(label, chk_tun, chk_mox, tuning, mox,
+		tx_dsp_mode, current_dsp_mode, postgen_run, postgen_mode,
+		tone_freq, tone_mag, pulse_enabled, pulse_on,
+		tune_drive_source, pwr, new_pwr);
+}
+
 PORT void nativeSunSDRSetDrive(int raw)
 {
 	SunSDRSetDrive(raw);
