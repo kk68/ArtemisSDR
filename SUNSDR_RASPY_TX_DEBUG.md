@@ -415,6 +415,55 @@ Per user decision 2026-04-14, Tier 1 is shipped **together** with the async logg
 | No improvement, fdGapMax still ~16 ms | timeBeginPeriod(1) did not take effect, or scheduler wakes are gated elsewhere. | Check TIMING_INIT log. Add Tier 2 gap histogram to locate the stall. |
 | Worse than Run 8 | Regression: thread priority or clamp introduced new jitter. | Revert Tier 1 items one at a time to narrow. |
 
+## 2026-04-14 Run 9 result + Tier 1 clamp regression + fix (Run 9b)
+
+User ran Run 9 after rebuilding with the bundled async logger + Tier 1 timing hardening. **Result: consistent raspy on ALL 20+ attempts**, worse than Run 8 (6/20 raspy).
+
+Critical new observation (user): VAC panel showed **VAC1 Out Underflow** and **VAC1 In Overflow** counters climbing steadily during TUNE only — not during RX, not during normal TX voice, only TUNE.
+
+### Root cause of the Run 9 regression
+
+The `elapsed_ms` clamp at 2 ms that I added to Tier 1 item #4 was incorrectly calibrated.
+
+The RX read loop is paced by radio packet arrival via `recv()`:
+- **RX mode**: packets every ~640 us → `elapsed_ms ≈ 0.64 ms` → below 2 ms clamp → not clamped.
+- **TX/TUNE mode**: radio throttles to ~195 pkts/sec → packets every **~5.12 ms** → above 2 ms clamp → **clamp fires every single iteration**.
+
+Result: during TX the `elapsed_ms` value passed into the silence accumulators was always replaced with 1 ms instead of the real ~5.12 ms. That under-fed both accumulators by a factor of ~5:
+
+- **`rx_silence_accum`** targets 1562.5 buffers/sec. Actual feed during TX collapsed to ~305/sec. WDSP RX was starved of input → VAC1 Out (RX→speakers) underflowed steadily, and the rmatch resampler, seeing severely under-paced input, corrupted the audio → **raspy on-air on EVERY attempt**.
+- **`tx_feed_accum`** drives `Inbound(tx_stream, ...)` which causes `cm_main` to call `xvacIN()` draining VAC input. Under-calling by 5× meant VAC1 IN filled faster than it drained → **VAC1 In overflow counter climbing**.
+
+Both user-visible symptoms (consistent raspy, climbing VAC counters, TUNE-only) are predicted by this single bug. The design intent of Tier 1 was correct but the threshold was wrong — I treated normal TX cadence as a stall.
+
+### Fix (Run 9b)
+
+In `sunsdr.c`:
+
+- Raised `elapsed_clamp_ms` from **2.0 ms → 50.0 ms**. Catches only pathological stalls (scheduler preemption events far beyond the normal 5.12 ms TX cadence and the 16 ms scheduler tick).
+- Introduced `elapsed_replace_ms = 10.0 ms` as the sentinel replacement. Removed `expected_period_ms`.
+- The existing `emitted < 16` cap inside the silence-injection while-loop already bounds any one iteration's burst, so the clamp is purely a safety net for rare pathological events.
+- Updated the `TIMING_INIT` log line: `clampMs=50.0 replaceMs=10.0`.
+
+Additionally added **`VAC1 status`** line to the per-second telemetry so we can track `outUnder`, `outOver`, `outRing`, `inUnder`, `inOver`, `inRing` against PTT/TUNE state going forward. Uses existing `getIVACdiags(0, type, ...)` API.
+
+### Run 9b verification
+
+1. Rebuild ChannelMaster + Thetis Debug x64.
+2. Confirm `TIMING_INIT` line shows `clampMs=50.0 replaceMs=10.0`.
+3. With radio running in RX, confirm `VAC1 status` lines show `outUnder=0 outOver=0 inUnder=0 inOver=0` (or at least stable, not monotonically climbing).
+4. Run 20 TUNE cycles at UI drive 1, 2-3 s on / 2-3 s off. Per cycle record clean / slight / moderate / heavy.
+5. Per cycle, also record the delta in VAC1 outUnder and VAC1 inOver across the TUNE-on window (log delta before/after).
+6. `TIMING_CLAMP` log lines should be absent or very rare (once per TUNE maximum).
+
+### Run 9b decision matrix
+
+| Outcome | Interpretation | Next |
+|---|---|---|
+| Clean >= 18/20, VAC1 counters stable during TUNE | Clamp fix restored correct silence pacing; the 2 ms clamp was the sole cause of Run 9 regression. Async logger + timeBeginPeriod + ABOVE_NORMAL + QPC alone are safe. Raspy may or may not still occur at Run 8 rate. | If raspy still 5-6/20, proceed to Tier 2 / Phase B. If fully clean, close. |
+| Raspy rate returns to Run 8 level (~6/20), VAC1 counters stable | Clamp was the extra damage but the original 16 ms scheduler-tick hypothesis still stands. | Proceed to Tier 2 (gap histogram) or Phase B (spectral). |
+| Raspy still present AND VAC1 counters still climbing | There's a second bug. The QPC switch, the thread-priority bump, or the timeBeginPeriod is interacting with something unexpected. | Diff Tier 1 items one at a time to narrow. First suspect: are xrouter's internal consumers actually keeping up at the correct rate now, or did QPC's sub-us `elapsed_ms` expose a math precision edge case in the accumulators? |
+
 ## Next Step
 
-Rebuild ChannelMaster + Thetis Debug x64 and execute the Run 9 verification protocol above. Update this document with Run 9 results and the decision matrix outcome.
+Rebuild ChannelMaster + Thetis Debug x64 and execute the **Run 9b** verification protocol above. Update this document with results.

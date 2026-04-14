@@ -2340,14 +2340,23 @@ DWORD WINAPI SunSDRReadThread(LPVOID param)
     /* QPC-based pacing: sub-us resolution, immune to Windows scheduler-tick
      * granularity. Replaces GetTickCount64() which had ~16 ms resolution and
      * directly caused the observed fdGapMax=16.000 ms on every TUNE (Run 8).
-     * `expected_period_ms` is the planned RX-loop iteration period used for
-     * the `elapsed_ms` clamp — 1 ms matches the new timeBeginPeriod(1) tick
-     * and is a conservative floor. */
+     *
+     * Clamp rationale: the loop is paced by radio packet arrival via recv().
+     * In RX mode packets arrive every ~640 us. In TX/TUNE the radio throttles
+     * to ~195 pkts/sec (~5.12 ms/iter) — this is NORMAL, not a stall. Clamp
+     * must therefore only fire on PATHOLOGICAL stalls (scheduler preemption,
+     * page fault, AV scan). 50 ms catches those while staying comfortably
+     * above the 5.12 ms TX cadence and well under a second of catastrophe.
+     * Per-iteration burst is separately bounded by `emitted < 16` below.
+     *
+     * When the clamp fires, elapsed_ms is replaced with the CURRENT
+     * iteration's QPC delta (best estimate, NOT a fixed 1 ms) so the
+     * silence accumulators keep tracking real cadence. */
     LARGE_INTEGER qpc_freq = {0};
     LARGE_INTEGER last_service_qpc = {0};
     LARGE_INTEGER now_qpc = {0};
-    double expected_period_ms = 1.0;
-    double elapsed_clamp_ms = expected_period_ms * 2.0;
+    double elapsed_clamp_ms = 50.0;
+    double elapsed_replace_ms = 10.0;  /* sentinel value when clamping fires */
     unsigned int dbg_elapsed_clamps = 0;
     unsigned int dbg_elapsed_clamps_prev_sec = 0;
     double tx_feed_accum = 0.0;
@@ -2406,8 +2415,8 @@ DWORD WINAPI SunSDRReadThread(LPVOID param)
     DWORD last_log_time = GetTickCount();
     QueryPerformanceFrequency(&qpc_freq);
     QueryPerformanceCounter(&last_service_qpc);
-    sdr_logf("TIMING_INIT: RX loop QPC pacing qpcFreq=%lld clampMs=%.3f expectedPeriodMs=%.3f\n",
-        (long long)qpc_freq.QuadPart, elapsed_clamp_ms, expected_period_ms);
+    sdr_logf("TIMING_INIT: RX loop QPC pacing qpcFreq=%lld clampMs=%.1f replaceMs=%.1f\n",
+        (long long)qpc_freq.QuadPart, elapsed_clamp_ms, elapsed_replace_ms);
     int timeout_count = 0;
 
     while (sdr.keepRunning) {
@@ -2420,15 +2429,20 @@ DWORD WINAPI SunSDRReadThread(LPVOID param)
             elapsed_ms = 0.0;
         }
 
-        /* Clamp pathologically long gaps (scheduler stall, page fault, AV
-         * scan, radio packet drought during TX). Without this, a 50 ms stall
-         * translates to a 50 ms catch-up burst in rx_silence_accum /
-         * tx_feed_accum, producing a sawtooth injection pattern that is the
-         * suspected driver of the raspy TUNE distortion. Under-feeding WDSP
-         * by one block is benign; over-feeding (burst) is not. */
+        /* Clamp only PATHOLOGICAL stalls (>50 ms). Normal TX-mode iteration
+         * is ~5.12 ms (radio throttled to 195 pps). RX-mode iteration is
+         * ~0.64 ms. The per-iteration burst cap inside the silence-injection
+         * while-loop (`emitted < 16`) already bounds how many silence buffers
+         * one iteration can emit — so an ordinary scheduler hiccup spreads
+         * its catch-up across a few iterations rather than hitting VAC in
+         * one shot.
+         *
+         * Earlier 2 ms clamp regressed Run 9 badly: it fired EVERY TX iter,
+         * under-fed the accumulators by ~5x, and produced steady-state
+         * VAC1 Out underflow + VAC1 In overflow with 100% raspy TUNE. */
         if (elapsed_ms > elapsed_clamp_ms) {
             dbg_elapsed_clamps++;
-            elapsed_ms = expected_period_ms;
+            elapsed_ms = elapsed_replace_ms;
         }
 
         if (elapsed_ms > 0.0) {
@@ -2544,6 +2558,29 @@ DWORD WINAPI SunSDRReadThread(LPVOID param)
             if (clamps_this_sec > 0) {
                 sdr_logf("TIMING_CLAMP: elapsed_ms clamped %u times in last 1s (total=%u). Loop stalled > %.1f ms.\n",
                     clamps_this_sec, dbg_elapsed_clamps, elapsed_clamp_ms);
+            }
+            {
+                /* VAC1 (id=0) counters. type 0 = Out (RX -> speakers), type 1 = In (mic -> TX).
+                 * Per user observation 2026-04-14, these climb steadily during TUNE when the
+                 * RX silence injection under-feeds WDSP (Out underflow) and the TX feed
+                 * Inbound under-drains VAC IN (In overflow). Surfacing them here lets us
+                 * correlate clean vs raspy attempts against VAC starvation state. */
+                int v1_out_under = 0, v1_out_over = 0, v1_out_ring = 0, v1_out_nring = 0;
+                int v1_in_under = 0, v1_in_over = 0, v1_in_ring = 0, v1_in_nring = 0;
+                double v1_out_var = 0.0, v1_in_var = 0.0;
+                IVAC v1 = pvac[0];
+                if (v1) {
+                    if (v1->rmatchOUT) {
+                        getIVACdiags(0, 0, &v1_out_under, &v1_out_over, &v1_out_var, &v1_out_ring, &v1_out_nring);
+                    }
+                    if (v1->rmatchIN) {
+                        getIVACdiags(0, 1, &v1_in_under, &v1_in_over, &v1_in_var, &v1_in_ring, &v1_in_nring);
+                    }
+                    sdr_logf("VAC1 status: outUnder=%d outOver=%d outRing=%d/%d inUnder=%d inOver=%d inRing=%d/%d ptt=%d tune=%d\n",
+                        v1_out_under, v1_out_over, v1_out_ring, v1_out_nring,
+                        v1_in_under, v1_in_over, v1_in_ring, v1_in_nring,
+                        sdr.currentPTT, sdr.currentTune);
+                }
             }
             sdr_logf("IQ status: pkts=%d, timeouts=%d, keepRunning=%d, HaveSync=%d txAttempt=%ld ptt=%d tune=%d txIqGate=%ld txFeed=%u keepaliveFE=%u keepaliveRace=%u rxSilence=%u realFE=%u realFD=%u xrouterReal=%u xrouterTotal=%u rxAccum=%.3f txPackets=%u activeFD=%ld seqGaps=%ld feDuringTx=%ld keepaliveRaces=%ld iqGateSkips=%ld firstFdBefore0x06=%ld\n",
                 pkt_count,
