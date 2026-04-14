@@ -117,23 +117,29 @@ static void iq_dump_init_path(void)
     }
 }
 
-/* Delete all existing sunsdr_tx_iq_*.raw files from the log dir on
- * startup so they don't accumulate across sessions. Called from
- * SunSDRInit before the first dump fires. */
-static void iq_dump_cleanup_old_files(void)
+/* Background thread that deletes leftover sunsdr_tx_iq_*.raw files.
+ *
+ * Previously called synchronously from SunSDRInit — but that ran on the
+ * Thetis managed-side init thread racing against VAC/PortAudio setup.
+ * Even ~50 ms of synchronous DeleteFileA calls was enough to derail the
+ * audio chain bring-up and leave startup RX with no output. Moving to a
+ * detached thread so init returns instantly and the filesystem work
+ * happens asynchronously. */
+static DWORD WINAPI iq_dump_cleanup_thread_proc(LPVOID param)
 {
     WIN32_FIND_DATAA ffd;
     HANDLE hFind;
     char pattern[MAX_PATH];
     char path[MAX_PATH];
     int deleted = 0;
+    (void)param;
 
     iq_dump_init_path();
     _snprintf(pattern, sizeof(pattern), "%s\\sunsdr_tx_iq_*.raw", iq_dump_dir);
     pattern[sizeof(pattern) - 1] = '\0';
 
     hFind = FindFirstFileA(pattern, &ffd);
-    if (hFind == INVALID_HANDLE_VALUE) return;
+    if (hFind == INVALID_HANDLE_VALUE) return 0;
     do {
         if (ffd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
         _snprintf(path, sizeof(path), "%s\\%s", iq_dump_dir, ffd.cFileName);
@@ -143,8 +149,16 @@ static void iq_dump_cleanup_old_files(void)
     FindClose(hFind);
 
     if (deleted > 0) {
-        sdr_logf("IQ_DUMP_CLEANUP deleted %d old sunsdr_tx_iq_*.raw files at startup\n", deleted);
+        sdr_logf("IQ_DUMP_CLEANUP deleted %d old sunsdr_tx_iq_*.raw files (async)\n", deleted);
     }
+    return 0;
+}
+
+static void iq_dump_cleanup_old_files(void)
+{
+    /* Fire-and-forget background thread — do NOT block SunSDRInit. */
+    HANDLE h = CreateThread(NULL, 0, iq_dump_cleanup_thread_proc, NULL, 0, NULL);
+    if (h) CloseHandle(h);  /* detach; thread runs to completion on its own */
 }
 
 static void iq_dump_reset(int attempt_id)
