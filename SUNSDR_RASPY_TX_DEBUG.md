@@ -864,9 +864,68 @@ Our RX IQ stream DOES have a sequence number and we track gaps as `seqGaps` in `
 
 **Action**: none needed as a raspy fix. Not a contributor. Optional UI polish (surface our existing `seqGaps` in the status bar the same way upstream surfaces `mic_in_seq_err`) can be added later as integration cleanup, but is not on the raspy critical path.
 
+## 2026-04-14 Run 13 — IQ ground truth: wire content is IDENTICAL across clean and raspy
+
+User ran TUNE test post IQ-dump landing. Attempt #7 went raspy. Files captured:
+
+- `sunsdr_tx_iq_0001.raw` through `sunsdr_tx_iq_0007.raw`, 640 KB each (40000 complex doubles, ~1024 ms at 39062.5 Hz)
+- MD5 of each file differs — they are not byte-identical
+
+Analysis script: `sunsdr-re/scripts/analysis/analyze_iq.py` (steady-state FFT + envelope + phase) and `analyze_iq_attack.py` (50 ms segmented windows from t=0 to t=950 ms).
+
+### Result: every spectral metric is IDENTICAL across all 7 attempts
+
+| Metric | Clean (#1-#6) | **Raspy (#7)** |
+|---|---|---|
+| Peak magnitude | 0.10613 | 0.10613 |
+| RMS | 0.0991 | 0.0991 |
+| Mean I (DC offset) | ~1e-5 | ~1e-5 |
+| Mean Q (DC offset) | ~1e-5 | ~1e-5 |
+| Fundamental at +600 Hz | 0.00 dB | 0.00 dB |
+| 2nd mirror (+1200 Hz) | -72.48 dB | -72.48 dB |
+| 2nd harm (-1200 Hz) | -89.53 dB | -89.53 dB |
+| 3rd harm (-1800 Hz) | -140.68 dB | -140.68 dB |
+| Noise floor (±1k excl. signal) | -133.22 dB | -133.22 dB |
+| Envelope modulation | 0.004 % | 0.004 % |
+| Instantaneous freq std (Hz) | 22.914 | 22.914 |
+
+Per-50ms-window analysis from t=0 to t=950 ms: attack ramp up, steady state, tail — identical on every metric at every timepoint. `cmp` of #5 vs #7 shows the only difference is a ~1-sample phase offset in the streams (the tone generator picks up at a slightly different phase), which is audibly irrelevant (a sine wave shifted by 25 us).
+
+### What this definitively rules out
+
+The raspy is **not** caused by:
+
+- Nonlinear distortion in our TX path (no different harmonic content on raspy vs clean)
+- Wideband noise from WDSP filter rings (noise floor identical at -133 dB)
+- Amplitude modulation by AAMIX / ALC (env modulation is 0.004 % — negligible and identical)
+- Phase jitter / resampler state (inst freq std identical)
+- DC bias drift in our downsampler (I/Q means are ~1e-5, identical across attempts)
+- Any state-drift-between-attempts in TXA, VAC rmatch, WCPAGC, or the tone generator (if they drifted, clean and raspy wire content would differ)
+
+Our wire IQ is pristine. What we send to the radio does NOT distinguish raspy from clean attempts.
+
+### What this points to
+
+The raspy must be one of:
+
+1. **Radio-side processing** — the SunSDR2 DX firmware / DAC / analog chain reacts differently to bitwise-equivalent input depending on internal state (PA ALC transient, band-pass ringing, clock phase) that we can't see
+2. **Packet arrival timing at the radio** — same bytes, different arrival pattern. Content-identical but jittered packet delivery could cause radio DAC hiccups. Our `fdGapMax=16.000` is universal so this is on the table.
+3. **Anan-side reception** — the receiving Anan (user's listening station) picks up something that only sounds raspy due to its own receiver AGC/band-pass ringing recovering from previous TX transient
+4. **RF path environment** — noise, reflections, propagation variance
+
+### Also surfaced in passing
+
+The TUNE tone is emitted at **+600 Hz** on the wire (spectral mirror of WDSP's -600 Hz tone). Means we are sending the I/Q pair such that the radio sees the complex conjugate of what WDSP produced. Common culprits: I/Q swap or sign flip in the TX encode. **Not the raspy driver** (both clean and raspy equally mirrored), but a separate protocol question to resolve later.
+
+### Next diagnostic candidates
+
+1. **Wire packet timing (pcap)** — existing `Capture-RaspyTuneCycles.ps1` captures the UDP wire traffic. Extract per-packet inter-arrival time from the pcap (vs our own internal `fdGap*` counters). If raspy attempts show different inter-packet timing than clean ones, hypothesis 2 (packet arrival timing) is confirmed → fix is a pacing thread with a waitable timer (Tier 3).
+2. **Isolation test: PA off / dummy load** — user has `pa=0` already. If raspy still at -10 dBm into a dummy load heard by the Anan, it's radio-side (hypothesis 1). If raspy only manifests when transmitting through an antenna, it's propagation (hypothesis 3 or 4).
+3. **Anan-side WAV recording during raspy** — objective audio recording of what the Anan actually hears. Lets us distinguish "Thetis on-air is raspy" from "Anan receives clean-sounding TX but reports raspy due to its own recovery from previous TX."
+
 ## Next Step
 
-Rebuild ChannelMaster + Thetis (no WDSP change this time — `sunsdr.c` only). Run 8-20 TUNE cycles, note which attempt numbers go raspy. Share: attempt numbers + content of `Thetis/Project Files/bin/x64/Debug/sunsdr_tx_iq_XXXX.raw` files (at least 1 raspy + 2 clean). Spectral comparison identifies the specific mechanism.
+Discuss with user: raspy is not in our wire content. Three non-code experiments to characterize what IS causing it. No obvious software fix at this layer — pending root cause identification from the experiments above.
 
 User chose to skip histogram correlation and go straight to Phase B spectral capture since it is definitive regardless of the scheduler-stall question.
 
