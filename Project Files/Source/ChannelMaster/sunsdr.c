@@ -290,17 +290,20 @@ static DWORD WINAPI tx_pace_thread_proc(LPVOID lp)
         WaitForSingleObject(tx_pace_ptt_event, INFINITE);
         if (InterlockedAnd(&tx_pace_stop, 0xffffffff)) break;
 
-        /* Pre-buffer: wait until the producer has stashed at least
-         * TX_PACE_PREBUFFER packets in the ring before we start emitting.
-         * Steady-state producer rate is ~195 pps (matching consumer),
-         * but WDSP callback jitter can leave holes of up to 16 ms. A
-         * head-start of 4 packets (~20 ms buffer depth) absorbs those
-         * holes without on-wire silence gaps. Cap the wait so TX still
-         * starts even if the producer is pathologically slow. */
+        /* Pre-buffer: wait only for the FIRST producer packet before we
+         * start emitting. Reference EESDR capture shows first FD packet
+         * on wire 7 ms after 0x06 PTT-on ack; our previous 4-packet
+         * pre-buffer was adding 12-20 ms of delay, and we saw 1/10
+         * attempts where the radio accepted 0x06 but never produced
+         * RF — suspected cause is the radio's TX watchdog interpreting
+         * the gap as abort. Running ring underruns (if any) are now
+         * handled by the emit-last-packet path below, which was added
+         * after the pre-buffer fix and makes the 4-packet head-start
+         * redundant. */
         {
             int wait_ms = 0;
-            const int prebuf = 4;
-            const int max_wait_ms = 40;  /* don't wait longer than 40 ms */
+            const int prebuf = 1;
+            const int max_wait_ms = 20;  /* cap so TX still starts */
             while (sdr.currentPTT && !InterlockedAnd(&tx_pace_stop, 0xffffffff)) {
                 LONG h = InterlockedAnd(&tx_pace_head, 0xffffffff);
                 LONG t = InterlockedAnd(&tx_pace_tail, 0xffffffff);
