@@ -8,7 +8,7 @@ Intermittent raspy tone/audio during SunSDR TUNE and MOX/TX. Current report is r
 
 ## Current Status
 
-- Status: fourth TUNE-cycle data analyzed; TX pre-prime made TUNE results worse and has been removed. Next phase is diagnostics above the SunSDR stream send path.
+- Status: fourth TUNE-cycle data analyzed; TX pre-prime made TUNE results worse and has been removed. Audio-layer diagnostics have been added for the next TUNE run.
 - Primary file: `Project Files/Source/ChannelMaster/sunsdr.c`
 - First reproduction target: repeated TUNE on/off cycles, 2-3 seconds on and 2-3 seconds off.
 - Keep this tracker updated after every test or code change until the issue is resolved.
@@ -23,6 +23,13 @@ The 2026-04-14 pass added diagnostics for:
 - TX packet sequence and interval metrics: active `0xFD` count, sequence gaps, gap min/avg/max
 - keepalive races: `TX_KEEPALIVE_RACE`, `feDuringTx`, `keepaliveRaces`
 - read-thread feed rates: `txFeed`, `keepaliveFE`, `rxSilence`, `realFE`, `realFD`, `xrouterReal`, `xrouterTotal`, `rxAccum`
+
+The next 2026-04-14 audio pass added diagnostics for:
+
+- TX audio callback aggregate health in `TX_ATTEMPT_END`: `txCb`, `txCbSilent`, `txCbNonfinite`, `txCbRmsMin`, `txCbRmsAvg`, `txCbRmsMax`, `txCbPostPeakMax`, and `txCbMaxGapMs`
+- VAC/ASIO/rmatch snapshots at attempt boundaries: `TX_AUDIO_DIAG BEGIN` and `TX_AUDIO_DIAG END`
+- CMA/ASIO state: `audioCodecId`, `run`, `block`, `lockMode`, direct over/underflow counters, and rmatch event counters when available
+- VAC1/VAC2 state: run/mox/monitor/bypass/combine flags, rates/sizes, latencies, rmatch pointers, underflows, overflows, var, ring size, and ring fill count
 
 The incomplete placeholder `extern double rx_silence_accum_public;` was removed. Real source-0 packets now debit the local RX silence accumulator during TX so the diagnostic path can expose overfeed.
 
@@ -47,6 +54,8 @@ For clean vs raspy attempts, compare:
 - `TX_ATTEMPT_END ... fdGapMin/fdGapAvg/fdGapMax`
 - `TX_ATTEMPT_END ... seqGaps`
 - per-second `IQ status` fields during the attempt, especially `rxSilence + realFD` versus expected feed behavior
+- `TX_ATTEMPT_END ... txCb*` fields, especially non-finite samples, silent callback count, RMS min/avg/max, and callback gap spikes
+- `TX_AUDIO_DIAG BEGIN/END` VAC/ASIO underflow/overflow deltas for raspy attempts versus clean attempts
 
 ## Current Hypotheses
 
@@ -55,7 +64,7 @@ For clean vs raspy attempts, compare:
 - Run 2 confirmed the RX silence cap fix works mechanically: `rxSilence` is now about 1562-1563/sec during TX and `rxAccum` stays bounded below 1. This improved RX/VAC behavior, but TUNE raspiness remains.
 - Run 3 confirmed the TX IQ gate fix works mechanically: `TX_FIRST_FD` now has `cmd_sent=1`, `firstFdBefore0x06=0`, and no `0xFE` keepalive races. TUNE raspiness still occurs, so the remaining visible `sunsdr.c` stream counters no longer correlate.
 - Run 4 showed that pre-priming one active silence `0xFD` after `0x06=1` made the result worse: 12/20 TUNE attempts were raspy. That candidate is rejected and removed.
-- Next phase: expand diagnostics above `sunsdr.c` stream timing into Thetis TX audio/TUNE generator state, VAC/ASIO/rmatch counters, and any TX monitor/RX path state that can explain raspy TUNE with clean SunSDR packet timing.
+- Current phase: diagnostics are now expanded above `sunsdr.c` stream timing into TX callback sample health and VAC/ASIO/rmatch counters. If these do not correlate, the next layer is managed Thetis TUNE generator state and TX monitor/RX path state around each TUNE attempt.
 
 ## 2026-04-14 TUNE Run 1
 
@@ -157,7 +166,7 @@ Next validation:
 - Confirm `TX_PREPRIME_FD` is no longer present.
 - Confirm `firstFdBefore0x06=0`, `feDuringTx=0`, `keepaliveRaces=0`, and `seqGaps=0` remain clean with the TX IQ gate.
 - Keep checking `rxSilence`, `xrouterTotal`, and `rxAccum` to ensure the RX/VAC underfeed fix remains intact.
-- Add next-layer diagnostics before attempting another behavior change: TUNE generator state, TX audio callback source cadence, VAC/ASIO/rmatch underflow/overflow counters, and TX monitor/RX path state around each TUNE attempt.
+- Compare the new `txCb*` and `TX_AUDIO_DIAG` fields between raspy and clean attempts before attempting another behavior change.
 
 ## Verification So Far
 
@@ -168,12 +177,15 @@ Next validation:
 - After the TX IQ gate change, `MSBuild ChannelMaster.vcxproj /t:ClCompile /p:SelectedFiles=sunsdr.c /p:Configuration=Debug /p:Platform=x64`: passed with 0 warnings and 0 errors.
 - After the TX pre-prime change, `MSBuild ChannelMaster.vcxproj /t:ClCompile /p:SelectedFiles=sunsdr.c /p:Configuration=Debug /p:Platform=x64`: passed with 0 warnings and 0 errors.
 - After removing the rejected TX pre-prime behavior, `MSBuild ChannelMaster.vcxproj /t:ClCompile /p:SelectedFiles=sunsdr.c /p:Configuration=Debug /p:Platform=x64`: passed with 0 warnings and 0 errors.
+- After adding audio-layer diagnostics, `git diff --check -- Project Files/Source/ChannelMaster/sunsdr.c SUNSDR_RASPY_TX_DEBUG.md`: passed.
+- After adding audio-layer diagnostics, `MSBuild ChannelMaster.vcxproj /t:ClCompile /p:SelectedFiles=sunsdr.c /p:Configuration=Debug /p:Platform=x64`: passed with 0 warnings and 0 errors.
 
 ## Next Step
 
-Run the repeated TUNE-cycle test and update this file with:
+Run the repeated 20-cycle TUNE test and update this file with:
 
 - number of attempts
 - clean/raspy classification for each attempt
-- key log correlations
+- key stream log correlations: `firstFdBefore0x06`, `feDuringTx`, `keepaliveRaces`, `seqGaps`, `rxSilence`, `xrouterTotal`, `rxAccum`
+- key audio log correlations: `txCb*` fields and `TX_AUDIO_DIAG BEGIN/END` VAC/ASIO/rmatch counter deltas
 - the next chosen fix candidate

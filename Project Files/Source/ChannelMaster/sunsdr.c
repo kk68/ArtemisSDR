@@ -35,6 +35,8 @@ of the License, or (at your option) any later version.
 
 /* Access VAC state array from ivac.c */
 extern IVAC pvac[];
+extern void getIVACdiags(int id, int type, int* underflows, int* overflows, double* var, int* ringsize, int* nring);
+extern void getCMAevents(long* overFlowsIn, long* overFlowsOut, long* underFlowsIn, long* underFlowsOut);
 
 /* Debug log */
 static FILE* sdr_log = NULL;
@@ -397,6 +399,15 @@ static double sunsdr_dbg_fd_gap_min_ms = 0.0;
 static double sunsdr_dbg_fd_gap_max_ms = 0.0;
 static double sunsdr_dbg_fd_gap_sum_ms = 0.0;
 static unsigned int sunsdr_dbg_fd_gap_count = 0;
+static volatile LONG sunsdr_dbg_tx_cb_count = 0;
+static volatile LONG sunsdr_dbg_tx_cb_silent = 0;
+static volatile LONG sunsdr_dbg_tx_cb_nonfinite = 0;
+static double sunsdr_dbg_tx_cb_rms_sum = 0.0;
+static double sunsdr_dbg_tx_cb_rms_min = 0.0;
+static double sunsdr_dbg_tx_cb_rms_max = 0.0;
+static double sunsdr_dbg_tx_cb_peak_max = 0.0;
+static ULONGLONG sunsdr_dbg_tx_cb_last_tick = 0;
+static ULONGLONG sunsdr_dbg_tx_cb_max_gap_ms = 0;
 
 static const char* sunsdr_tx_mode_label(int tune)
 {
@@ -421,6 +432,120 @@ static void sunsdr_dbg_reset_tx_attempt_locked(int attempt_id)
     sunsdr_dbg_fd_gap_max_ms = 0.0;
     sunsdr_dbg_fd_gap_sum_ms = 0.0;
     sunsdr_dbg_fd_gap_count = 0;
+    InterlockedExchange(&sunsdr_dbg_tx_cb_count, 0);
+    InterlockedExchange(&sunsdr_dbg_tx_cb_silent, 0);
+    InterlockedExchange(&sunsdr_dbg_tx_cb_nonfinite, 0);
+    sunsdr_dbg_tx_cb_rms_sum = 0.0;
+    sunsdr_dbg_tx_cb_rms_min = 0.0;
+    sunsdr_dbg_tx_cb_rms_max = 0.0;
+    sunsdr_dbg_tx_cb_peak_max = 0.0;
+    sunsdr_dbg_tx_cb_last_tick = 0;
+    sunsdr_dbg_tx_cb_max_gap_ms = 0;
+}
+
+static void sunsdr_dbg_log_audio_diags(const char* label)
+{
+    int v;
+    long cma_over_in = 0;
+    long cma_over_out = 0;
+    long cma_under_in = 0;
+    long cma_under_out = 0;
+
+    if (!label) {
+        label = "unknown";
+    }
+
+    if (pcm && pcma) {
+        if (pcma->rmatchIN && pcma->rmatchOUT) {
+            getCMAevents(&cma_over_in, &cma_over_out, &cma_under_in, &cma_under_out);
+        }
+
+        sdr_logf("TX_AUDIO_DIAG %s CMA audioCodecId=%d pcma=1 run=%d block=%d lockMode=%d protocol=%d rmatchIN=%p rmatchOUT=%p directOverIn=%ld directOverOut=%ld directUnderIn=%ld directUnderOut=%ld eventOverIn=%ld eventOverOut=%ld eventUnderIn=%ld eventUnderOut=%ld\n",
+            label,
+            pcm->audioCodecId,
+            pcma->run,
+            pcma->blocksize,
+            pcma->lockMode,
+            pcma->protocol,
+            pcma->rmatchIN,
+            pcma->rmatchOUT,
+            pcma->overFlowsIn,
+            pcma->overFlowsOut,
+            pcma->underFlowsIn,
+            pcma->underFlowsOut,
+            cma_over_in,
+            cma_over_out,
+            cma_under_in,
+            cma_under_out);
+    } else {
+        sdr_logf("TX_AUDIO_DIAG %s CMA audioCodecId=%d pcma=%d\n",
+            label,
+            pcm ? pcm->audioCodecId : -1,
+            pcma ? 1 : 0);
+    }
+
+    for (v = 0; v < 2 && v < MAX_EXT_VACS; v++) {
+        IVAC vac = pvac[v];
+        int out_under = 0;
+        int out_over = 0;
+        int out_ring = 0;
+        int out_nring = 0;
+        double out_var = 0.0;
+        int in_under = 0;
+        int in_over = 0;
+        int in_ring = 0;
+        int in_nring = 0;
+        double in_var = 0.0;
+
+        if (!vac) {
+            sdr_logf("TX_AUDIO_DIAG %s VAC%d present=0\n", label, v + 1);
+            continue;
+        }
+
+        if (vac->rmatchOUT) {
+            getIVACdiags(v, 0, &out_under, &out_over, &out_var, &out_ring, &out_nring);
+        }
+        if (vac->rmatchIN) {
+            getIVACdiags(v, 1, &in_under, &in_over, &in_var, &in_ring, &in_nring);
+        }
+
+        sdr_logf("TX_AUDIO_DIAG %s VAC%d present=1 run=%d iq=%d stereo=%d mox=%d mon=%d bypass=%d combine=%d rates_iq/mic/audio/txmon/vac=%d/%d/%d/%d/%d sizes_iq/mic/audio/txmon/vac=%d/%d/%d/%d/%d lat_in/out=%.4f/%.4f pa_lat_in/out=%.4f/%.4f rmatchOUT=%p outUnder=%d outOver=%d outVar=%.6f outRing=%d outNring=%d rmatchIN=%p inUnder=%d inOver=%d inVar=%.6f inRing=%d inNring=%d\n",
+            label,
+            v + 1,
+            vac->run,
+            vac->iq_type,
+            vac->stereo,
+            vac->mox,
+            vac->mon,
+            vac->vac_bypass,
+            vac->vac_combine_input,
+            vac->iq_rate,
+            vac->mic_rate,
+            vac->audio_rate,
+            vac->txmon_rate,
+            vac->vac_rate,
+            vac->iq_size,
+            vac->mic_size,
+            vac->audio_size,
+            vac->txmon_size,
+            vac->vac_size,
+            vac->in_latency,
+            vac->out_latency,
+            vac->pa_in_latency,
+            vac->pa_out_latency,
+            vac->rmatchOUT,
+            out_under,
+            out_over,
+            out_var,
+            out_ring,
+            out_nring,
+            vac->rmatchIN,
+            in_under,
+            in_over,
+            in_var,
+            in_ring,
+            in_nring);
+    }
 }
 
 static void sunsdr_dbg_note_tx_packet(unsigned int seq)
@@ -682,6 +807,37 @@ static void sunsdr_tx_outbound(int id, int nsamples, double* buff)
     if (nsamples > 0) {
         pre_rms = sqrt(pre_sum_sq / (2.0 * (double)nsamples));
         post_rms = sqrt(post_sum_sq / (2.0 * (double)nsamples));
+    }
+
+    {
+        ULONGLONG now_tick = GetTickCount64();
+        LONG cb_count = InterlockedIncrement(&sunsdr_dbg_tx_cb_count);
+
+        if (sunsdr_dbg_tx_cb_last_tick > 0 && now_tick >= sunsdr_dbg_tx_cb_last_tick) {
+            ULONGLONG gap_ms = now_tick - sunsdr_dbg_tx_cb_last_tick;
+            if (gap_ms > sunsdr_dbg_tx_cb_max_gap_ms) {
+                sunsdr_dbg_tx_cb_max_gap_ms = gap_ms;
+            }
+        }
+        sunsdr_dbg_tx_cb_last_tick = now_tick;
+
+        if (!isfinite(pre_peak) || !isfinite(pre_rms) || !isfinite(post_peak) || !isfinite(post_rms)) {
+            InterlockedIncrement(&sunsdr_dbg_tx_cb_nonfinite);
+        }
+        if (pre_peak < 1.0e-6 && pre_rms < 1.0e-6) {
+            InterlockedIncrement(&sunsdr_dbg_tx_cb_silent);
+        }
+
+        sunsdr_dbg_tx_cb_rms_sum += pre_rms;
+        if (cb_count == 1 || pre_rms < sunsdr_dbg_tx_cb_rms_min) {
+            sunsdr_dbg_tx_cb_rms_min = pre_rms;
+        }
+        if (cb_count == 1 || pre_rms > sunsdr_dbg_tx_cb_rms_max) {
+            sunsdr_dbg_tx_cb_rms_max = pre_rms;
+        }
+        if (post_peak > sunsdr_dbg_tx_cb_peak_max) {
+            sunsdr_dbg_tx_cb_peak_max = post_peak;
+        }
     }
 
     {
@@ -1821,6 +1977,7 @@ void SunSDRSetPTT(int ptt)
             drive,
             raw_drive,
             full_scale);
+        sunsdr_dbg_log_audio_diags("BEGIN");
         /*
          * TUNE and MOX follow the same wire path: re-assert current mode
          * (LSB/USB/AM/etc), PTT on, let the WDSP-generated IQ stream carry
@@ -1864,11 +2021,12 @@ void SunSDRSetPTT(int ptt)
         }
     } else {
         double avg_fd_gap = sunsdr_dbg_fd_gap_count > 0 ? sunsdr_dbg_fd_gap_sum_ms / (double)sunsdr_dbg_fd_gap_count : 0.0;
+        double avg_cb_rms = sunsdr_dbg_tx_cb_count > 0 ? sunsdr_dbg_tx_cb_rms_sum / (double)sunsdr_dbg_tx_cb_count : 0.0;
         unsigned long long first_fd_delay = (sunsdr_dbg_first_fd_tick && sunsdr_dbg_mox_cmd_tick && sunsdr_dbg_first_fd_tick >= sunsdr_dbg_mox_cmd_tick) ?
             (unsigned long long)(sunsdr_dbg_first_fd_tick - sunsdr_dbg_mox_cmd_tick) : 0;
         int first_fd_before_cmd = (int)sunsdr_dbg_first_fd_before_cmd;
         InterlockedExchange(&sunsdr_tx_iq_enabled, 0);
-        sdr_logf("TX_ATTEMPT_END #%ld mode=%s result=user_clean_or_raspy ptt=%d tune=%d seq=%u txPackets=%u activeFD=%ld seqGaps=%ld feDuringTx=%ld keepaliveRaces=%ld iqGateSkips=%ld firstFdDelayMs=%llu firstFdBefore0x06=%d fdGapMin=%.3f fdGapAvg=%.3f fdGapMax=%.3f fdGapCount=%u txPhase=%.4f txAccum=%d\n",
+        sdr_logf("TX_ATTEMPT_END #%ld mode=%s result=user_clean_or_raspy ptt=%d tune=%d seq=%u txPackets=%u activeFD=%ld seqGaps=%ld feDuringTx=%ld keepaliveRaces=%ld iqGateSkips=%ld firstFdDelayMs=%llu firstFdBefore0x06=%d fdGapMin=%.3f fdGapAvg=%.3f fdGapMax=%.3f fdGapCount=%u txPhase=%.4f txAccum=%d txCb=%ld txCbSilent=%ld txCbNonfinite=%ld txCbRmsMin=%.6f txCbRmsAvg=%.6f txCbRmsMax=%.6f txCbPostPeakMax=%.6f txCbMaxGapMs=%llu\n",
             sunsdr_dbg_tx_attempt_id,
             sunsdr_tx_mode_label(sdr.lastTxWasTune),
             new_ptt,
@@ -1887,7 +2045,16 @@ void SunSDRSetPTT(int ptt)
             sunsdr_dbg_fd_gap_max_ms,
             sunsdr_dbg_fd_gap_count,
             sdr.txPhase,
-            sdr.txAccumCount);
+            sdr.txAccumCount,
+            sunsdr_dbg_tx_cb_count,
+            sunsdr_dbg_tx_cb_silent,
+            sunsdr_dbg_tx_cb_nonfinite,
+            sunsdr_dbg_tx_cb_rms_min,
+            avg_cb_rms,
+            sunsdr_dbg_tx_cb_rms_max,
+            sunsdr_dbg_tx_cb_peak_max,
+            (unsigned long long)sunsdr_dbg_tx_cb_max_gap_ms);
+        sunsdr_dbg_log_audio_diags("END");
         /*
          * On MOX-off, only write 0x24 PA_ENABLE=0 if we had written a 1
          * on MOX-on (i.e. the user has the external PA enabled). Otherwise
