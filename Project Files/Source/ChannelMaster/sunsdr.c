@@ -222,6 +222,7 @@ static volatile LONG tx_pace_underruns = 0;    /* ticks with empty ring (during 
 static volatile LONG tx_pace_emitted = 0;      /* packets emitted by pacing thread */
 static HANDLE tx_pace_timer = NULL;
 static HANDLE tx_pace_thread = NULL;
+static HANDLE tx_pace_ptt_event = NULL;   /* signalled on PTT=1, reset on PTT=0 */
 static volatile LONG tx_pace_stop = 0;
 static volatile LONG tx_pace_ready = 0;
 
@@ -232,64 +233,74 @@ static DWORD WINAPI tx_pace_thread_proc(LPVOID lp)
     int sp_val;
     (void)lp;
 
-    /* Time-critical so the radio's DAC pacing is robust against UI /
-     * background / AV scans. Without this, we'd just repeat the exact
-     * scheduler-jitter problem on a different thread. */
-    sp_ok = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
+    /* HIGHEST (priority 2 within ABOVE_NORMAL class → base priority 13) —
+     * above the RX read thread (ABOVE_NORMAL, base 11) but below the
+     * TIME_CRITICAL tier. TIME_CRITICAL preempted the RX read thread at
+     * 195 Hz during its UDP recv windows, producing vertical stripes in
+     * the RX waterfall (dropped/late RX packets). HIGHEST still wins CPU
+     * against UI and gives us the 5.12 ms precision we need (aided by
+     * timeBeginPeriod(1) and the high-res waitable timer). */
+    sp_ok = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
     sp_val = GetThreadPriority(GetCurrentThread());
-    sdr_logf("TX_PACE_INIT thread priority rc=%d readback=%d (TIME_CRITICAL=15)\n",
+    sdr_logf("TX_PACE_INIT thread priority rc=%d readback=%d (HIGHEST=2)\n",
         (int)sp_ok, sp_val);
 
     while (!InterlockedAnd(&tx_pace_stop, 0xffffffff)) {
-        due.QuadPart = TX_PACE_TICK_100NS;
-        if (!SetWaitableTimer(tx_pace_timer, &due, 0, NULL, NULL, FALSE)) {
-            sdr_logf("TX_PACE_ERR SetWaitableTimer failed err=%lu\n", GetLastError());
-            Sleep(5);
-            continue;
-        }
-        WaitForSingleObject(tx_pace_timer, INFINITE);
+        /* Block until PTT goes high (auto-reset event). During RX/idle the
+         * thread is fully asleep — zero CPU impact on the RX path. When
+         * PTT=1 this wakes and we enter the 5.12 ms pacing loop. */
+        WaitForSingleObject(tx_pace_ptt_event, INFINITE);
         if (InterlockedAnd(&tx_pace_stop, 0xffffffff)) break;
 
-        /* Only emit FD packets while TX is active. RX/idle keepalives are
-         * still produced by SunSDRReadThread at their own cadence. */
-        if (!sdr.currentPTT) {
-            /* Also drain the ring so stale packets don't get emitted on the
-             * next PTT-on. (Producer may have pushed packets between
-             * PTT-off and ring drain.) */
-            InterlockedExchange(&tx_pace_tail, InterlockedAnd(&tx_pace_head, 0xffffffff));
-            continue;
-        }
-
-        {
-            LONG t = InterlockedAnd(&tx_pace_tail, 0xffffffff);
-            LONG h = InterlockedAnd(&tx_pace_head, 0xffffffff);
-            if (t == h) {
-                InterlockedIncrement(&tx_pace_underruns);
+        /* Inner loop: emit at exactly 5.12 ms cadence while PTT=1. */
+        while (sdr.currentPTT && !InterlockedAnd(&tx_pace_stop, 0xffffffff)) {
+            due.QuadPart = TX_PACE_TICK_100NS;
+            if (!SetWaitableTimer(tx_pace_timer, &due, 0, NULL, NULL, FALSE)) {
+                sdr_logf("TX_PACE_ERR SetWaitableTimer failed err=%lu\n", GetLastError());
+                Sleep(5);
                 continue;
             }
-            {
-                struct sockaddr_in dest = sunsdr_stream_dest();
-                unsigned int seq;
+            WaitForSingleObject(tx_pace_timer, INFINITE);
+            if (InterlockedAnd(&tx_pace_stop, 0xffffffff)) break;
 
-                if (sdr.streamSock == INVALID_SOCKET || sdr.streamSock == 0)
-                    continue;
-
-                /* Packet content + header (including seq) already built by
-                 * the producer. Send verbatim. */
-                sendto(sdr.streamSock, (const char*)tx_pace_ring[t], SUNSDR_IQ_PKT_SIZE, 0,
-                    (struct sockaddr*)&dest, sizeof(dest));
-
-                /* Reconstruct seq from the buffer for the packet-gap
-                 * diagnostic so our existing fdGap* stats remain valid. */
-                seq = (unsigned int)tx_pace_ring[t][6] |
-                      ((unsigned int)tx_pace_ring[t][7] << 8);
-                sdr.txAudioPackets++;
-                sunsdr_dbg_note_tx_packet(seq);
-                InterlockedIncrement(&tx_pace_emitted);
+            if (!sdr.currentPTT) {
+                /* PTT just dropped — drain any remaining ring entries so
+                 * stale packets don't get emitted on the next PTT-on. */
+                InterlockedExchange(&tx_pace_tail, InterlockedAnd(&tx_pace_head, 0xffffffff));
+                break;  /* back to outer loop to wait on event */
             }
-            InterlockedExchange(&tx_pace_tail, (t + 1) % TX_PACE_RING_SLOTS);
-        }
-    }
+
+            {
+                LONG t = InterlockedAnd(&tx_pace_tail, 0xffffffff);
+                LONG h = InterlockedAnd(&tx_pace_head, 0xffffffff);
+                if (t == h) {
+                    InterlockedIncrement(&tx_pace_underruns);
+                    continue;
+                }
+                {
+                    struct sockaddr_in dest = sunsdr_stream_dest();
+                    unsigned int seq;
+
+                    if (sdr.streamSock == INVALID_SOCKET || sdr.streamSock == 0)
+                        continue;
+
+                    /* Packet content + header (including seq) already built
+                     * by the producer. Send verbatim. */
+                    sendto(sdr.streamSock, (const char*)tx_pace_ring[t], SUNSDR_IQ_PKT_SIZE, 0,
+                        (struct sockaddr*)&dest, sizeof(dest));
+
+                    /* Reconstruct seq from the buffer for the packet-gap
+                     * diagnostic so our existing fdGap* stats remain valid. */
+                    seq = (unsigned int)tx_pace_ring[t][6] |
+                          ((unsigned int)tx_pace_ring[t][7] << 8);
+                    sdr.txAudioPackets++;
+                    sunsdr_dbg_note_tx_packet(seq);
+                    InterlockedIncrement(&tx_pace_emitted);
+                }
+                InterlockedExchange(&tx_pace_tail, (t + 1) % TX_PACE_RING_SLOTS);
+            }
+        }   /* end inner while (PTT=1) */
+    }       /* end outer while (stop) */
 
     sdr_logf("TX_PACE_EXIT drops=%ld underruns=%ld emitted=%ld\n",
         tx_pace_drops, tx_pace_underruns, tx_pace_emitted);
@@ -326,11 +337,24 @@ static void tx_pace_start(void)
         return;
     }
 
+    /* Auto-reset event used to wake the pacing thread only when PTT=1.
+     * During RX/idle the thread is blocked on this event with zero CPU
+     * impact on the RX read thread. */
+    tx_pace_ptt_event = CreateEventW(NULL, FALSE /*auto-reset*/, FALSE /*initial non-signaled*/, NULL);
+    if (!tx_pace_ptt_event) {
+        sdr_logf("TX_PACE_INIT FAIL could not create PTT event err=%lu\n", GetLastError());
+        CloseHandle(tx_pace_timer);
+        tx_pace_timer = NULL;
+        return;
+    }
+
     tx_pace_thread = CreateThread(NULL, 0, tx_pace_thread_proc, NULL, 0, &tid);
     if (!tx_pace_thread) {
         sdr_logf("TX_PACE_INIT FAIL could not create thread err=%lu\n", GetLastError());
         CloseHandle(tx_pace_timer);
         tx_pace_timer = NULL;
+        CloseHandle(tx_pace_ptt_event);
+        tx_pace_ptt_event = NULL;
         return;
     }
 
@@ -343,6 +367,9 @@ static void tx_pace_stop_and_join(void)
 {
     if (!InterlockedAnd(&tx_pace_ready, 0xffffffff)) return;
     InterlockedExchange(&tx_pace_stop, 1);
+    /* Wake the thread if it's blocked on the PTT event, and cancel any
+     * in-flight timer wait. */
+    if (tx_pace_ptt_event) SetEvent(tx_pace_ptt_event);
     if (tx_pace_timer) CancelWaitableTimer(tx_pace_timer);
     if (tx_pace_thread) {
         WaitForSingleObject(tx_pace_thread, 2000);
@@ -352,6 +379,10 @@ static void tx_pace_stop_and_join(void)
     if (tx_pace_timer) {
         CloseHandle(tx_pace_timer);
         tx_pace_timer = NULL;
+    }
+    if (tx_pace_ptt_event) {
+        CloseHandle(tx_pace_ptt_event);
+        tx_pace_ptt_event = NULL;
     }
     InterlockedExchange(&tx_pace_ready, 0);
 }
@@ -2732,6 +2763,9 @@ void SunSDRSetPTT(int ptt)
          * inside sunsdr_queue_tx_packet_locked; flush to disk happens on
          * PTT-off below. */
         iq_dump_reset(attempt_id);
+        /* Wake the Tier 3 pacing thread so it starts the 5.12 ms emit loop.
+         * During RX/idle it was blocked on this event with zero CPU cost. */
+        if (tx_pace_ptt_event) SetEvent(tx_pace_ptt_event);
     } else {
         /* Flush the accumulated IQ buffer to sunsdr_tx_iq_<attempt>.raw
          * (little-endian double I/Q pairs). Post-test analysis: compare
