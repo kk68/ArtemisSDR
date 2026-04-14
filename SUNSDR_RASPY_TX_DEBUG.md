@@ -506,6 +506,47 @@ Prioritized, smallest-risk first:
 
 Tier 2 items 1-3 can be bundled into one `sunsdr.c` commit. Phase B is external tooling + user effort.
 
+## 2026-04-14 Tier 2 bundle landed — ready for Run 10
+
+User chose Tier 2 bundle over Phase B. Three changes applied to `sunsdr.c`:
+
+### Changes
+
+1. **`SetPriorityClass(GetCurrentProcess(), ABOVE_NORMAL_PRIORITY_CLASS)`** at `SunSDRInit` after `timeBeginPeriod(1)`. Thetis as a whole schedules above ordinary UI apps / background services. Logs `TIMING_INIT: SetPriorityClass(ABOVE_NORMAL) rc=... readback=0x8000` (0x8000 = ABOVE_NORMAL_PRIORITY_CLASS) for verification.
+
+2. **`PowerCreateRequest` + `PowerSetRequest(PowerRequestExecutionRequired)`** at `SunSDRInit`. File-static `sdr_power_request` handle held for session lifetime; released via `PowerClearRequest` + `CloseHandle` in `SunSDRDestroy`. Prevents CPU from entering deep C-states or downclocking via DVFS during light UI periods between TX bursts. Logs `TIMING_INIT: PowerCreateRequest OK, PowerSetRequest(ExecutionRequired) rc=1`.
+
+3. **RX-loop QPC gap histogram** inside `SunSDRReadThread`. Pre-clamp `elapsed_ms` gets bucketed into `<1 / 1-2 / 2-4 / 4-8 / 8-16 / 16-32 / >=32 ms` and a delta is emitted once per second as `RX_GAP_HIST: total=N <1=x 1-2=x 2-4=x 4-8=x 8-16=x 16-32=x >=32=x ptt=X tune=Y`. Ground-truth scheduler behavior, not the clamped view.
+
+### Expected histogram shapes
+
+- **RX idle, no TX**: loop paced by 1562 pps → ~640 us per iter → nearly all counts in `<1` bucket.
+- **Active TX/TUNE**: radio throttles to ~195 pps → ~5.12 ms per iter → most counts in `4-8` bucket.
+- **Scheduler tick events**: individual counts in `16-32` bucket. Run 8 evidence predicted we'd see a few of these per TUNE attempt.
+- **Pathology**: anything in `>=32` bucket indicates a stall the clamp (now at 50 ms) may also have caught.
+
+### Run 10 verification (user)
+
+1. Rebuild ChannelMaster + Thetis Debug x64.
+2. Start Thetis with SUNSDR2 DX. Confirm at startup in `sunsdr_debug.log`:
+   - `TIMING_INIT: timeBeginPeriod(1) rc=0 qpcFreq=...`
+   - `TIMING_INIT: SetPriorityClass(ABOVE_NORMAL) rc=1 readback=0x8000 (ABOVE_NORMAL=0x8000)`
+   - `TIMING_INIT: PowerCreateRequest OK, PowerSetRequest(ExecutionRequired) rc=1`
+   - `TIMING_INIT: RX thread priority set rc=1 readback=1 (ABOVE_NORMAL=1)`
+   - `TIMING_INIT: RX loop QPC pacing qpcFreq=... clampMs=50.0 replaceMs=10.0`
+3. Run 20 TUNE cycles at UI drive 1, 2-3 s on / 2-3 s off. Record clean / slight / moderate / heavy.
+4. Per cycle also capture the `RX_GAP_HIST` lines during the TUNE-on window (they log once/sec, so each 2-3 s TUNE produces 2-3 histograms). Note any `16-32` or `>=32` bucket hits.
+5. Confirm `VAC1 status` stays `outUnder=0 outOver=0 inUnder=0 inOver=0` throughout.
+
+### Run 10 decision matrix
+
+| Outcome | Interpretation | Next |
+|---|---|---|
+| Raspy drops to ≤2/20, `16-32` bucket empty or minimal | Scheduler was the primary remaining driver. Tier 2 bundle closed it. | Close investigation; declare stable. |
+| Raspy similar (~5/20) but `16-32` bucket still lights up on raspy attempts | Scheduler ticks still happen and correlate with raspy. Tier 3 (dedicated waitable-timer pacing thread) needed to decouple silence injection from the radio-packet-paced recv loop. | Plan and land Tier 3 in a new pacing thread. |
+| Raspy similar, `16-32` bucket empty — no evidence of scheduler stalls | Raspy is NOT scheduler-driven. Move to Phase B (wire capture + spectral) to identify the actual DSP-component culprit. | Phase B. |
+| `<1` bucket populated during TUNE (not 4-8) | recv loop is looping faster than radio packets — something's wrong with the socket recv pacing. | Debug recv pattern before interpreting raspy. |
+
 ## Next Step
 
-Await user decision on Tier 2 bundle vs Phase B spectral capture (or both). Document the choice here and proceed.
+User rebuild + Run 10 per the verification protocol above. Document results here. Decision matrix determines whether we move to Tier 3 or Phase B.

@@ -68,6 +68,11 @@ static char sdr_log_path[MAX_PATH];
 #define SDR_LOG_RING_SIZE 4096
 #define SDR_LOG_ENTRY_MAX 512
 
+/* Power request handle for PowerSetRequest(PowerRequestExecutionRequired).
+ * Kept active for the whole SunSDR session so the CPU does not enter deep
+ * C-states or downclock via DVFS during light UI periods between TX bursts. */
+static HANDLE sdr_power_request = NULL;
+
 static char sdr_log_ring[SDR_LOG_RING_SIZE][SDR_LOG_ENTRY_MAX];
 static volatile unsigned sdr_log_ring_head = 0;  /* next write slot */
 static volatile unsigned sdr_log_ring_tail = 0;  /* next read slot  */
@@ -1580,6 +1585,39 @@ int SunSDRInit(const char* radioIP, int ctrlPort, int streamPort)
     sdr_logf("SunSDRInit(%s, %d, %d)\n", radioIP, ctrlPort, streamPort);
     sdr_logf("TIMING_INIT: timeBeginPeriod(1) rc=%u (0=OK) qpcFreq=%lld\n",
         (unsigned)tbp_rc, (long long)qpc_freq_check.QuadPart);
+
+    /* Process priority: ABOVE_NORMAL scheduled over ordinary UI apps and
+     * background services without the UI-jank risk of HIGH_PRIORITY_CLASS.
+     * Reduces the odds of a preemption event landing inside the RX read
+     * loop or TX callback and producing the 16 ms scheduler-tick gap that
+     * still shows up in Run 9b as the suspected raspy driver for 5/20 of
+     * TUNE attempts. */
+    {
+        BOOL pc_ok = SetPriorityClass(GetCurrentProcess(), ABOVE_NORMAL_PRIORITY_CLASS);
+        DWORD pc_readback = GetPriorityClass(GetCurrentProcess());
+        sdr_logf("TIMING_INIT: SetPriorityClass(ABOVE_NORMAL) rc=%d readback=0x%lX (ABOVE_NORMAL=0x%lX)\n",
+            (int)pc_ok, (unsigned long)pc_readback, (unsigned long)ABOVE_NORMAL_PRIORITY_CLASS);
+    }
+
+    /* Power request: PowerRequestExecutionRequired keeps CPU out of deep
+     * C-states and blocks DVFS from downclocking during light UI periods
+     * between TX bursts. Handle held for session lifetime; released in
+     * SunSDRDestroy. Kernel32 API (Windows 7+). */
+    if (!sdr_power_request) {
+        REASON_CONTEXT rc = {0};
+        rc.Version = POWER_REQUEST_CONTEXT_VERSION;
+        rc.Flags = POWER_REQUEST_CONTEXT_SIMPLE_STRING;
+        rc.Reason.SimpleReasonString = L"Thetis SunSDR low-latency TX/RX";
+        sdr_power_request = PowerCreateRequest(&rc);
+        if (sdr_power_request) {
+            BOOL pr_ok = PowerSetRequest(sdr_power_request, PowerRequestExecutionRequired);
+            sdr_logf("TIMING_INIT: PowerCreateRequest OK, PowerSetRequest(ExecutionRequired) rc=%d\n",
+                (int)pr_ok);
+        } else {
+            sdr_logf("TIMING_INIT: PowerCreateRequest FAILED err=%lu\n",
+                (unsigned long)GetLastError());
+        }
+    }
     if (sdr.ctrlSock || sdr.streamSock || sdr.hReadThread || sdr.hKeepaliveThread || sdr.rxBuf) {
         sdr_logf("SunSDRInit() cleaning up previous session state before re-init\n");
         SunSDRDestroy();
@@ -1719,6 +1757,16 @@ void SunSDRDestroy(void)
      * drain and thread joins. */
     timeEndPeriod(1);
     sdr_logf("TIMING_DEINIT: timeEndPeriod(1) called\n");
+
+    /* Release the ExecutionRequired power request so the CPU can return to
+     * normal power management once Thetis is idle. Process priority class
+     * (ABOVE_NORMAL) doesn't need explicit cleanup — it dies with the process. */
+    if (sdr_power_request) {
+        PowerClearRequest(sdr_power_request, PowerRequestExecutionRequired);
+        CloseHandle(sdr_power_request);
+        sdr_power_request = NULL;
+        sdr_logf("TIMING_DEINIT: PowerClearRequest + handle closed\n");
+    }
 
     /* Stop the async logger writer thread and flush any pending entries
      * BEFORE closing the file handle. */
@@ -2359,6 +2407,13 @@ DWORD WINAPI SunSDRReadThread(LPVOID param)
     double elapsed_replace_ms = 10.0;  /* sentinel value when clamping fires */
     unsigned int dbg_elapsed_clamps = 0;
     unsigned int dbg_elapsed_clamps_prev_sec = 0;
+    /* RX-loop iteration gap histogram. Buckets (ms):
+     *   [0] <1, [1] 1-2, [2] 2-4, [3] 4-8, [4] 8-16, [5] 16-32, [6] >=32
+     * Normal RX: almost all in [0]. Normal TX: mostly in [3] (5.12 ms).
+     * Scheduler stalls show up in [4]/[5]. True pathology in [6]. */
+    #define SDR_GAP_BUCKETS 7
+    unsigned int dbg_gap_hist[SDR_GAP_BUCKETS] = {0};
+    unsigned int dbg_gap_hist_prev[SDR_GAP_BUCKETS] = {0};
     double tx_feed_accum = 0.0;
     double tx_keepalive_accum = 0.0;
     (void)param;
@@ -2427,6 +2482,20 @@ DWORD WINAPI SunSDRReadThread(LPVOID param)
                 * 1000.0 / (double)qpc_freq.QuadPart;
         } else {
             elapsed_ms = 0.0;
+        }
+
+        /* Bucket the pre-clamp gap so the histogram reflects ground-truth
+         * scheduler behavior, not our clamped view of it. */
+        {
+            unsigned int b;
+            if (elapsed_ms < 1.0) b = 0;
+            else if (elapsed_ms < 2.0) b = 1;
+            else if (elapsed_ms < 4.0) b = 2;
+            else if (elapsed_ms < 8.0) b = 3;
+            else if (elapsed_ms < 16.0) b = 4;
+            else if (elapsed_ms < 32.0) b = 5;
+            else b = 6;
+            dbg_gap_hist[b]++;
         }
 
         /* Clamp only PATHOLOGICAL stalls (>50 ms). Normal TX-mode iteration
@@ -2558,6 +2627,24 @@ DWORD WINAPI SunSDRReadThread(LPVOID param)
             if (clamps_this_sec > 0) {
                 sdr_logf("TIMING_CLAMP: elapsed_ms clamped %u times in last 1s (total=%u). Loop stalled > %.1f ms.\n",
                     clamps_this_sec, dbg_elapsed_clamps, elapsed_clamp_ms);
+            }
+            {
+                /* Scheduler-gap histogram delta for the last 1 second.
+                 * Buckets (ms): <1 1-2 2-4 4-8 8-16 16-32 >=32.
+                 * Expected shape: RX idle -> mostly <1. Active TX/TUNE ->
+                 * mostly 4-8 (radio 195 pps = 5.12 ms). Anything in 16-32
+                 * is a scheduler tick event. Anything >=32 is pathological. */
+                unsigned int d[SDR_GAP_BUCKETS];
+                unsigned int total = 0;
+                int bi;
+                for (bi = 0; bi < SDR_GAP_BUCKETS; bi++) {
+                    d[bi] = dbg_gap_hist[bi] - dbg_gap_hist_prev[bi];
+                    dbg_gap_hist_prev[bi] = dbg_gap_hist[bi];
+                    total += d[bi];
+                }
+                sdr_logf("RX_GAP_HIST: total=%u <1=%u 1-2=%u 2-4=%u 4-8=%u 8-16=%u 16-32=%u >=32=%u ptt=%d tune=%d\n",
+                    total, d[0], d[1], d[2], d[3], d[4], d[5], d[6],
+                    sdr.currentPTT, sdr.currentTune);
             }
             {
                 /* VAC1 (id=0) counters. type 0 = Out (RX -> speakers), type 1 = In (mic -> TX).
