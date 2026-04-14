@@ -117,6 +117,36 @@ static void iq_dump_init_path(void)
     }
 }
 
+/* Delete all existing sunsdr_tx_iq_*.raw files from the log dir on
+ * startup so they don't accumulate across sessions. Called from
+ * SunSDRInit before the first dump fires. */
+static void iq_dump_cleanup_old_files(void)
+{
+    WIN32_FIND_DATAA ffd;
+    HANDLE hFind;
+    char pattern[MAX_PATH];
+    char path[MAX_PATH];
+    int deleted = 0;
+
+    iq_dump_init_path();
+    _snprintf(pattern, sizeof(pattern), "%s\\sunsdr_tx_iq_*.raw", iq_dump_dir);
+    pattern[sizeof(pattern) - 1] = '\0';
+
+    hFind = FindFirstFileA(pattern, &ffd);
+    if (hFind == INVALID_HANDLE_VALUE) return;
+    do {
+        if (ffd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+        _snprintf(path, sizeof(path), "%s\\%s", iq_dump_dir, ffd.cFileName);
+        path[sizeof(path) - 1] = '\0';
+        if (DeleteFileA(path)) deleted++;
+    } while (FindNextFileA(hFind, &ffd));
+    FindClose(hFind);
+
+    if (deleted > 0) {
+        sdr_logf("IQ_DUMP_CLEANUP deleted %d old sunsdr_tx_iq_*.raw files at startup\n", deleted);
+    }
+}
+
 static void iq_dump_reset(int attempt_id)
 {
     InterlockedExchange(&iq_dump_count, 0);
@@ -284,15 +314,48 @@ static DWORD WINAPI tx_pace_thread_proc(LPVOID lp)
                 wait_ms, prebuf);
         }
 
-        /* Inner loop: emit at exactly 5.12 ms cadence while PTT=1. */
+        /* Inner loop: emit at exactly 5.12 ms cadence while PTT=1.
+         *
+         * Absolute-schedule pattern: each tick has a target QPC value
+         * = first_tick_qpc + N * ticks_per_5.12ms. We sleep until the
+         * target, do the work, advance target by one tick, repeat.
+         * Any work-time slop does NOT accumulate into the next tick.
+         * An earlier one-shot relative-timer design drifted to ~5.5 ms
+         * average (181 pps vs 195 pps target) because each cycle was
+         * 5.12 ms + work. That drift caused ring fills and producer
+         * drops, producing audible pulses on the wire from lost
+         * packets. */
+        {
+            LARGE_INTEGER qpc_freq, qpc_now;
+            LONGLONG qpc_per_tick;  /* QPC ticks per 5.12 ms */
+            LONGLONG next_tick_qpc;
+
+            QueryPerformanceFrequency(&qpc_freq);
+            qpc_per_tick = (qpc_freq.QuadPart * 512) / 100000;  /* 5.12 ms */
+            QueryPerformanceCounter(&qpc_now);
+            next_tick_qpc = qpc_now.QuadPart + qpc_per_tick;
+
         while (sdr.currentPTT && !InterlockedAnd(&tx_pace_stop, 0xffffffff)) {
-            due.QuadPart = TX_PACE_TICK_100NS;
-            if (!SetWaitableTimer(tx_pace_timer, &due, 0, NULL, NULL, FALSE)) {
-                sdr_logf("TX_PACE_ERR SetWaitableTimer failed err=%lu\n", GetLastError());
-                Sleep(5);
-                continue;
+            /* Sleep until absolute target time for this tick. */
+            LONGLONG wait_qpc;
+            QueryPerformanceCounter(&qpc_now);
+            wait_qpc = next_tick_qpc - qpc_now.QuadPart;
+            if (wait_qpc > 0) {
+                LONGLONG wait_100ns = (wait_qpc * 10000000) / qpc_freq.QuadPart;
+                if (wait_100ns > 0) {
+                    due.QuadPart = -wait_100ns;
+                    if (SetWaitableTimer(tx_pace_timer, &due, 0, NULL, NULL, FALSE)) {
+                        WaitForSingleObject(tx_pace_timer, INFINITE);
+                    } else {
+                        sdr_logf("TX_PACE_ERR SetWaitableTimer failed err=%lu\n", GetLastError());
+                        Sleep(5);
+                    }
+                }
             }
-            WaitForSingleObject(tx_pace_timer, INFINITE);
+            /* Schedule the NEXT tick at (current_target + 5.12ms), NOT at
+             * (now + 5.12ms). That's the whole point of absolute scheduling. */
+            next_tick_qpc += qpc_per_tick;
+
             if (InterlockedAnd(&tx_pace_stop, 0xffffffff)) break;
 
             if (!sdr.currentPTT) {
@@ -356,6 +419,7 @@ static DWORD WINAPI tx_pace_thread_proc(LPVOID lp)
                 }
             }
         }   /* end inner while (PTT=1) */
+        }   /* end QPC-schedule scope */
 
         /* PTT just dropped — reset last-packet cache so the next TX
          * session doesn't start by repeating a stale packet from the
@@ -2495,6 +2559,10 @@ int SunSDRPowerOn(void)
         sdr_logf("TIMING_INIT: RX thread priority set rc=%d readback=%d (ABOVE_NORMAL=1)\n",
             (int)sp_ok, sp_val);
     }
+
+    /* Clean up leftover IQ dump files from previous sessions so the
+     * bin/Debug dir doesn't accumulate .raw files across runs. */
+    iq_dump_cleanup_old_files();
 
     /* Start the Tier 3 TX pacing thread + high-resolution waitable timer.
      * Decouples wire emission cadence from the WDSP TX callback's
