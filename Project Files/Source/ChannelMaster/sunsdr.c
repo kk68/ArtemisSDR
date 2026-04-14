@@ -46,6 +46,10 @@ extern void getCMAevents(long* overFlowsIn, long* overFlowsOut, long* underFlows
  * of what state the previous MOX/TUNE session left behind. */
 extern __declspec(dllimport) void FlushChannelNow (int channel);
 
+/* Forward declaration — sdr_logf() is defined later in this file, but the
+ * iq_dump_* helpers defined immediately below need to call it. */
+static void sdr_logf(const char* fmt, ...);
+
 /* TX IQ ground-truth recorder.
  *
  * Counters on MOX #5 (no audio on-air) and TUNE #8 (raspy, Run post-Phase C)
