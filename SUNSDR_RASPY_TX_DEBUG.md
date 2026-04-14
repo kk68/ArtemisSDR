@@ -464,6 +464,48 @@ Additionally added **`VAC1 status`** line to the per-second telemetry so we can 
 | Raspy rate returns to Run 8 level (~6/20), VAC1 counters stable | Clamp was the extra damage but the original 16 ms scheduler-tick hypothesis still stands. | Proceed to Tier 2 (gap histogram) or Phase B (spectral). |
 | Raspy still present AND VAC1 counters still climbing | There's a second bug. The QPC switch, the thread-priority bump, or the timeBeginPeriod is interacting with something unexpected. | Diff Tier 1 items one at a time to narrow. First suspect: are xrouter's internal consumers actually keeping up at the correct rate now, or did QPC's sub-us `elapsed_ms` expose a math precision edge case in the accumulators? |
 
+## 2026-04-14 Run 9b result — clamp fix validated, residual raspy much milder
+
+User test: 20 TUNE cycles at UI drive 1 after the clamp fix.
+
+Reported results (from spreadsheet screenshot):
+
+- Clean: 1, 2, 3, 4, 6, 7, 8, 10, 11, 12, 13, 14, 15, 18 — **14 / 20 (70 %)**
+- Clean-with-note: 5 — 1 / 20
+- Raspy: 9, 16, 17 (note), 19, 20 — **5 / 20 (25 %)**
+
+Critical qualitative observations (user):
+
+- **No receive-side splash** on the Anan even during the raspy attempts. Prior runs showed a distinctive wide "splash" in the waterfall — that is gone.
+- **Zero VAC1 Out Underflow and Zero VAC1 In Overflow** across the entire session. The steady-state starvation seen in Run 9 is fully fixed by the clamp fix.
+
+Progression summary:
+
+| Run | Raspy / 20 | Notes |
+|---|---|---|
+| 7 | 11 | Baseline before PS-A gate |
+| 8 | 6 | After PS-A disable (Phase A) |
+| 9 | ~20 | Tier 1 + async logger bundled; 2 ms clamp regressed the silence feed — consistent raspy + VAC starvation |
+| 9b | 5 | 50 ms clamp restored silence pacing; no VAC starvation; raspy much milder |
+
+### Interpretation
+
+1. **Clamp fix is the dominant change**: Run 9b demonstrably restored correct silence pacing. The VAC panel flattening and the no-splash observation confirm the RX-silence and TX-feed accumulators are now tracking real cadence end-to-end.
+2. **Tier 1 items 1-3 (timeBeginPeriod, ABOVE_NORMAL, QPC) and the async logger are safe** — none of them introduced the VAC issue; the clamp alone did. They can all be kept.
+3. **Residual raspy rate (25 %) is similar to Run 8 (30 %)**, which means the original scheduler-tick hypothesis is still live. But severity is lower and splash is gone, consistent with a baseline jitter floor that now lies mostly below the audible distortion threshold, only crossing it on the unluckiest scheduler events.
+4. **Decision matrix outcome**: "Raspy rate returns to Run 8 level, VAC1 counters stable → Proceed to Tier 2 (gap histogram) or Phase B (spectral)."
+
+### Candidate next steps
+
+Prioritized, smallest-risk first:
+
+1. **Tier 2 — RX-loop scheduler-gap histogram** inside `SunSDRReadThread`. Bucket QPC gap into `<1 / 1-2 / 2-4 / 4-8 / 8-16 / 16-32 / >32 ms` and emit a one-line summary per second via the async logger. Quantifies exactly how often the loop still sees a long stall, and when (TUNE vs idle vs RX). Pure instrumentation, zero behavior change.
+2. **Tier 2 — `SetPriorityClass(ABOVE_NORMAL_PRIORITY_CLASS)`** at SunSDRInit. Thetis process as a whole gets scheduled above ordinary UI apps. Low risk, reversible.
+3. **Tier 2 — `PowerSetRequest(PowerRequestExecutionRequired)`** for the Thetis process lifetime. Prevents C-state sleeps and DVFS downclocking during light UI periods between TX bursts. Low risk.
+4. **Phase B — wire capture + WAV + spectral** of 20 TUNE cycles now that the baseline is clean. The 5 residual raspy attempts vs the 14 clean ones should show a clear spectral fingerprint, sharper than before because the VAC starvation noise floor is gone.
+
+Tier 2 items 1-3 can be bundled into one `sunsdr.c` commit. Phase B is external tooling + user effort.
+
 ## Next Step
 
-Rebuild ChannelMaster + Thetis Debug x64 and execute the **Run 9b** verification protocol above. Update this document with results.
+Await user decision on Tier 2 bundle vs Phase B spectral capture (or both). Document the choice here and proceed.
