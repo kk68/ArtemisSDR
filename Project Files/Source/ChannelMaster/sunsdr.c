@@ -2016,10 +2016,13 @@ DWORD WINAPI SunSDRReadThread(LPVOID param)
             if (elapsed_ms > 0.0) {
                 rx_silence_accum += elapsed_ms * rx_feed_rate_target / 1000.0;
             }
-            /* Emit ONE silence buffer per tick, no bursts. Cap at 4 per loop
-             * iteration as a safety guard against very long loop delays. */
+            /* The read loop is paced by incoming radio packets. During TX the
+             * radio drops to the TX IQ rate (~195/sec), so the cap must allow
+             * roughly 1562.5 / 195.3 ~= 8 silence buffers per iteration or the
+             * RX/VAC path is underfed. Keep a bounded cap to avoid a large burst
+             * after a long scheduler delay, but leave headroom for jitter. */
             int emitted = 0;
-            while (rx_silence_accum >= 1.0 && emitted < 4) {
+            while (rx_silence_accum >= 1.0 && emitted < 16) {
                 __try {
                     xrouter(NULL, 0, 0, rx_resample_outsize, rx_silence_buf);
                 } __except(EXCEPTION_EXECUTE_HANDLER) {

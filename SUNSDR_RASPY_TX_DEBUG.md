@@ -8,7 +8,7 @@ Intermittent raspy tone/audio during SunSDR TUNE and MOX/TX. Current report is r
 
 ## Current Status
 
-- Status: instrumentation added, waiting for repeated TUNE-cycle data.
+- Status: first TUNE-cycle data analyzed; RX silence injection cap raised for next validation run.
 - Primary file: `Project Files/Source/ChannelMaster/sunsdr.c`
 - First reproduction target: repeated TUNE on/off cycles, 2-3 seconds on and 2-3 seconds off.
 - Keep this tracker updated after every test or code change until the issue is resolved.
@@ -50,16 +50,46 @@ For clean vs raspy attempts, compare:
 
 ## Current Hypotheses
 
-- If `feDuringTx > 0`, an idle `0xFE` packet crossed into active TX and should be treated as the highest-priority fix.
-- If `firstFdDelayMs` is large or inconsistent on raspy attempts, consider pre-priming one active `0xFD` silence packet around `0x06=1`.
-- If `rxSilence + realFD` overfeeds WDSP during TX, finish/tune the RX silence accumulator logic.
+- 2026-04-14 TUNE data did not support the idle keepalive race as the active failure: attempts 1-20 all ended with `feDuringTx=0`, `keepaliveRaces=0`, and `seqGaps=0`.
+- TX packet cadence also looked stable in the first run: `fdGapAvg` was about 5.10-5.12 ms and `fdGapMax` was 16 ms.
+- Strong current candidate: RX silence injection is underfeeding during TX. The read loop is paced by incoming radio TX packets at about 195/sec, and the old `emitted < 4` safety cap limited silence injection to roughly 780-976 buffers/sec instead of the intended 1562.5/sec. Logs showed `rxAccum` growing continuously during TX into the thousands, matching RX/VAC raspiness and VAC overflow reports.
+- If the next run still rasps while `rxSilence` rises to the target rate and `rxAccum` stays bounded, revisit first-packet timing and consider pre-priming one active `0xFD` silence packet around `0x06=1`.
 - If none correlate, expand diagnostics into VAC/ASIO and Thetis TX audio routing.
+
+## 2026-04-14 TUNE Run 1
+
+User test: 20 TUNE cycles, roughly 3 seconds each.
+
+Reported results:
+
+- Raspy: attempts 1, 2, 3, 4, 10, 11, 14, 15, 19.
+- Clean: attempts 5, 6, 7, 8, 9, 12, 13, 16, 17, 18, 20.
+- Several raspy/partly raspy RX cases reported VAC1 overflow count increasing; cycling VAC cleared RX. Attempt 20 was mostly clean but had a short break in TUNE.
+
+Log correlations:
+
+- No active-TX keepalive race observed: `feDuringTx=0`, `keepaliveRaces=0` for attempts 1-20.
+- No TX sequence discontinuities observed: `seqGaps=0` for attempts 1-20.
+- Active TX `0xFD` cadence was stable: `fdGapAvg` about 5.10-5.12 ms, `fdGapMax=16 ms`.
+- First `0xFD` delay after `0x06=1` was usually 15-16 ms. Attempts 11, 16, and 20 logged 0 ms; attempt 20 also logged the first active TX packet before the `0x06` marker, but this did not correlate cleanly with raspiness.
+- During TX, per-second logs showed `rxSilence` around 968-976/sec, `realFD` around 195-196/sec, and `xrouterTotal` around 968-976/sec. `rxAccum` grew instead of staying bounded, indicating RX silence injection was falling behind.
+
+Code change after this run:
+
+- Raised the RX silence injection per-loop cap in `sunsdr.c` from 4 to 16. This is intended to let the TX-paced read loop keep RX/VAC fed near the expected 1562.5 buffers/sec while still bounding bursts after scheduler delays.
+
+Next validation:
+
+- Rebuild `ChannelMaster` Debug x64.
+- Repeat the same 20 TUNE cycles and record clean/raspy attempts.
+- Compare `rxSilence`, `xrouterTotal`, and `rxAccum` against Run 1. Expected improvement is `rxSilence` near the target feed rate during TX and `rxAccum` staying bounded instead of growing by thousands.
 
 ## Verification So Far
 
 - `git diff --check -- Project Files/Source/ChannelMaster/sunsdr.c`: passed.
 - `MSBuild ChannelMaster.vcxproj /t:ClCompile /p:SelectedFiles=sunsdr.c`: passed with 0 warnings and 0 errors.
 - Full `ChannelMaster` link from this invocation failed because `PA19.lib` is searched under `Project Files/Source/build/x64/Debug`, while the existing dependency libs are under `Project Files/build/x64/Debug`.
+- After the RX silence cap change, `MSBuild ChannelMaster.vcxproj /t:ClCompile /p:SelectedFiles=sunsdr.c /p:Configuration=Debug /p:Platform=x64`: passed with 0 warnings and 0 errors.
 
 ## Next Step
 
