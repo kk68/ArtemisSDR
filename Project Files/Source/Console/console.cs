@@ -29151,6 +29151,36 @@ namespace Thetis
                     NetworkIO.nativeSunSDRSetMode((int)Audio.TXDSPMode);
                     if (!_tuning || !chkTUN.Checked)
                         NetworkIO.nativeSunSDRSetTune(0);
+
+                    // SunSDR TUNE-in-SSB: Thetis's PostGen tone sits at cw_pitch
+                    // offset from baseband, so standard SSB TUNE RF lands at
+                    // (dial - cw_pitch) for LSB or (dial + cw_pitch) for USB.
+                    // To put the TUNE tone AT the dial frequency (the operator
+                    // expectation matching EESDR behavior), pre-shift the
+                    // radio's TX VFO by the inverse of the baseband tone
+                    // offset. Always push a fresh TX freq here so voice TX
+                    // immediately after a TUNE attempt isn't left on the
+                    // shifted frequency.
+                    int sunsdr_tx_dial_hz = (int)Math.Round(TXFreq * 1e6);
+                    int sunsdr_tune_offset_hz = 0;
+                    if (chkTUN.Checked)
+                    {
+                        switch (Audio.TXDSPMode)
+                        {
+                            case DSPMode.LSB:
+                            case DSPMode.DIGL:
+                                sunsdr_tune_offset_hz = +cw_pitch;
+                                break;
+                            case DSPMode.USB:
+                            case DSPMode.DIGU:
+                                sunsdr_tune_offset_hz = -cw_pitch;
+                                break;
+                            // CW/AM/FM TUNE already lands at dial — no shift.
+                        }
+                    }
+                    NetworkIO.nativeSunSDRSetFreq(0,
+                        sunsdr_tx_dial_hz + sunsdr_tune_offset_hz, 1);
+
                     NetworkIO.nativeSunSDRSetPTT(1);
                 }
 
