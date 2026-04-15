@@ -1395,7 +1395,51 @@ static void sunsdr_dbg_note_tx_packet(unsigned int seq)
     sunsdr_dbg_last_fd_seq = seq;
     sunsdr_dbg_last_fd_tick = now;
 }
-#define SUNSDR_TX_FIXED_DRIVE_BYTE 0xCE
+/*
+ * Architecture reset 2026-04-15 (after iter-1..iter-8 LUT cycle
+ * failed to produce linear UI->W):
+ *
+ * We are going back to EESDR's proven control topology:
+ *   - Wire IQ peak = always ~1.0 (constant, matches EESDR captures at
+ *     every drive level).
+ *   - 0x17 drive byte = dynamic, derived from UI watts via an empirical
+ *     forward-inverted LUT.
+ *
+ * The previous Codex architecture (fixed 0x17=0xCE, variable iq_gain)
+ * was fighting the radio: the internal PA is calibrated for full-
+ * amplitude wire IQ + drive-byte-encoded power. Holding the byte
+ * fixed and scaling amplitude ran the PA in a non-linear regime
+ * where response was state-dependent (iter-7 hit 107W max, iter-8
+ * only 19.5W with the same architecture — unreproducible).
+ *
+ * iq_gain is now a compile-time constant that normalizes WDSP's
+ * ~0.857 peak up to ~1.0 on wire (matching EESDR). If WDSP's output
+ * peak ever shifts, adjust SUNSDR_WDSP_TX_PEAK_EST — nothing else.
+ *
+ * Drive byte LUT anchors come from iter-1 measurements (the only run
+ * we have under this topology — full-amplitude wire + varying byte):
+ *
+ *   UI  10 W -> byte 0x50 (sent)  ->   3 W (measured)
+ *   UI  25 W -> byte 0x80          ->  22 W
+ *   UI  50 W -> byte 0xB5          ->  85 W
+ *   UI  75 W -> byte 0xDD          -> 111 W
+ *   UI 100 W -> byte 0xFF          -> 115 W
+ *
+ * Inverted to target_W -> byte:
+ *
+ *   3 W   -> 0x50 (80)
+ *   22 W  -> 0x80 (128)
+ *   85 W  -> 0xB5 (181)
+ *   111 W -> 0xDD (221)
+ *   115 W -> 0xFF (255)
+ *
+ * Interpolation between these anchors gives the byte for any target.
+ * This is the initial guess; the plan is one dense sweep after
+ * rebuild, then I replace the anchors with those measurements and
+ * we are done.
+ */
+#define SUNSDR_WDSP_TX_PEAK_EST 0.857   /* measured from diagnostic log */
+#define SUNSDR_TX_IQ_GAIN       (1.0 / SUNSDR_WDSP_TX_PEAK_EST) /* ~1.167 */
 
 static double sunsdr_requested_watts_from_raw(int raw)
 {
@@ -1404,88 +1448,13 @@ static double sunsdr_requested_watts_from_raw(int raw)
     return (double)raw * 100.0 / 255.0;
 }
 
-/*
- * Single-actuator power: 0x17 is held at a fixed PA-region byte
- * (0xCE) and wire-IQ amplitude is the smooth dial.
- *
- * Key discovery from the iter-8 diagnostic log (13:47:06 TX_ATTEMPT_END):
- *
- *   WDSP TX TUNE output has peak amplitude ~0.857 (pre_rms 0.606 -> peak
- *   pre_rms * sqrt(2) for a tone). Our iq_gain multiplies that peak.
- *   The wire IQ sample is then quantized to 24-bit and clamped to +-1.0.
- *   So iq_gain * 0.857 >= 1.0 (i.e. iq_gain >= 1.167) produces a CLIPPED
- *   wire envelope pegged at 1.0; iq_gain below that leaves headroom.
- *
- * Radio RF response vs wire peak amplitude (cross-run anchors, same 40m
- * antenna, matched SWR, AM/LSB TUNE, fixed drive byte 0xCE):
- *
- *   wire peak 0.057  ->   1.0 W  (iter-8 UI  5)
- *   wire peak 0.160  ->   3.5 W  (iter-8 UI 20)
- *   wire peak 0.280  ->   9.1 W  (iter-8 UI 50)
- *   wire peak 0.607  ->  19.5 W  (iter-8 UI 100, diagnostic log)
- *   wire peak 0.828  ->  41.0 W  (Codex sqrt run, iqGain 0.966 * 0.857)
- *   wire peak 1.000  -> 107.0 W  (iter-7 UI 100 with iqGain 2.15 clipped)
- *
- * The curve is approximately linear-low (P ~ 35 * amp for amp < 0.3) and
- * steeply super-linear (amp ^ ~3.4) from amp 0.6 to 1.0. Biggest LUT
- * precision matters in 0.6-1.0 since that is where 20 -> 107 W lives.
- *
- * Architecture: anchor the LUT on wire-peak amplitude, derive iq_gain as
- * amp / WDSP_TX_PEAK_EST. This decouples the calibration from any future
- * change in WDSP output level; if the WDSP peak shifts, change one
- * constant instead of every LUT gain value.
- */
-#define SUNSDR_WDSP_TX_PEAK_EST 0.857  /* measured from txCbRmsAvg=0.606 */
-
 static double sunsdr_tx_iq_gain_for_watts(double watts)
 {
-    /* Wire IQ peak amplitude required to produce `cal_w[i]` watts on air. */
-    static const double cal_w[] = {
-        0.0,
-        1.0,
-        3.5,
-        9.1,
-        19.5,
-        41.0,
-        107.0,
-    };
-    static const double cal_amp[] = {
-        0.000,
-        0.057,
-        0.160,
-        0.280,
-        0.607,
-        0.828,
-        1.000,
-    };
-    const int n = (int)(sizeof(cal_w) / sizeof(cal_w[0]));
-    int i;
-    double wire_amp;
-    double gain;
-
+    /* Wire IQ amplitude is no longer the power dial under the new
+     * architecture. It is a constant normalization so our wire peak
+     * matches EESDR's ~1.0. Returns 0 only when TX is commanded off. */
     if (watts <= 0.0) return 0.0;
-
-    if (watts >= cal_w[n - 1]) {
-        wire_amp = cal_amp[n - 1];
-    } else {
-        wire_amp = cal_amp[n - 1];
-        for (i = 1; i < n; i++) {
-            if (watts <= cal_w[i]) {
-                double span_w = cal_w[i] - cal_w[i - 1];
-                double t = (span_w > 0.0) ? (watts - cal_w[i - 1]) / span_w : 0.0;
-                wire_amp = cal_amp[i - 1] + t * (cal_amp[i] - cal_amp[i - 1]);
-                break;
-            }
-        }
-    }
-
-    /* Convert target wire peak to iq_gain. Allow slight >1.0 gain for the
-     * top of the range since WDSP peak is 0.857 (needs ~1.17 to reach full
-     * wire amplitude). Hard-cap well below any distortion danger zone. */
-    gain = wire_amp / SUNSDR_WDSP_TX_PEAK_EST;
-    if (gain < 0.0) gain = 0.0;
-    if (gain > 1.25) gain = 1.25;  /* ~7% clipping headroom above wire = 1.0 */
-    return gain;
+    return SUNSDR_TX_IQ_GAIN;
 }
 
 static struct sockaddr_in sunsdr_stream_dest(void)
@@ -2960,17 +2929,70 @@ void SunSDRLogTuneState(const char* label, int chk_tun, int chk_mox, int tuning,
         sdr.currentDriveRaw);
 }
 
-/* Use a fixed radio drive byte and make IQ amplitude the only smooth
- * power-control actuator. The previous multi-curve stack made in-between
- * slider values non-monotonic. 0xCE produced ~105-107 W in recent runs,
- * so use it as the fixed PA-region selector for any nonzero request.
- * sunsdr_tx_iq_gain_for_watts() owns the smooth power curve. */
+/*
+ * Drive byte (0x17) is the sole power dial under the new architecture.
+ * Wire IQ is held at constant full-amplitude by SUNSDR_TX_IQ_GAIN;
+ * this function maps UI target watts -> radio drive byte via the
+ * inverted iter-1 forward curve (the only dataset we have under this
+ * topology). Piecewise linear between anchors; monotonic.
+ *
+ * Initial anchors (will be replaced once a dense sweep is measured
+ * under this architecture):
+ *
+ *   target W | byte
+ *        0   |   0
+ *        3   |  80  (0x50)
+ *       22   | 128  (0x80)
+ *       85   | 181  (0xB5)
+ *      111   | 221  (0xDD)
+ *      115   | 255  (0xFF)
+ *
+ * For requested watts below 3W we interpolate down to byte 0. The
+ * radio PA may have a dead zone below some byte (unknown); if this
+ * shows up as "slider 1-3W gives zero output", we will raise the
+ * low anchor.
+ */
 static int sunsdr_drive_raw_to_wire_byte(int raw)
 {
+    static const double cal_w[] = {
+        0.0,
+        3.0,
+        22.0,
+        85.0,
+        111.0,
+        115.0,
+    };
+    static const int cal_b[] = {
+        0,
+        80,
+        128,
+        181,
+        221,
+        255,
+    };
+    const int n = (int)(sizeof(cal_w) / sizeof(cal_w[0]));
+    double watts;
+    int i;
+
     if (raw < 0) raw = 0;
     if (raw > 255) raw = 255;
-    if (sunsdr_requested_watts_from_raw(raw) <= 0.0) return 0;
-    return SUNSDR_TX_FIXED_DRIVE_BYTE;
+
+    watts = sunsdr_requested_watts_from_raw(raw);
+    if (watts <= 0.0) return 0;
+    if (watts >= cal_w[n - 1]) return cal_b[n - 1];
+
+    for (i = 1; i < n; i++) {
+        if (watts <= cal_w[i]) {
+            double span_w = cal_w[i] - cal_w[i - 1];
+            int    span_b = cal_b[i] - cal_b[i - 1];
+            double t = (span_w > 0.0) ? (watts - cal_w[i - 1]) / span_w : 0.0;
+            int b = (int)(cal_b[i - 1] + t * (double)span_b + 0.5);
+            if (b < 0) b = 0;
+            if (b > 255) b = 255;
+            return b;
+        }
+    }
+    return cal_b[n - 1];
 }
 
 void SunSDRSetDrive(int raw)
