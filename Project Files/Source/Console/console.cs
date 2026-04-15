@@ -14874,6 +14874,9 @@ namespace Thetis
             // SUNSDR: PureSignal is not supported on this protocol. Force the
             // PS-A UI unchecked and the internal PS state to disabled whenever
             // the selected radio is SUNSDR2DX, so no PS-A code path can arm.
+            // 2-Tone test is part of the PS-A IMD calibration flow, so
+            // disable it too — on SunSDR it has no useful function without
+            // the matched feedback-loop sampling path.
             if (HardwareSpecific.Model == HPSDRModel.SUNSDR2DX)
             {
                 if (chkFWCATUBypass.Checked)
@@ -14883,6 +14886,9 @@ namespace Thetis
                     psform.AutoCalEnabled = false;
                     psform.PSEnabled = false;
                 }
+                if (chk2TONE.Checked)
+                    chk2TONE.Checked = false;
+                chk2TONE.Enabled = false;
             }
 
             cmaster.CMSetTXOutputLevelRun();
@@ -15307,7 +15313,7 @@ namespace Thetis
                     chkPower.Checked)
                     chkMOX.Enabled = !_rx_only;
                 chkTUN.Enabled = !_rx_only;
-                chk2TONE.Enabled = !_rx_only; // MW0LGE_21a
+                chk2TONE.Enabled = !_rx_only && HardwareSpecific.Model != HPSDRModel.SUNSDR2DX; // MW0LGE_21a — 2TONE is PS-A-only, not supported on SunSDR
                 chkVOX.Enabled = !_rx_only;
                 if (_rx_only && chkMOX.Checked)
                     chkMOX.Checked = false;
@@ -15338,7 +15344,7 @@ namespace Thetis
                     chkMOX.Enabled = !_tx_inhibit;
 
                 chkTUN.Enabled = !_tx_inhibit;
-                chk2TONE.Enabled = !_tx_inhibit; //MW0LGE_21a
+                chk2TONE.Enabled = !_tx_inhibit && HardwareSpecific.Model != HPSDRModel.SUNSDR2DX; //MW0LGE_21a — 2TONE is PS-A-only, not supported on SunSDR
                 chkVOX.Enabled = !_tx_inhibit;
 
                 if ((_rx1_dsp_mode == DSPMode.CWL ||
@@ -27425,7 +27431,7 @@ namespace Thetis
                 {
                     chkMOX.Enabled = true;
                     chkTUN.Enabled = true;
-                    chk2TONE.Enabled = true; //MW0LGE_21a
+                    chk2TONE.Enabled = HardwareSpecific.Model != HPSDRModel.SUNSDR2DX; //MW0LGE_21a — 2TONE is PS-A-only, not supported on SunSDR
                 }
                 chkVFOLock.Enabled = true;
                 chkVFOBLock.Enabled = true;
