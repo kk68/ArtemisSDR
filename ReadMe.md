@@ -6,27 +6,29 @@ New-user setup guide:
 
 - [START_HERE_SUNSDR2DX.md](/mnt/c/Users/kosta/ham/SUNSDR/Thetis/START_HERE_SUNSDR2DX.md)
 
-## Status: Core RX/TX/PA Working
+## Status: Core RX/TX/PA Working — 40m TX Power Calibrated
 
 The current fork supports practical operation on SunSDR2 DX:
 
 - **Native control and streaming** on UDP `50001` and `50002`
 - **RX1 working** with correct panadapter, waterfall, and demodulated audio
 - **RX2 working** as a second receive path with independent VFO B tuning and audio
-- **MOX/PTT working** with native SunSDR TX streaming
+- **MOX/PTT working** with native SunSDR TX streaming, reliable across consecutive attempts (`txSeq=0` reset per TX session matches EESDR)
 - **TUNE working** through the normal Thetis TX/tone path
-- **Drive / Tune power control working** from Thetis sliders, but still under active calibration/tuning
+- **TX power calibrated linearly on 40m**: UI slider in watts maps to actual RF output within ~1 W from 10 W to 90 W; UI 100 → ~97 W (radio PA ceiling); UI 5 → ~4 W (PA low-drive dead-zone, hardware). Other bands fall back to the 40m table until separately measured
 - **RX antenna switching working**
 - **TX antenna switching working** through Thetis antenna setup controls
 - **PA / xPA control working** from Thetis
+- **AM transmit working** with WDSP AM modulator, AM Carrier Level UI active end-to-end
 - **Power off/on recovery working** without losing the receive stream
 - **RX band switching currently working via a temporary SunSDR-only auto power recycle workaround**
 - **Radio firmware version display working** in the Thetis title bar and `Setup -> HW Select`
 - **Radio serial number display working** in the Thetis title bar and `Setup -> HW Select`
-- **TX forward power meter working** via `0x1F` telemetry packet (bytes 14-15 → quadratic conversion to watts, calibrated on 40m)
+- **TX forward power meter `0x1F` telemetry decoded** in `sunsdr.c` but **not yet wired into Thetis's `Fwd Pwr` UI meter** — use an external wattmeter for now
 - **VAC TO VAC underflows during MOX/TX largely resolved** via RX silence injection (radio reduces RX rate during TX, blocking WDSP RX with `bfo=1`)
+- **Diagnostic logging disabled by default** (`SUNSDR_DEBUG_LOG_ENABLED 0` in `sunsdr.c`); flip to 1 only when reproducing a TX/RX issue
 
-This is no longer just an RX-only bring-up. It is a usable SunSDR2 DX port with some remaining feature gaps and one major remaining calibration item: TX power/drive linearity.
+This is no longer just an RX-only bring-up. It is a usable SunSDR2 DX port with the major remaining items being per-band TX cal extension, `Fwd Pwr` meter wiring, and MON/DUP behavior cleanup.
 
 ## Key Protocol Facts
 
@@ -103,7 +105,8 @@ SunSDR2 DX                              Thetis (this fork)
 - **TX tuning**
   - standalone `0x09` split/TX frequency write
 - **Mode control**
-  - native SunSDR mode writes mapped from Thetis mode changes
+  - mode is set by the radio via the `0x20` config block payload (NOT a dedicated mode opcode). Earlier `0x17` mode-code mapping was a misread — `0x17` is the drive command (sqrt-encoded watts). See `sunsdr-re/docs/protocol/control.md` for the corrected wire semantics.
+  - Thetis-side mode changes are cached locally; `0x17` is no longer sent with a mode value
 - **RX2**
   - native RX2 enable/disable path
   - independent RX2 / VFO B tuning context
@@ -196,79 +199,51 @@ Only after that should the current automatic power recycle be removed.
 
 ## TX Power Calibration Status
 
-The SunSDR2 DX TX power path is now structurally working and close enough to move from code bring-up into actual Thetis-side calibration.
+40m is calibrated and locked. Per-band extension and a couple of metering items remain.
 
-What is already true:
+### Architecture (final)
 
-- `Drive` and `Tune` sliders now reach the native SunSDR TX path correctly
-- `MOX` and `TUNE` both produce RF output
-- the previous hard failures are fixed:
-  - zero-drive muting / full-scale fallback confusion
-  - band-change TX/TUNE failure until `POWER` off/on
-  - PA / xPA not asserting during active TX
-- Thetis `PA Gain By Band` and per-band `Offset` values are now in the active SunSDR TX power path
+EESDR-compatible topology — wire IQ at constant full amplitude, drive byte `0x17` is the only power dial:
 
-Current live 40m reference checkpoints from external wattmeter testing:
+- `sunsdr_tx_outbound` multiplies WDSP TX output by a constant `iq_gain = 1.0 / 0.857 ≈ 1.167` so the wire IQ peaks at ~1.0 (matches EESDR captures at every drive level).
+- `sunsdr_drive_raw_to_wire_byte` is a pass-through. Thetis upstream owns the calibration math: `target_dbm → GainByBand (per-band PA Gain + GetSunSDRDefaultAdjust offsets) → target_volts → raw 0..255 → wire byte`.
+- `setup.cs` `GetSunSDRDefaultAdjust` holds the SunSDR-specific per-drive-level dB offsets that fall back when `PA Gain By Band` is left at its uninitialized default of 100 dB. Operator can override by entering real PA Gain dB and using the per-drive `Offset for <band>` UI fields.
 
-- `0 -> 0W`
-- `10 -> 9.4W`
-- `25 -> 26W`
-- `50 -> 51W`
-- `75 -> 70W`
-- `100 -> 106W`
+### 40m measured curve (locked)
 
-Interpretation:
+| UI W | Actual W | Note |
+| ---: | ---: | --- |
+| 5   | 4    | hardware low-drive dead-zone |
+| 10  | 9.8  | |
+| 15  | 16.3 | |
+| 20  | ~20  | post-iter-13 nudge |
+| 30  | 30   | exact |
+| 40  | 40   | exact |
+| 50  | 50   | exact |
+| 60  | 60   | exact |
+| 70  | 70   | exact |
+| 80  | 80   | exact |
+| 90  | 91   | |
+| 100 | 97   | radio PA ceiling |
 
-- low and mid power are now close enough to be calibrated with normal Thetis tooling
-- the remaining error is mainly upper-range shaping (`75W` low while `100W` is near full output)
-- this is no longer an RX/TX transport bug hunt; it is calibration work
+`GetSunSDRDefaultAdjust` array (40m fallback): `{ +0.13, -0.55, -0.84, -1.05, -1.13, -1.35, -1.40, -1.41, -1.26 }` dB at 10W..90W.
 
-### What Thetis Calibration Menus Mean For SunSDR
+### Thetis calibration UI (when to use what)
 
-For SunSDR2 DX, Thetis now uses the normal PA calibration path to determine actual TX drive:
+- `Setup → PA Settings → PA Gain By Band` — coarse per-band dB. Leave at 100 to use the SunSDR built-in fallback table; set to a real dB value to switch to operator-controlled per-drive offsets.
+- `Setup → PA Settings → PA Gain → Offsets for <band>` — per-drive (10W..90W) dB tweaks, ±6 dB range. Active only when `PA Gain By Band` for that band is non-default.
+- `Setup → PA Settings → Watt Meter` — trims Thetis's displayed `Fwd Pwr` meter only. Does NOT change RF output.
+- `Setup → General → Use watts on Drive/Tune slider` — must be on for the slider to read in watts.
 
-- `PA Gain By Band`
-- `Offset for <band>`
-- `Use watts on Drive/Tune slider`
-- `Actual Power @ 100% slider`
+### Current limitation: Fwd Pwr meter not wired
 
-Those settings do affect real transmitted power on SunSDR.
+The radio sends forward power / SWR telemetry on the `0x1F` family every TX cycle. `sunsdr.c` decodes it but does **not** yet route it into Thetis's `alex_fwd` / `alex_rev` / `calfwdpower` path, so the on-screen `Fwd Pwr` meter stays near 0 W during TX. Use an external wattmeter while this is wired up.
 
-The `Watt Meter` page is different:
+### Next steps for power
 
-- it trims Thetis's displayed TX wattmeter
-- it does **not** directly set actual RF output
-
-### Important Current Limitation: TX Metering
-
-The Thetis `Fwd Pwr` TX meter is **not currently valid for SunSDR2 DX**.
-
-The current SunSDR integration does not yet feed an equivalent forward/reverse power telemetry path into Thetis's `alex_fwd` / `alex_rev` / `calfwdpower` model, so the TX meter can remain at `0W` even when real RF output is present.
-
-That means:
-
-- use an **external wattmeter** as the source of truth for SunSDR power calibration
-- do **not** rely on Thetis `Fwd Pwr` or `Watt Meter Trim` yet
-
-### Current Implementation Notes
-
-- Thetis calibrated power flows through:
-  - `Audio.RadioVolume -> NetworkIO.SetOutputPower() -> nativeSunSDRSetDrive()`
-- SunSDR-specific tuning currently exists in:
-  - `Console/clsHardwareSpecific.cs` — default `PA Gain By Band`
-  - `Console/setup.cs` — SunSDR legacy-profile compatibility fallbacks and default per-drive shaping
-  - `ChannelMaster/sunsdr.c` — native TX amplitude scaling (`sunsdr_tx_outbound`)
-- `sunsdr_debug.log` logs:
-  - `SunSDRSetDrive(raw)`
-  - `TX audio callback ... drive=..., full_scale=..., pre_peak=..., pre_rms=..., post_peak=..., post_rms=...`
-
-### Recommended Next Steps
-
-1. Freeze the native SunSDR TX path unless a new structural bug appears.
-2. Calibrate one band at a time, starting with `40m`, using an external wattmeter only.
-3. Use `PA Gain By Band` for coarse per-band correction.
-4. Use the `Offset for <band>` table to straighten `10W..90W` checkpoints.
-5. After the RF curve is acceptable, implement SunSDR forward/reverse power telemetry so Thetis `Fwd Pwr` and `Watt Meter Trim` become meaningful.
+1. Calibrate the other bands (80m, 20m, 17m, 15m, 12m, 10m, 6m). Same workflow as 40m: one 12-point sweep, fold deltas into the relevant band's adjust table or into per-band UI offsets.
+2. Wire the `0x1F` forward-power telemetry into Thetis's `Fwd Pwr` meter so on-screen power matches real output.
+3. Consider implementing reverse-power / SWR readback once `Fwd Pwr` is live.
 
 ## Files Changed (from upstream Thetis)
 
@@ -278,20 +253,23 @@ That means:
 
 **Modified files:**
 - `ChannelMaster/network.c`, `network.h` — P/Invoke wrappers for SunSDR functions
-- `ChannelMaster/netInterface.c` — SunSDR path in `StartAudioNative()`
+- `ChannelMaster/netInterface.c` — SunSDR path in `StartAudioNative()` (legacy `sunsdr_trace` writer disabled)
 - `ChannelMaster/cmasio.c`, `ivac.c` — Diagnostic logging
 - `ChannelMaster/ChannelMaster.vcxproj` — Added sunsdr.c/h to build
 - `Console/enums.cs` — `SUNSDR2DX` model and `SUNSDR` protocol enums
-- `Console/clsHardwareSpecific.cs` — SunSDR hardware model support
-- `Console/HPSDR/NetworkIO.cs`, `NetworkIOImports.cs` — SunSDR init/freq routing
+- `Console/clsHardwareSpecific.cs` — SunSDR hardware model support, default `PA Gain By Band`
+- `Console/HPSDR/NetworkIO.cs`, `NetworkIOImports.cs` — SunSDR init/freq routing, `nativeSunSDRSetDrive`, `nativeSunSDRLogTrace`, etc.
 - `Console/cmaster.cs` — SunSDR router configuration and source routing
-- `Console/console.cs` — RX2, TX, drive, and native SunSDR control wiring
+- `Console/console.cs` — RX2, TX, drive, AM mode, and native SunSDR control wiring
 - `Console/HPSDR/Alex.cs` — SunSDR antenna control integration
-- `Console/setup.cs`, `setup.designer.cs` — SunSDR in radio model dropdown and antenna setup integration
+- `Console/setup.cs`, `setup.designer.cs` — SunSDR in radio model dropdown and antenna setup; SunSDR-specific PA Gain fallbacks and per-drive `GetSunSDRDefaultAdjust` table (40m calibrated)
+- `Console/radio.cs` — wires `TXAMCarrierLevel` UI through to WDSP for SunSDR (already standard, kept untouched after diagnostic was removed)
 - `*.vcxproj` (portaudio, wdsp, cmASIO, ChannelMaster) — PlatformToolset v145 → v143
 
 ## Known Limitations
 
+- **TX power calibration only complete on 40m.** Other bands fall back to the 40m table and may be off by a few dB until separately measured.
+- **Thetis `Fwd Pwr` meter not wired** to the SunSDR `0x1F` forward-power telemetry yet. Use an external wattmeter.
 - **Diversity is not supported on SunSDR2 DX in this fork.**
   - Thetis diversity UI can be surfaced, but ExpertSDR3 evidence shows RX2 follows the same RX antenna selection as RX1.
   - No independent per-receiver antenna/input assignment has been recovered yet.
@@ -299,17 +277,18 @@ That means:
   - `MON` and `DUP` behavior is not yet reliable on SunSDR.
 - **VAC behavior still needs cleanup.**
   - Some RX/TX transitions can still leave VAC in a bad state depending on configuration.
-- **TX power calibration is not finished.**
-  - Drive/Tune power now works, but real RF output still needs per-band and per-drive calibration tuning.
-- **TX antenna behavior depends on normal Thetis “do not TX” / antenna-permit settings.**
+- **Intermittent post-TX RX raspy** can occur briefly (related to VAC rmatch transient); cycling VAC clears it. Tracked separately.
+- **Mode byte position inside `0x20` config block payload** is still being verified — mode currently set client-side and may not always match ExpertSDR3 exactly.
+- **TX antenna behavior depends on normal Thetis "do not TX" / antenna-permit settings.**
 
 ## Next Steps
 
-- [ ] Stabilize VAC behavior across RX/MOX/TUNE transitions
-- [ ] Finish local monitor (`MON`) and `DUP` path behavior
-- [ ] Finish TX drive / tune power calibration, starting with 40m reference measurements
+- [ ] Calibrate remaining bands (80m / 60m / 30m / 20m / 17m / 15m / 12m / 10m / 6m)
+- [ ] Wire `0x1F` forward-power telemetry into Thetis's `Fwd Pwr` meter
 - [ ] Replace the temporary SunSDR RX band-switch auto power recycle with the exact ExpertSDR3 reconfigure sequence
-- [ ] Keep validating mode/filter edge cases
+- [ ] Stabilize VAC behavior across RX/MOX/TUNE transitions; fix the post-TX rmatch raspy
+- [ ] Finish local monitor (`MON`) and `DUP` path behavior
+- [ ] Pin the mode byte offset inside the `0x20` config block payload
 - [ ] Continue RE for any hidden per-receiver input routing that could make diversity possible
 
 ## Related Repositories

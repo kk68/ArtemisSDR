@@ -14871,6 +14871,20 @@ namespace Thetis
             if (!IsSetupFormNull && HardwareSpecific.OldModel != HardwareSpecific.Model)
                 txtVFOAFreq_LostFocus(this, EventArgs.Empty);
 
+            // SUNSDR: PureSignal is not supported on this protocol. Force the
+            // PS-A UI unchecked and the internal PS state to disabled whenever
+            // the selected radio is SUNSDR2DX, so no PS-A code path can arm.
+            if (HardwareSpecific.Model == HPSDRModel.SUNSDR2DX)
+            {
+                if (chkFWCATUBypass.Checked)
+                    chkFWCATUBypass.Checked = false;
+                if (psform != null)
+                {
+                    psform.AutoCalEnabled = false;
+                    psform.PSEnabled = false;
+                }
+            }
+
             cmaster.CMSetTXOutputLevelRun();
 
             //do always, to update everything
@@ -29074,7 +29088,7 @@ namespace Thetis
             {
                 // SunSDR native TX scaling reads prn->tx[0].drive_level. That state is
                 // initialized to 0 on startup, so refresh the current Thetis-selected
-                // power source immediately before keying TX/TUNE.
+                // power source before the native TX/TUNE transition.
                 if (tx)
                 {
                     if (chkTUN.Checked)
@@ -29082,11 +29096,6 @@ namespace Thetis
                     else
                         ptbPWR_Scroll(this, EventArgs.Empty);
                 }
-
-                // Latch tune state immediately before the native MOX/PTT transition.
-                // The async TUNE UI path can otherwise collapse back into plain MOX.
-                NetworkIO.nativeSunSDRSetTune(chkTUN.Checked ? 1 : 0);
-                NetworkIO.nativeSunSDRSetPTT(tx ? 1 : 0);
             }
 
             if (tx)
@@ -29102,6 +29111,15 @@ namespace Thetis
 
                 UpdateRX1DDSFreq();
                 UpdateRX2DDSFreq();
+                if (NetworkIO.CurrentRadioProtocol == RadioProtocol.SUNSDR && freq > 0.0)
+                {
+                    // Thetis can leave tx_dds_freq_mhz stale after an RX band change.
+                    // Use the MOX transition's validated TX frequency so the radio does
+                    // not key on the previous band. Do not apply the SSB tune-tone
+                    // pitch offset here; the SunSDR primary frequency command is the
+                    // actual RF frequency the radio should transmit on.
+                    tx_dds_freq_mhz = freq;
+                }
                 UpdateTXDDSFreq();
 
                 Band lo_band = BandByFreq(XVTRForm.TranslateFreq(VFOAFreq), rx1_xvtr_index, current_region);
@@ -29124,6 +29142,18 @@ namespace Thetis
                 }
                 UpdateTRXAnt(); //[2.3.10.6]MW0LGE added
 
+                if (NetworkIO.CurrentRadioProtocol == RadioProtocol.SUNSDR)
+                {
+                    // Key SunSDR only after Thetis has pushed the band-dependent
+                    // TX frequency and antenna state. Keying first caused a
+                    // post-PTT frequency/antenna burst, heard as an extra relay
+                    // click on bands where TX/RX cached state differed.
+                    NetworkIO.nativeSunSDRSetMode((int)Audio.TXDSPMode);
+                    if (!_tuning || !chkTUN.Checked)
+                        NetworkIO.nativeSunSDRSetTune(0);
+                    NetworkIO.nativeSunSDRSetPTT(1);
+                }
+
                 NetworkIO.SetTRXrelay(1);
                 if (cw_fw_keyer &&
                     (RX1DSPMode == DSPMode.CWL || RX1DSPMode == DSPMode.CWU) &&
@@ -29137,6 +29167,14 @@ namespace Thetis
             }
             else // rx
             {
+                if (NetworkIO.CurrentRadioProtocol == RadioProtocol.SUNSDR)
+                {
+                    // Drop RF before restoring RX-side VFO/antenna state.
+                    if (!_tuning)
+                        NetworkIO.nativeSunSDRSetTune(chkTUN.Checked ? 1 : 0);
+                    NetworkIO.nativeSunSDRSetPTT(0);
+                }
+
                 if (m_bQSOTimerDuringMoxOnly && m_bQSOTimerRunning) QSOTimerRunning = false;
 
                 NetworkIO.SetPttOut(0);
@@ -30040,9 +30078,48 @@ namespace Thetis
             get { return _tune_pulse_enabled; }
             set { _tune_pulse_enabled = value; }
         }
+
+        private void LogSunSDRTuneAudioState(string label, int newPwr)
+        {
+            if (NetworkIO.CurrentRadioProtocol != RadioProtocol.SUNSDR)
+                return;
+
+            var tx = radio.GetDSPTX(0);
+            NetworkIO.nativeSunSDRLogTuneState(
+                label,
+                chkTUN.Checked ? 1 : 0,
+                chkMOX.Checked ? 1 : 0,
+                _tuning ? 1 : 0,
+                _mox ? 1 : 0,
+                (int)Audio.TXDSPMode,
+                (int)tx.CurrentDSPMode,
+                tx.TXPostGenRun,
+                tx.TXPostGenMode,
+                tx.TXPostGenToneFreq,
+                tx.TXPostGenToneMag,
+                _tune_pulse_enabled ? 1 : 0,
+                _tune_pulse_on ? 1 : 0,
+                (int)_tuneDrivePowerSource,
+                ptbPWR.Value,
+                newPwr);
+        }
+
         private async void chkTUN_CheckedChanged(object sender, System.EventArgs e)
         {
             bool oldTune = _tuning; //MW0LGE_21k9d
+
+            // SUNSDR: trace each handler entry so we can tell how many user
+            // TUNE clicks happened vs whether any came from a non-click source
+            // (programmatic, auto-recovery, stuck UI). User noted 12 recorded
+            // attempts when only 10 were consciously initiated; this line
+            // answers the provenance question.
+            if (NetworkIO.CurrentRadioProtocol == RadioProtocol.SUNSDR)
+            {
+                string senderName = (sender == null) ? "null" :
+                    (sender is System.Windows.Forms.Control c ? c.Name : sender.GetType().Name);
+                NetworkIO.nativeSunSDRLogTrace(
+                    $"chkTUN_CheckedChanged sender={senderName} chkTUN.Checked={chkTUN.Checked} oldTune={oldTune} powerOn={PowerOn} chkMOX.Checked={chkMOX.Checked}");
+            }
 
             if (chkTUN.Checked)
             {
@@ -30104,6 +30181,7 @@ namespace Thetis
                     radio.GetDSPTX(0).TXPostGenToneMag = MAX_TONE_MAG;
                     radio.GetDSPTX(0).TXPostGenRun = 1;
                 }
+                LogSunSDRTuneAudioState("TUNE_ON_POSTGEN_SET", -1);
 
                 // remember old power //MW0LGE_22b
                 if (_tuneDrivePowerSource == DrivePowerSource.FIXED)
@@ -30116,7 +30194,8 @@ namespace Thetis
                     PWRSliderLimitEnabled = false;
                     PWR = new_pwr;
                 }
-                //          
+                LogSunSDRTuneAudioState("TUNE_ON_POST_POWER", new_pwr);
+                //
 
                 old_dsp_mode = radio.GetDSPTX(0).CurrentDSPMode;                // save current mode
                 switch (old_dsp_mode)
@@ -30144,9 +30223,15 @@ namespace Thetis
                 }
 
                 if (NetworkIO.CurrentRadioProtocol == RadioProtocol.SUNSDR)
+                {
+                    LogSunSDRTuneAudioState("TUNE_ON_PRE_NATIVE_TUNE", new_pwr);
+                    NetworkIO.nativeSunSDRSetMode((int)Audio.TXDSPMode);
                     NetworkIO.nativeSunSDRSetTune(1);
+                    LogSunSDRTuneAudioState("TUNE_ON_POST_NATIVE_TUNE_PRE_MOX", new_pwr);
+                }
 
                 chkMOX.Checked = true;
+                LogSunSDRTuneAudioState("TUNE_ON_AFTER_CHKMOX", new_pwr);
 
                 await Task.Delay(100); // MW0LGE_21k8
                 // go for it
@@ -30172,12 +30257,18 @@ namespace Thetis
                 _tune_pulse_on = false;
 
                 if (NetworkIO.CurrentRadioProtocol == RadioProtocol.SUNSDR)
+                {
+                    LogSunSDRTuneAudioState("TUNE_OFF_PRE_NATIVE_TUNE", -1);
                     NetworkIO.nativeSunSDRSetTune(0);
+                    LogSunSDRTuneAudioState("TUNE_OFF_POST_NATIVE_TUNE", -1);
+                }
 
                 chkMOX.Checked = false;                                         // we're done
+                LogSunSDRTuneAudioState("TUNE_OFF_AFTER_CHKMOX", -1);
                 await Task.Delay(100);
 
                 radio.GetDSPTX(0).TXPostGenRun = 0;
+                LogSunSDRTuneAudioState("TUNE_OFF_POSTGEN_STOP", -1);
 
                 chkTUN.BackColor = SystemColors.Control;
 
@@ -31861,12 +31952,13 @@ namespace Thetis
                 case DSPMode.AM:
                 case DSPMode.SAM:
                 case DSPMode.FM:
-                    if (chkTUN.Checked) tx_freq -= cw_pitch * 1e-6;
+                    if (chkTUN.Checked && NetworkIO.CurrentRadioProtocol != RadioProtocol.SUNSDR)
+                        tx_freq -= cw_pitch * 1e-6;
                     break;
                 case DSPMode.USB:
                 case DSPMode.DIGU:
                 case DSPMode.DSB:
-                    if (chkTUN.Checked)
+                    if (chkTUN.Checked && NetworkIO.CurrentRadioProtocol != RadioProtocol.SUNSDR)
                     {
                         if (RX1IsOn60mChannel() && current_region == FRSRegion.US)
                             tx_freq -= (ModeFreqOffset(_rx1_dsp_mode) + cw_pitch * 1e-6);
@@ -31876,7 +31968,8 @@ namespace Thetis
                     break;
                 case DSPMode.LSB:
                 case DSPMode.DIGL:
-                    if (chkTUN.Checked) tx_freq += cw_pitch * 1e-6;
+                    if (chkTUN.Checked && NetworkIO.CurrentRadioProtocol != RadioProtocol.SUNSDR)
+                        tx_freq += cw_pitch * 1e-6;
                     break;
             }
 
@@ -32275,11 +32368,13 @@ namespace Thetis
                     case DSPMode.FM:
                     case DSPMode.USB:
                     case DSPMode.DIGU:
-                        if (chkTUN.Checked) freq -= (double)cw_pitch * 1e-6;
+                        if (chkTUN.Checked && NetworkIO.CurrentRadioProtocol != RadioProtocol.SUNSDR)
+                            freq -= (double)cw_pitch * 1e-6;
                         break;
                     case DSPMode.LSB:
                     case DSPMode.DIGL:
-                        if (chkTUN.Checked) freq += (double)cw_pitch * 1e-6;
+                        if (chkTUN.Checked && NetworkIO.CurrentRadioProtocol != RadioProtocol.SUNSDR)
+                            freq += (double)cw_pitch * 1e-6;
                         break;
                     case DSPMode.CWL:
                         freq += (double)cw_pitch * 0.0000010;
@@ -32824,11 +32919,13 @@ namespace Thetis
                 case DSPMode.USB:
                 case DSPMode.DIGU:
                 case DSPMode.DSB:
-                    if (chkTUN.Checked) tx_freq -= (double)cw_pitch * 1e-6;
+                    if (chkTUN.Checked && NetworkIO.CurrentRadioProtocol != RadioProtocol.SUNSDR)
+                        tx_freq -= (double)cw_pitch * 1e-6;
                     break;
                 case DSPMode.LSB:
                 case DSPMode.DIGL:
-                    if (chkTUN.Checked) tx_freq += (double)cw_pitch * 1e-6;
+                    if (chkTUN.Checked && NetworkIO.CurrentRadioProtocol != RadioProtocol.SUNSDR)
+                        tx_freq += (double)cw_pitch * 1e-6;
                     break;
                 case DSPMode.CWL:
                     if (!cw_fw_keyer || (cw_fw_keyer && chkTUN.Checked))
@@ -43806,9 +43903,25 @@ namespace Thetis
         }
 
         private bool _puresignal_auto_old_state = false;
+        private bool _ps_sunsdr_checkbox_forced_off_logged = false;
         private void chkFWCATUBypass_CheckedChanged(object sender, EventArgs e)
         {
             //PS-A button
+
+            // SUNSDR: PureSignal is hard-disabled. If the user managed to tick
+            // this while SUNSDR is active, force it back off (will re-enter this
+            // handler once from the programmatic uncheck). Never allow PS-A
+            // AutoCal or feedback state to arm for SUNSDR.
+            if (NetworkIO.CurrentRadioProtocol == RadioProtocol.SUNSDR && chkFWCATUBypass.Checked)
+            {
+                if (!_ps_sunsdr_checkbox_forced_off_logged)
+                {
+                    _ps_sunsdr_checkbox_forced_off_logged = true;
+                    System.Diagnostics.Debug.Print("PS_GATE_CHECKBOX_SUNSDR_FORCE_OFF: forcing chkFWCATUBypass unchecked for SUNSDR protocol");
+                }
+                chkFWCATUBypass.Checked = false;
+                return;
+            }
 
             bool oldState = psform.AutoCalEnabled;
             psform.AutoCalEnabled = chkFWCATUBypass.Checked;

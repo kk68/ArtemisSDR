@@ -38,7 +38,13 @@ of the License, or (at your option) any later version.
 #define SUNSDR_OP_STATE_REQ_A   0x0E
 #define SUNSDR_OP_STATE_REQ_B   0x10
 #define SUNSDR_OP_RX_ANT        0x15
-#define SUNSDR_OP_MODE          0x17
+/* 0x17 was MISIDENTIFIED as MODE. Actual semantics per AM drive
+ * calibration captures 2026-04-14: 0x17 payload byte sets radio TX
+ * drive level. byte = round(sqrt(watts/100) * 255). Observed bytes:
+ * 10W=0x50, 25W=0x80, 50W=0xB5, 75W=0xDD, 100W=0xFF. Radio mode is
+ * set via 0x20 config block, not 0x17. */
+#define SUNSDR_OP_DRIVE         0x17
+#define SUNSDR_OP_MODE          0x17  /* DEPRECATED alias - do not use */
 #define SUNSDR_OP_KEEPALIVE     0x18
 #define SUNSDR_OP_RX2_ENABLE    0x1B
 #define SUNSDR_OP_QUERY_FIXED   0x1A
@@ -50,8 +56,16 @@ of the License, or (at your option) any later version.
 #define SUNSDR_OP_STATE_REPEAT  0x5A
 #define SUNSDR_OP_POWER_WAKE    0x5F
 
-/* Opcode for IQ stream (port 50002) */
-#define SUNSDR_OP_IQ_STREAM     0xFE
+/* Opcodes for IQ stream (port 50002)
+ *   0xFE = RX-state / TX-idle keepalive (byte8=0x01, byte9=0x00)
+ *   0xFD = TX-active, live voice IQ audio (byte8=0x02, byte9=0x01)
+ * Verified from ExpertSDR3 live voice MOX capture on 2026-04-13:
+ * opcode switches FE->FD when MOX is asserted and FD->FE on release.
+ */
+#define SUNSDR_OP_IQ_RX_IDLE    0xFE
+#define SUNSDR_OP_IQ_TX_ACTIVE  0xFD
+/* Backward-compat alias: existing RX parse paths still use this name. */
+#define SUNSDR_OP_IQ_STREAM     SUNSDR_OP_IQ_RX_IDLE
 
 /* IQ stream format */
 #define SUNSDR_IQ_PKT_SIZE      1210
@@ -67,7 +81,13 @@ of the License, or (at your option) any later version.
 /* Frequency scaling: wire value = Hz * FREQ_SCALE */
 #define SUNSDR_FREQ_SCALE       10
 
-/* Mode codes */
+/* Mode codes
+ * Verified from ExpertSDR3 full AM session capture 2026-04-13:
+ * AM = 0x28 (matched LSB->AM write; produced RF on-air during MOX).
+ * The earlier USB->AM capture showed 0x00 but that transition may not have
+ * actually resulted in working AM TX. Use 0x28.
+ */
+#define SUNSDR_MODE_AM          0x28
 #define SUNSDR_MODE_LSB         0xBC
 #define SUNSDR_MODE_USB         0xF5
 
@@ -118,6 +138,10 @@ typedef struct _sunsdr_state
     double txPrevI;
     double txPrevQ;
     int txAccumCount;
+    /* Boxcar anti-alias accumulator for TX downsampler (192k -> 39k). */
+    double txAccumBoxI;
+    double txAccumBoxQ;
+    int txAccumBoxN;
 
     /* IQ buffer (double pairs for xrouter) */
     double* rxBuf;
@@ -141,6 +165,11 @@ void SunSDRSetMode(int mode);
 void SunSDRSetPTT(int ptt);
 void SunSDRSetRX2(int enabled);
 void SunSDRSetTune(int tune);
+void SunSDRLogTuneState(const char* label, int chk_tun, int chk_mox, int tuning, int mox,
+    int tx_dsp_mode, int current_dsp_mode, int postgen_run, int postgen_mode,
+    double tone_freq, double tone_mag, int pulse_enabled, int pulse_on,
+    int tune_drive_source, int pwr, int new_pwr);
+void SunSDRLogTrace(const char* msg);
 void SunSDRSetDrive(int raw);
 void SunSDRSetAntenna(int antenna);
 void SunSDRSetTxAntenna(int antenna);

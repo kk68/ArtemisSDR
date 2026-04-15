@@ -2942,7 +2942,7 @@ namespace Thetis
 		public double TXAMCarrierLevel
 		{
 			get { return tx_am_carrier_level; }
-			set 
+			set
 			{
 				tx_am_carrier_level = value;
 				if(update)
