@@ -1542,29 +1542,13 @@ static void sunsdr_tx_outbound(int id, int nsamples, double* buff)
 
     full_scale = sunsdr_tx_full_scale_for_drive(drive);
 
-    /*
-     * AM-mode amplitude boost. The previous "inverse WDSP formula +
-     * rebuild" approach (commit c623a7bc) made power WORSE because
-     * by the time I/Q reaches sunsdr_tx_outbound, WDSP has already
-     * routed it through wcpagc(ALC), uslew, siphon, iqc, cfir, and
-     * rsmpout downstream of ammod. Inverting the ammod formula on
-     * the chain output produces garbage audio samples.
-     *
-     * Simpler approach: preserve whatever WDSP gives us (carrier +
-     * modulation already baked in at the right relative ratios from
-     * the full TX chain), just scale it more aggressively to reach
-     * EESDR's reference wire carrier amplitude.
-     *
-     * Measurement (capture 20260413_184632 vs reference 20260413_174833):
-     *   Thetis wire carrier: 0.334   EESDR wire carrier: 0.494
-     *   Ratio: 0.494 / 0.334 = 1.48
-     *
-     * Setting am_boost = 1.48 would slightly clip the modulation peaks
-     * (our pre-scale wire peak was 0.706, 0.706 * 1.48 = 1.046 clipped
-     * to 1.0) — a small 4.5 % envelope trim that is inaudible on AM
-     * but brings the carrier DC up to match EESDR. */
-    int is_am = (sdr.currentMode == SUNSDR_MODE_AM);
-    const double am_boost = 1.48;  /* target ratio from capture comparison */
+    /* The previous AM-specific "am_boost = 1.48" wire-IQ multiplier
+     * was compensating for a misrouted drive command (we were sending
+     * mode code as drive via 0x17, giving AM only ~2.5W equivalent
+     * drive). Now that SunSDRSetDrive sends 0x17 with the proper
+     * sqrt-scaled drive byte, the radio's RF stage does the
+     * amplification and the wire IQ does not need any mode-specific
+     * boost. Scaling is uniform: drive * full_scale. */
 
     /*
      * Downsampling resampler: Fin=192 kHz -> Fout=39.0625 kHz (ratio ~4.9152).
@@ -1581,17 +1565,8 @@ static void sunsdr_tx_outbound(int id, int nsamples, double* buff)
         double in_Q = buff[2 * i + 1];
         double cur_I, cur_Q;
 
-        if (is_am) {
-            /* Uniform scale by drive * full_scale * am_boost. The
-             * final clamping in sunsdr_quantize24 caps at ±1.0 which
-             * mildly trims modulation peaks; AM power is set by the
-             * DC carrier which rises as intended. */
-            cur_I = in_I * drive * full_scale * am_boost;
-            cur_Q = in_Q * drive * full_scale * am_boost;
-        } else {
-            cur_I = in_I * drive * full_scale;
-            cur_Q = in_Q * drive * full_scale;
-        }
+        cur_I = in_I * drive * full_scale;
+        cur_Q = in_Q * drive * full_scale;
         double in_mag = sqrt(in_I * in_I + in_Q * in_Q);
         double out_mag = sqrt(cur_I * cur_I + cur_Q * cur_Q);
 
@@ -1995,13 +1970,12 @@ static void sunsdr_reassert_tx_state(void)
     }
 
     /*
-     * DO NOT re-send mode (0x17) here. The mode is already set via
-     * SunSDRSetMode when the user switches modes. Re-sending it during the
-     * MOX entry sequence re-initializes the radio's mode state and breaks
-     * AM TX specifically (the radio's AM modulator doesn't re-arm after the
-     * second 0x17 write, so no RF comes out regardless of the TX IQ stream).
-     * ExpertSDR3 never re-sends mode on MOX entry — confirmed in live AM MOX
-     * capture (only 0x18, 0x20, 0x18, 0x06 sequence).
+     * 0x17 is DRIVE (not mode). EESDR TUNE-entry order is
+     * 0x20 -> 0x17 -> 0x06 -> 0x09; voice-MOX-entry is
+     * 0x18 -> 0x20 -> 0x18 -> 0x06 (no 0x17 since drive was set earlier
+     * by the slider). We assert drive inside SunSDRSetPTT between the
+     * config block and 0x06 (see below) rather than here. Mode is set
+     * by the 0x20 config block, not by any dedicated opcode.
      */
 
     if (sdr.currentTxAntenna == 1 || sdr.currentTxAntenna == 2) {
@@ -2790,9 +2764,20 @@ void SunSDRSetFreq(int receiver, int freqHz, int isTx)
 
 void SunSDRSetMode(int mode)
 {
+    /* 0x17 is NOT mode — it's drive (see sunsdr.h). Previous code
+     * sent 0x17 with the mode code, which the radio interpreted as
+     * drive byte. Side effects observed:
+     *   - LSB mode 0xBC=188 -> accidental drive "54W" (SSB appeared to work)
+     *   - USB mode 0xF5=245 -> accidental drive "92W" (SSB full power)
+     *   - AM  mode 0x28=40  -> accidental drive "2.5W" (AM stuck at ~1.5-2W)
+     * Mode is set by the radio via the 0x20 config block (verified in
+     * EESDR mode-change captures 20260413_125056 USB->AM / 125127 AM->USB:
+     * only 0x18/0x20/0x18/0x17/0x18 is sent; the 0x17 byte varies with the
+     * CURRENT drive slider, not the mode). We keep the cached currentMode
+     * for our own gating (AM-specific wire IQ handling) but do not
+     * transmit a wire mode command here. */
     int sunsdr_mode = sunsdr_map_mode_code(mode);
-    sdr_logf("SunSDRSetMode(thetis=%d -> sunsdr=0x%02X)\n", mode, sunsdr_mode);
-    sunsdr_send_u32_cmd(SUNSDR_OP_MODE, (unsigned int)sunsdr_mode);
+    sdr_logf("SunSDRSetMode(thetis=%d -> sunsdr=0x%02X) [no wire send; 0x17 is drive]\n", mode, sunsdr_mode);
     sdr.currentMode = sunsdr_mode;
 }
 
@@ -2870,12 +2855,39 @@ void SunSDRLogTuneState(const char* label, int chk_tun, int chk_mox, int tuning,
         sdr.currentDriveRaw);
 }
 
+/* Compute the wire drive byte for a given 0..255 raw drive value.
+ * Thetis passes raw = slider_watts * 255 / 100 linearly. The radio's
+ * 0x17 drive command is sqrt-scaled so linear watts map to amplitude.
+ * Formula (derived 2026-04-14 from EESDR AM TUNE captures at
+ * 10/25/50/75/100W): byte = round(sqrt(watts/100) * 255).
+ * Since our raw already equals watts*2.55 (raw=255 <=> 100W), this
+ * simplifies to byte = round(sqrt(raw/255) * 255). */
+static int sunsdr_drive_raw_to_wire_byte(int raw)
+{
+    double r;
+    if (raw < 0) raw = 0;
+    if (raw > 255) raw = 255;
+    r = (double)raw / 255.0;
+    if (r < 0.0) r = 0.0;
+    r = sqrt(r);
+    int b = (int)(r * 255.0 + 0.5);
+    if (b < 0) b = 0;
+    if (b > 255) b = 255;
+    return b;
+}
+
 void SunSDRSetDrive(int raw)
 {
+    int wire_byte;
     if (raw < 0) raw = 0;
     if (raw > 255) raw = 255;
     sdr.currentDriveRaw = raw;
-    sdr_logf("SunSDRSetDrive(%d)\n", raw);
+    wire_byte = sunsdr_drive_raw_to_wire_byte(raw);
+    sdr_logf("SunSDRSetDrive(raw=%d ui_watts=%.1f wire_byte=0x%02X)\n",
+        raw, (double)raw * 100.0 / 255.0, wire_byte);
+    if (sdr.powered) {
+        sunsdr_send_u32_cmd(SUNSDR_OP_DRIVE, (unsigned int)wire_byte);
+    }
 }
 
 void SunSDRSetPA(int enabled)
@@ -3089,6 +3101,16 @@ void SunSDRSetPTT(int ptt)
         sdr.currentPTT = new_ptt;
         sunsdr_reassert_tx_state();
         sunsdr_send_config_block_state(0);
+        /* Assert drive (0x17) after the 0x20 config block and before 0x06,
+         * matching EESDR TUNE-entry order. Using the cached slider value;
+         * if raw_drive < 0 the user hasn't moved the slider since boot,
+         * skip the send and let the prior radio state stand. */
+        if (sdr.currentDriveRaw >= 0) {
+            int wire_byte = sunsdr_drive_raw_to_wire_byte(sdr.currentDriveRaw);
+            sdr_logf("TX_DRIVE_ASSERT raw=%d wire_byte=0x%02X\n",
+                sdr.currentDriveRaw, wire_byte);
+            sunsdr_send_u32_cmd(SUNSDR_OP_DRIVE, (unsigned int)wire_byte);
+        }
         sunsdr_send_u32_cmd(SUNSDR_OP_MOX_PTT, 1);
         sunsdr_dbg_mox_cmd_tick = GetTickCount64();
         sdr_logf("TX_ATTEMPT_0x06_SENT #%ld mode=%s seq=%u txPackets=%u delay_from_begin_ms=%llu\n",

@@ -38,7 +38,13 @@ of the License, or (at your option) any later version.
 #define SUNSDR_OP_STATE_REQ_A   0x0E
 #define SUNSDR_OP_STATE_REQ_B   0x10
 #define SUNSDR_OP_RX_ANT        0x15
-#define SUNSDR_OP_MODE          0x17
+/* 0x17 was MISIDENTIFIED as MODE. Actual semantics per AM drive
+ * calibration captures 2026-04-14: 0x17 payload byte sets radio TX
+ * drive level. byte = round(sqrt(watts/100) * 255). Observed bytes:
+ * 10W=0x50, 25W=0x80, 50W=0xB5, 75W=0xDD, 100W=0xFF. Radio mode is
+ * set via 0x20 config block, not 0x17. */
+#define SUNSDR_OP_DRIVE         0x17
+#define SUNSDR_OP_MODE          0x17  /* DEPRECATED alias - do not use */
 #define SUNSDR_OP_KEEPALIVE     0x18
 #define SUNSDR_OP_RX2_ENABLE    0x1B
 #define SUNSDR_OP_QUERY_FIXED   0x1A
