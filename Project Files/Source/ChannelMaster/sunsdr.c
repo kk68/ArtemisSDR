@@ -1543,37 +1543,28 @@ static void sunsdr_tx_outbound(int id, int nsamples, double* buff)
     full_scale = sunsdr_tx_full_scale_for_drive(drive);
 
     /*
-     * AM TX rebuild. The previous sqrt(2) compensation attempt barely
-     * helped (1.5 W -> 1.7 W at drive=1.0) because even with the boost
-     * our full_scale=2.3 curve clipped WDSP's AM modulation peaks at
-     * +/-1.0, and AM power is driven by the DC carrier offset of the
-     * envelope -- clipping the peaks actually LOWERS the effective
-     * carrier DC, starving the radio's PA.
+     * AM-mode amplitude boost. The previous "inverse WDSP formula +
+     * rebuild" approach (commit c623a7bc) made power WORSE because
+     * by the time I/Q reaches sunsdr_tx_outbound, WDSP has already
+     * routed it through wcpagc(ALC), uslew, siphon, iqc, cfir, and
+     * rsmpout downstream of ammod. Inverting the ammod formula on
+     * the chain output produces garbage audio samples.
      *
-     * Correct approach: extract the audio sample out of WDSP's AM
-     * output, then rebuild AM in EESDR's exact wire format with a
-     * drive-scaled carrier and safe modulation depth. WDSP AM formula
-     * (wdsp/ammod.c mode 0, c_level=0.4):
-     *     WDSP_I = WDSP_Q = (1/sqrt(2)) * (c_level + (1 - c_level) * s)
-     *                    = 0.7071 * (0.4 + 0.6 * s), for s in [-1, 1]
-     * Inverse: s = (WDSP_I / 0.7071 - 0.4) / 0.6
+     * Simpler approach: preserve whatever WDSP gives us (carrier +
+     * modulation already baked in at the right relative ratios from
+     * the full TX chain), just scale it more aggressively to reach
+     * EESDR's reference wire carrier amplitude.
      *
-     * EESDR reference (capture 20260413_174833): wire carrier I=Q=0.494
-     * at full-modulation voice, peak I=Q=0.781, no negative envelope.
-     * This matches a target wire format:
-     *     wire_I = wire_Q = 0.5 * drive + 0.3 * drive * s_clamped
-     * which keeps peak at 0.8 at drive=1.0 and max modulation (no clip),
-     * carrier at 0.5 (matching EESDR reference), zero negative envelope.
+     * Measurement (capture 20260413_184632 vs reference 20260413_174833):
+     *   Thetis wire carrier: 0.334   EESDR wire carrier: 0.494
+     *   Ratio: 0.494 / 0.334 = 1.48
      *
-     * LSB/USB/CW/DIGI etc. unchanged — they use the drive * full_scale
-     * curve which is correct for complex-baseband modes.
-     */
+     * Setting am_boost = 1.48 would slightly clip the modulation peaks
+     * (our pre-scale wire peak was 0.706, 0.706 * 1.48 = 1.046 clipped
+     * to 1.0) — a small 4.5 % envelope trim that is inaudible on AM
+     * but brings the carrier DC up to match EESDR. */
     int is_am = (sdr.currentMode == SUNSDR_MODE_AM);
-    const double wdsp_am_mult_inv = 1.4142135623730951;  /* 1 / (1/sqrt(2)) */
-    const double wdsp_am_c_level  = 0.4;
-    const double wdsp_am_a_level  = 0.6;  /* 1 - c_level */
-    const double am_wire_carrier  = 0.5;  /* EESDR reference target */
-    const double am_wire_mod      = 0.3;  /* keeps peak at 0.8 (no clip) */
+    const double am_boost = 1.48;  /* target ratio from capture comparison */
 
     /*
      * Downsampling resampler: Fin=192 kHz -> Fout=39.0625 kHz (ratio ~4.9152).
@@ -1591,15 +1582,12 @@ static void sunsdr_tx_outbound(int id, int nsamples, double* buff)
         double cur_I, cur_Q;
 
         if (is_am) {
-            /* Recover audio sample from WDSP's AM output (use I, which
-             * equals Q in mode 0). Then rebuild in EESDR wire format
-             * with carrier scaled by drive. */
-            double s = (in_I * wdsp_am_mult_inv - wdsp_am_c_level) / wdsp_am_a_level;
-            if (s >  1.0) s =  1.0;
-            if (s < -1.0) s = -1.0;
-            double am_out = (am_wire_carrier + am_wire_mod * s) * drive;
-            cur_I = am_out;
-            cur_Q = am_out;
+            /* Uniform scale by drive * full_scale * am_boost. The
+             * final clamping in sunsdr_quantize24 caps at ±1.0 which
+             * mildly trims modulation peaks; AM power is set by the
+             * DC carrier which rises as intended. */
+            cur_I = in_I * drive * full_scale * am_boost;
+            cur_Q = in_Q * drive * full_scale * am_boost;
         } else {
             cur_I = in_I * drive * full_scale;
             cur_Q = in_Q * drive * full_scale;
