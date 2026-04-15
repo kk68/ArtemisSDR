@@ -1543,6 +1543,27 @@ static void sunsdr_tx_outbound(int id, int nsamples, double* buff)
     full_scale = sunsdr_tx_full_scale_for_drive(drive);
 
     /*
+     * AM power compensation. WDSP's ammod (wdsp/ammod.c:39) hardcodes
+     * mult = 1/sqrt(2) for power normalization. With Thetis's default
+     * c_level=0.4 (radio.cs:2940), WDSP AM unmodulated carrier out is
+     *   I = Q = 0.7071 * 0.4 = 0.283
+     * Wire comparison vs EESDR (captures/annotated/20260413_174833 vs
+     * 20260413_184632): EESDR target carrier on wire is ~0.494, ours
+     * was ~0.334 -- about 32 % too low. At max drive our full_scale
+     * curve can't compensate because it's tuned for SSB which doesn't
+     * have the 1/sqrt(2) factor. Result: AM TX on-air came out at
+     * ~1.5 W instead of target ~100 W.
+     *
+     * Fix: apply an additional AM-only scalar that undoes WDSP's
+     * 1/sqrt(2) normalization. Applied to I AND Q equally (WDSP emits
+     * I=Q for AM, radio expects I=Q). For LSB/USB the factor is 1.0
+     * (no change). */
+    double am_boost = 1.0;
+    if (sdr.currentMode == SUNSDR_MODE_AM) {
+        am_boost = 1.4142135623730951;  /* sqrt(2) compensates WDSP's 1/sqrt(2) */
+    }
+
+    /*
      * Downsampling resampler: Fin=192 kHz -> Fout=39.0625 kHz (ratio ~4.9152).
      * Boxcar-average every ~4.9 input samples into one output, then emit when
      * phase crosses 1.0. The boxcar provides an anti-aliasing low-pass that
@@ -1557,8 +1578,8 @@ static void sunsdr_tx_outbound(int id, int nsamples, double* buff)
         double in_Q = buff[2 * i + 1];
 
 
-        double cur_I = in_I * drive * full_scale;
-        double cur_Q = in_Q * drive * full_scale;
+        double cur_I = in_I * drive * full_scale * am_boost;
+        double cur_Q = in_Q * drive * full_scale * am_boost;
         double in_mag = sqrt(in_I * in_I + in_Q * in_Q);
         double out_mag = sqrt(cur_I * cur_I + cur_Q * cur_Q);
 
