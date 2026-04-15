@@ -14877,6 +14877,10 @@ namespace Thetis
             // 2-Tone test is part of the PS-A IMD calibration flow, so
             // disable it too — on SunSDR it has no useful function without
             // the matched feedback-loop sampling path.
+            // DUP button (chkRX2SR) is also inert on SunSDR — the radio's
+            // MOX path shuts down the RX LO during TX, so duplex receive
+            // cannot be supported structurally. See memory
+            // project_dup_behavior_sunsdr.md for the analysis.
             if (HardwareSpecific.Model == HPSDRModel.SUNSDR2DX)
             {
                 if (chkFWCATUBypass.Checked)
@@ -14889,6 +14893,9 @@ namespace Thetis
                 if (chk2TONE.Checked)
                     chk2TONE.Checked = false;
                 chk2TONE.Enabled = false;
+                if (chkRX2SR.Checked)
+                    chkRX2SR.Checked = false;
+                chkRX2SR.Enabled = false;
             }
 
             cmaster.CMSetTXOutputLevelRun();
