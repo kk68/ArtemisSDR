@@ -1342,83 +1342,25 @@ static void sunsdr_dbg_note_tx_packet(unsigned int seq)
     sunsdr_dbg_last_fd_seq = seq;
     sunsdr_dbg_last_fd_tick = now;
 }
-/*
- * SunSDR2 DX needs extra native TX headroom at the top end, but a flat boost
- * overdrives low power settings badly. Apply a drive-dependent headroom curve:
- * near-unity at low drive, rising toward the top end where the radio still
- * needs help to reach full output.
- */
-static double sunsdr_tx_full_scale_for_drive(double drive)
+#define SUNSDR_TX_FIXED_DRIVE_BYTE 0xCE
+#define SUNSDR_TX_CAL_FULL_POWER_W 107.0
+
+static double sunsdr_requested_watts_from_raw(int raw)
 {
-    double t;
-
-    if (drive < 0.0) drive = 0.0;
-    if (drive > 1.0) drive = 1.0;
-
-    /*
-     * Compound curve to hit 100W target at drive=1.0 without over-driving
-     * the mid-range. A gentle 0.5*drive^2 keeps low/mid boost moderate; a
-     * sharp 0.5*drive^10 kicks in only near drive=1.0 to push through to
-     * full power (~2.0 fs at the peak). Drive^10 is ~0 below drive=0.8 so
-     * the lower range is unaffected.
-     *   drive=1.0 -> fs=2.00  (aggressive clip for max power on TUNE)
-     *   drive=0.92 -> fs=1.64 (slider 75W)
-     *   drive=0.83 -> fs=1.42 (slider 50W)
-     *   drive=0.59 -> fs=1.18 (slider 25W)
-     *   drive=0.37 -> fs=1.07 (slider 10W)
-     */
-    (void)t;
-    double d2 = drive * drive;
-    double d4 = d2 * d2;
-    double d10 = d4 * d4 * d2;
-    /*
-     * Bumped d^10 coefficient from 0.5 -> 0.8 to push slider 100W from 90W
-     * observed to ~100W+. The d^10 term is near-zero below drive ~0.8 so it
-     * doesn't affect mid/low range much.
-     */
-    return 1.0 + (0.5 * d2) + (0.8 * d10);
+    if (raw < 0) return 100.0;
+    if (raw > 255) raw = 255;
+    return (double)raw * 100.0 / 255.0;
 }
 
-static double sunsdr_tx_amp_correction_for_drive(double drive)
+static double sunsdr_tx_iq_gain_for_watts(double watts)
 {
-    static const double corr_w[] = {
-        0.0,
-        5.0,
-        10.0,
-        25.0,
-        50.0,
-        75.0,
-        100.0,
-    };
-    static const double corr_gain[] = {
-        1.00,
-        4.47,
-        3.94,
-        2.59,
-        1.03,
-        0.82,
-        1.00,
-    };
-    const int n = (int)(sizeof(corr_w) / sizeof(corr_w[0]));
-    double want_w;
-    int i;
+    double gain;
 
-    if (drive < 0.0) drive = 0.0;
-    if (drive > 1.0) drive = 1.0;
-
-    want_w = drive * 100.0;
-    if (want_w <= corr_w[0]) return corr_gain[0];
-    if (want_w >= corr_w[n - 1]) return corr_gain[n - 1];
-
-    for (i = 1; i < n; i++) {
-        if (want_w <= corr_w[i]) {
-            double span_w = corr_w[i] - corr_w[i - 1];
-            double t = (span_w > 0.0) ? (want_w - corr_w[i - 1]) / span_w : 0.0;
-            return corr_gain[i - 1] + t * (corr_gain[i] - corr_gain[i - 1]);
-        }
-    }
-
-    return corr_gain[n - 1];
+    if (watts <= 0.0) return 0.0;
+    gain = sqrt(watts / SUNSDR_TX_CAL_FULL_POWER_W);
+    if (gain < 0.0) gain = 0.0;
+    if (gain > 1.0) gain = 1.0;
+    return gain;
 }
 
 static struct sockaddr_in sunsdr_stream_dest(void)
@@ -1547,16 +1489,15 @@ static void sunsdr_tx_outbound(int id, int nsamples, double* buff)
 {
     int i;
     static unsigned int dbg_packets = 0;
-    double drive = 1.0;
     int raw_drive = -1;
+    double requested_watts = 100.0;
+    double iq_gain = 1.0;
     double pre_peak = 0.0;
     double post_peak = 0.0;
     double pre_sum_sq = 0.0;
     double post_sum_sq = 0.0;
     double pre_rms = 0.0;
     double post_rms = 0.0;
-    double full_scale = 1.0;
-    double amp_correction = 1.0;
 
     (void)id;
 
@@ -1574,27 +1515,20 @@ static void sunsdr_tx_outbound(int id, int nsamples, double* buff)
     }
 
     raw_drive = sdr.currentDriveRaw;
-
-    if (raw_drive >= 0) {
-        drive = (double)raw_drive / 255.0;
-        if (drive < 0.0) drive = 0.0;
-        if (drive > 1.0) drive = 1.0;
-    } else {
-        drive = 1.0;
-    }
-
-    full_scale = sunsdr_tx_full_scale_for_drive(drive);
-    amp_correction = sunsdr_tx_amp_correction_for_drive(drive);
+    requested_watts = sunsdr_requested_watts_from_raw(raw_drive);
+    iq_gain = sunsdr_tx_iq_gain_for_watts(requested_watts);
 
     /* The previous AM-specific "am_boost = 1.48" wire-IQ multiplier
      * was compensating for a misrouted drive command (we were sending
      * mode code as drive via 0x17, giving AM only ~2.5W equivalent
      * drive). Now that SunSDRSetDrive sends 0x17 with the proper
      * sqrt-scaled drive byte, the radio's RF stage does the
-     * amplification and the wire IQ does not need any mode-specific
-     * boost. Current calibration uses 0x17 for coarse PA-region selection,
-     * then a requested-watt IQ amplitude correction to cover ranges where
-     * adjacent 0x17 bytes jump too far or barely move at all. */
+     * amplification and the wire IQ does not need any mode-specific boost.
+     *
+     * Power calibration reset 2026-04-15: stop stacking drive, full_scale,
+     * and correction curves. The old product became non-monotonic between
+     * measured points. Use one smooth actuator instead: fixed 0x17 PA-region
+     * byte plus IQ amplitude = sqrt(requested_watts / measured_full_power). */
 
     /*
      * Downsampling resampler: Fin=192 kHz -> Fout=39.0625 kHz (ratio ~4.9152).
@@ -1611,8 +1545,8 @@ static void sunsdr_tx_outbound(int id, int nsamples, double* buff)
         double in_Q = buff[2 * i + 1];
         double cur_I, cur_Q;
 
-        cur_I = in_I * drive * full_scale * amp_correction;
-        cur_Q = in_Q * drive * full_scale * amp_correction;
+        cur_I = in_I * iq_gain;
+        cur_Q = in_Q * iq_gain;
         double in_mag = sqrt(in_I * in_I + in_Q * in_Q);
         double out_mag = sqrt(cur_I * cur_I + cur_Q * cur_Q);
 
@@ -1767,8 +1701,8 @@ static void sunsdr_tx_outbound(int id, int nsamples, double* buff)
             }
 
             dbg_packets = sdr.txAudioPackets;
-            sdr_logf("TX audio callback: nsamples=%d, pkts=%u, drive=%.3f (%d), fs=%.2f, ampCorr=%.2f, pre_peak=%.3f, pre_rms=%.3f, post_peak=%.3f, post_rms=%.3f, in_rate=%.0f Hz, out_rate=%.0f Hz, step=%.4f\n",
-                nsamples, sdr.txAudioPackets, drive, raw_drive, full_scale, amp_correction, pre_peak, pre_rms, post_peak, post_rms,
+            sdr_logf("TX audio callback: nsamples=%d, pkts=%u, reqW=%.1f rawDrive=%d iqGain=%.3f pre_peak=%.3f pre_rms=%.3f post_peak=%.3f post_rms=%.3f in_rate=%.0f Hz, out_rate=%.0f Hz, step=%.4f\n",
+                nsamples, sdr.txAudioPackets, requested_watts, raw_drive, iq_gain, pre_peak, pre_rms, post_peak, post_rms,
                 in_rate_hz, out_rate_hz, SUNSDR_TX_RESAMPLE_STEP);
 
             dbg_last_tick = now_tick;
@@ -2901,90 +2835,17 @@ void SunSDRLogTuneState(const char* label, int chk_tun, int chk_mox, int tuning,
         sdr.currentDriveRaw);
 }
 
-/* Compute the wire drive byte for a given 0..255 raw drive value.
- * Thetis passes raw = slider_watts * 255 / 100 linearly.
- *
- * Drive calibration (bench measurement, Kosta, 40m band, matched
- * antenna SWR 1.2, AM/LSB TUNE — power identical across modes).
- * Iteration 7 changes the strategy from a measured-output inverse LUT
- * to direct UI-target byte anchors. The measured-output inverse looked
- * reasonable on paper but behaved poorly on the radio: below 25 W, byte
- * changes barely moved measured power; around 75 W, small byte changes
- * moved power a lot. That made interpolation over measured watts keep
- * re-raising the 75 W point.
- *
- * Latest observed with iter-6 active:
- *   UI   5 W -> byte 145 -> actual   0.9 W
- *   UI  10 W -> byte 146 -> actual   2.5 W
- *   UI  25 W -> byte 148 -> actual  11.0 W
- *   UI  50 W -> byte 151 -> actual  51.0 W
- *   UI  75 W -> byte 156 -> actual  91.0 W
- *   UI 100 W -> byte 206 -> actual 105.0 W
- *
- * Next anchors:
- *   keep 100 W frozen at byte 206 (user says this point is good enough)
- *   keep 50 W essentially frozen near byte 151
- *   pull 75 W back to byte 154 (previously measured ~74 W)
- *   push low power more aggressively using the steep 0x92..0x97 region
- *
- * Iteration 8 adds host IQ amplitude correction because byte-only tuning
- * still cannot solve the low/mid curve. With byte anchors near 0x93..0x95,
- * 5/10/25 W still measured only 0.5/1.5/10 W, while 50 W was already good.
- * Apply a requested-watt amplitude correction: large lift below 25 W,
- * near no-op at 50 W, slight reduction at 75 W, and no correction at 100 W.
- *
- * Iteration 9 keeps the byte anchors fixed and adjusts only amplitude
- * correction from the iter-8 readings:
- *   5/10/25 W need more IQ amplitude; 50 W needs only a tiny bump;
- *   75 W needs less amplitude; 100 W remains unchanged.
- * TODO: per-band LUTs once other bands are measured. */
+/* Use a fixed radio drive byte and make IQ amplitude the only smooth
+ * power-control actuator. The previous multi-curve stack made in-between
+ * slider values non-monotonic. 0xCE produced ~105-107 W in the recent
+ * runs, so use it as the fixed PA-region selector for any nonzero power
+ * request and let IQ gain follow sqrt(requested_watts / 107 W). */
 static int sunsdr_drive_raw_to_wire_byte(int raw)
 {
-    /* Paired (requested_UI_W, wire_byte_to_send). Monotonic in requested W. */
-    static const double drive_target_w[] = {
-        0.0,
-        1.0,
-        5.0,
-        10.0,
-        25.0,
-        50.0,
-        75.0,
-        100.0,
-    };
-    static const int drive_target_b[] = {
-        0,
-        145,
-        147,
-        148,
-        149,
-        151,
-        154,
-        206,
-    };
-    const int n = (int)(sizeof(drive_target_w) / sizeof(drive_target_w[0]));
-    double want_w;
-    int i;
-
     if (raw < 0) raw = 0;
     if (raw > 255) raw = 255;
-
-    /* UI watts from linear raw: raw=255 <=> 100 W. */
-    want_w = (double)raw * 100.0 / 255.0;
-    if (want_w <= 0.0) return 0;
-    if (want_w >= drive_target_w[n - 1]) return drive_target_b[n - 1];
-
-    for (i = 1; i < n; i++) {
-        if (want_w <= drive_target_w[i]) {
-            double span_w = drive_target_w[i] - drive_target_w[i - 1];
-            int span_b = drive_target_b[i] - drive_target_b[i - 1];
-            double t = (span_w > 0.0) ? (want_w - drive_target_w[i - 1]) / span_w : 0.0;
-            int b = (int)(drive_target_b[i - 1] + t * (double)span_b + 0.5);
-            if (b < 0) b = 0;
-            if (b > 255) b = 255;
-            return b;
-        }
-    }
-    return drive_target_b[n - 1];
+    if (sunsdr_requested_watts_from_raw(raw) <= 0.0) return 0;
+    return SUNSDR_TX_FIXED_DRIVE_BYTE;
 }
 
 void SunSDRSetDrive(int raw)
@@ -3070,12 +2931,8 @@ void SunSDRSetPTT(int ptt)
     int new_ptt = ptt ? 1 : 0;
     int attempt_id = 0;
     int raw_drive = sdr.currentDriveRaw;
-    double drive = raw_drive >= 0 ? (double)raw_drive / 255.0 : 1.0;
-    double full_scale;
-
-    if (drive < 0.0) drive = 0.0;
-    if (drive > 1.0) drive = 1.0;
-    full_scale = sunsdr_tx_full_scale_for_drive(drive);
+    double requested_watts = sunsdr_requested_watts_from_raw(raw_drive);
+    double iq_gain = sunsdr_tx_iq_gain_for_watts(requested_watts);
 
     if (!sdr.powered)
     {
@@ -3165,7 +3022,7 @@ void SunSDRSetPTT(int ptt)
         iq_dump_flush_to_disk();
     }
 
-    sdr_logf("SunSDRSetPTT(%d) currentTune=%d rx1=%d rx2=%d tx=%d rxAnt=%d txAnt=%d pa=%d seq=%u txPhase=%.4f txAccum=%d drive=%.3f rawDrive=%d fs=%.3f attempt=%ld\n",
+    sdr_logf("SunSDRSetPTT(%d) currentTune=%d rx1=%d rx2=%d tx=%d rxAnt=%d txAnt=%d pa=%d seq=%u txPhase=%.4f txAccum=%d reqW=%.1f rawDrive=%d iqGain=%.3f attempt=%ld\n",
         new_ptt,
         sdr.currentTune,
         sdr.currentRx1FreqHz,
@@ -3177,13 +3034,13 @@ void SunSDRSetPTT(int ptt)
         sdr.txSeq,
         sdr.txPhase,
         sdr.txAccumCount,
-        drive,
+        requested_watts,
         raw_drive,
-        full_scale,
+        iq_gain,
         sunsdr_dbg_tx_attempt_id);
 
     if (new_ptt) {
-        sdr_logf("TX_ATTEMPT_BEGIN #%ld mode=%s ptt=%d tune=%d seq=%u txPhase=%.4f txAccum=%d drive=%.3f rawDrive=%d fs=%.3f\n",
+        sdr_logf("TX_ATTEMPT_BEGIN #%ld mode=%s ptt=%d tune=%d seq=%u txPhase=%.4f txAccum=%d reqW=%.1f rawDrive=%d iqGain=%.3f\n",
             sunsdr_dbg_tx_attempt_id,
             sunsdr_tx_mode_label(sdr.currentTune),
             new_ptt,
@@ -3191,9 +3048,9 @@ void SunSDRSetPTT(int ptt)
             sdr.txSeq,
             sdr.txPhase,
             sdr.txAccumCount,
-            drive,
+            requested_watts,
             raw_drive,
-            full_scale);
+            iq_gain);
         sunsdr_dbg_log_audio_diags("BEGIN");
         /*
          * TUNE and MOX follow the same wire path: re-assert current mode
