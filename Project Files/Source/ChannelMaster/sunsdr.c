@@ -2858,44 +2858,51 @@ void SunSDRLogTuneState(const char* label, int chk_tun, int chk_mox, int tuning,
 /* Compute the wire drive byte for a given 0..255 raw drive value.
  * Thetis passes raw = slider_watts * 255 / 100 linearly.
  *
- * Drive calibration (bench measurement, Kosta 2026-04-14, single-band
- * TUNE on dummy load). The radio's internal drive->RF curve is not
- * pure sqrt; it is steeper in the mid range and compresses at the
- * top. Raw bench data (byte sent with old sqrt formula -> actual W):
- *   byte  57 ->   0.5 W   (UI  5 W)
- *   byte  80 ->   3.0 W   (UI 10 W)
- *   byte  99 ->   7.4 W   (UI 15 W)
- *   byte 128 ->  22.0 W   (UI 25 W)
- *   byte 181 ->  85.0 W   (UI 50 W)
- *   byte 221 -> 111.0 W   (UI 75 W)
- *   byte 255 -> 115.0 W   (UI 100 W)
+ * Drive calibration (bench measurement, Kosta). Iteration 2
+ * (2026-04-14 late, taken with the iteration-1 LUT active so each
+ * data point is actual_W at the byte the iteration-1 LUT produced
+ * for that slider value):
  *
- * We invert this into a (UI-watts -> wire-byte) LUT and linearly
- * interpolate so a slider setting of N watts produces ~N watts actual
- * output. The radio's maximum achievable output is ~115 W at byte
- * 0xFF; slider values above 100 are clamped there. TODO: extend to
- * per-band LUTs once we measure additional bands. */
+ *   UI  5 W -> byte sent  89 -> actual  0.5 W
+ *   UI 10 W -> byte sent 104 -> actual  2.0 W
+ *   UI 15 W -> byte sent 114 -> actual  4.7 W
+ *   UI 25 W -> byte sent 130 -> actual 12.0 W
+ *   UI 50 W -> byte sent 152 -> actual 58.0 W
+ *   UI 75 W -> byte sent 173 -> actual 89.0 W
+ *   UI 100 W -> byte sent 204 -> actual 95.0 W
+ *   UI 100 W -> byte 255 -> actual 115 W (iteration-0 carry-over, retained
+ *               as the upper asymptote; radio hard caps there)
+ *
+ * Iteration-1 and iteration-2 data do NOT form a single monotonic
+ * curve (iter-1 had byte 80 -> 3 W, iter-2 has byte 104 -> 2 W),
+ * suggesting a band / antenna / mode / profile variable changed
+ * between runs. This LUT uses iteration-2 as ground truth because
+ * it is the most recent and was captured under the production path.
+ * TODO: pin band and add per-band LUTs; investigate why the two runs
+ * disagreed so we can lock the setup variables. */
 static int sunsdr_drive_raw_to_wire_byte(int raw)
 {
     /* Paired (measured_actual_W, wire_byte_sent). Monotonic in W. */
     static const double drive_cal_w[] = {
-        0.0,    /* byte 0 -> 0 W assumed */
+        0.0,
         0.5,
-        3.0,
-        7.4,
-        22.0,
-        85.0,
-        111.0,
+        2.0,
+        4.7,
+        12.0,
+        58.0,
+        89.0,
+        95.0,
         115.0,
     };
     static const int drive_cal_b[] = {
         0,
-        57,
-        80,
-        99,
-        128,
-        181,
-        221,
+        89,
+        104,
+        114,
+        130,
+        152,
+        173,
+        204,
         255,
     };
     const int n = (int)(sizeof(drive_cal_w) / sizeof(drive_cal_w[0]));
