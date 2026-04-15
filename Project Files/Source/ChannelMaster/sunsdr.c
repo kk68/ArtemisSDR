@@ -1388,7 +1388,6 @@ static void sunsdr_dbg_note_tx_packet(unsigned int seq)
     sunsdr_dbg_last_fd_tick = now;
 }
 #define SUNSDR_TX_FIXED_DRIVE_BYTE 0xCE
-#define SUNSDR_TX_CAL_HIGH_GAIN 2.30
 
 static double sunsdr_requested_watts_from_raw(int raw)
 {
@@ -1397,31 +1396,46 @@ static double sunsdr_requested_watts_from_raw(int raw)
     return (double)raw * 100.0 / 255.0;
 }
 
+/*
+ * Single-actuator power: 0x17 is held at a fixed PA-region byte
+ * (0xCE) and wire-IQ amplitude is the smooth dial. This LUT maps a
+ * requested output power (watts) to the iqGain that produces it.
+ *
+ * Built by inverting the measured forward response under this
+ * architecture (40m band, matched antenna, AM/LSB TUNE). The
+ * previous inverse LUT was wrong because it reused gain anchors
+ * from an iqGain-clamped-to-1.0 regime:
+ *
+ *   Forward measurement (gain used -> actual W observed):
+ *     gain 0.1457 -> 11 W
+ *     gain 0.2447 -> 33 W
+ *     gain 0.4324 -> 72 W
+ *     gain 0.6114 -> 97 W
+ *     gain 0.8700 -> 105 W
+ *     gain >= 1.0 -> 107 W (radio PA / wire saturation asymptote)
+ *
+ * Above 105 W the curve is essentially flat, so we clamp the gain
+ * at 0.87 for watts >= 105. Between anchors we linearly
+ * interpolate. For target = 100 W we land at gain ~0.708 (well
+ * inside the last rising segment, 97->105 W).
+ */
 static double sunsdr_tx_iq_gain_for_watts(double watts)
 {
     static const double cal_w[] = {
         0.0,
-        2.5,
-        8.6,
-        13.0,
-        20.0,
-        25.0,
-        30.0,
-        36.0,
-        41.0,
-        107.0,
+        11.0,
+        33.0,
+        72.0,
+        97.0,
+        105.0,
     };
     static const double cal_gain[] = {
         0.0,
-        0.0967,
-        0.2162,
-        0.3058,
+        0.1457,
+        0.2447,
         0.4324,
-        0.5295,
         0.6114,
-        0.6838,
-        0.9166,
-        SUNSDR_TX_CAL_HIGH_GAIN,
+        0.8700,
     };
     const int n = (int)(sizeof(cal_w) / sizeof(cal_w[0]));
     int i;
