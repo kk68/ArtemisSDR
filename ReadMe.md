@@ -4,7 +4,7 @@ Native SunSDR2 DX integration for the [Thetis](https://github.com/ramdor/Thetis)
 
 New-user setup guide:
 
-- [START_HERE_SUNSDR2DX.md](/mnt/c/Users/kosta/ham/SUNSDR/Thetis/START_HERE_SUNSDR2DX.md)
+- [START_HERE_SUNSDR2DX.md](START_HERE_SUNSDR2DX.md)
 
 ## Status: Core RX/TX/PA Working — 40m TX Power Calibrated
 
