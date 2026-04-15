@@ -2858,51 +2858,47 @@ void SunSDRLogTuneState(const char* label, int chk_tun, int chk_mox, int tuning,
 /* Compute the wire drive byte for a given 0..255 raw drive value.
  * Thetis passes raw = slider_watts * 255 / 100 linearly.
  *
- * Drive calibration (bench measurement, Kosta). Iteration 2
- * (2026-04-14 late, taken with the iteration-1 LUT active so each
- * data point is actual_W at the byte the iteration-1 LUT produced
- * for that slider value):
+ * Drive calibration (bench measurement, Kosta, 40m band, matched
+ * antenna SWR 1.2, AM/LSB TUNE — power identical across modes).
+ * Iteration 3 data (taken with iteration-2 LUT active, so each row
+ * is the actual watts observed at the byte iter-2 produced for that
+ * slider value):
  *
- *   UI  5 W -> byte sent  89 -> actual  0.5 W
- *   UI 10 W -> byte sent 104 -> actual  2.0 W
- *   UI 15 W -> byte sent 114 -> actual  4.7 W
- *   UI 25 W -> byte sent 130 -> actual 12.0 W
- *   UI 50 W -> byte sent 152 -> actual 58.0 W
- *   UI 75 W -> byte sent 173 -> actual 89.0 W
- *   UI 100 W -> byte sent 204 -> actual 95.0 W
- *   UI 100 W -> byte 255 -> actual 115 W (iteration-0 carry-over, retained
+ *   UI   5 W -> byte 115 -> actual   0.2 W
+ *   UI  10 W -> byte 126 -> actual   0.9 W
+ *   UI  25 W -> byte 136 -> actual  12.0 W
+ *   UI  50 W -> byte 148 -> actual  46.0 W
+ *   UI  75 W -> byte 164 -> actual  92.0 W
+ *   UI 100 W -> byte 217 -> actual 109.0 W
+ *   UI 100 W -> byte 255 -> actual ~115 W (iter-1 carry-over, retained
  *               as the upper asymptote; radio hard caps there)
  *
- * Iteration-1 and iteration-2 data do NOT form a single monotonic
- * curve (iter-1 had byte 80 -> 3 W, iter-2 has byte 104 -> 2 W),
- * suggesting a band / antenna / mode / profile variable changed
- * between runs. This LUT uses iteration-2 as ground truth because
- * it is the most recent and was captured under the production path.
- * TODO: pin band and add per-band LUTs; investigate why the two runs
- * disagreed so we can lock the setup variables. */
+ * Iter-3 data is internally monotonic. The radio's response is
+ * extremely steep in the 12-46 W region (~0.35 byte per watt), so
+ * LUT precision matters most there. Iter-1 / iter-2 disagreement
+ * tracked in the git history; pinning band + antenna resolved it.
+ * TODO: per-band LUTs once other bands are measured. */
 static int sunsdr_drive_raw_to_wire_byte(int raw)
 {
     /* Paired (measured_actual_W, wire_byte_sent). Monotonic in W. */
     static const double drive_cal_w[] = {
         0.0,
-        0.5,
-        2.0,
-        4.7,
+        0.2,
+        0.9,
         12.0,
-        58.0,
-        89.0,
-        95.0,
+        46.0,
+        92.0,
+        109.0,
         115.0,
     };
     static const int drive_cal_b[] = {
         0,
-        89,
-        104,
-        114,
-        130,
-        152,
-        173,
-        204,
+        115,
+        126,
+        136,
+        148,
+        164,
+        217,
         255,
     };
     const int n = (int)(sizeof(drive_cal_w) / sizeof(drive_cal_w[0]));
