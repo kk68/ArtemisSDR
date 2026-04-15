@@ -23415,24 +23415,25 @@ namespace Thetis
              * for <band>, and sets the PA Gain value below 99 so this
              * default table is no longer the fallback.
              *
-             * Iter-11/12 (40m, post-iter-10 refinement). Correct
-             * sweep mapping was UI 5/10/20/30/40/50/60/70/80/90/100
-             * (15 was skipped, not 100 as mis-read earlier). Proper
-             * reading of those measurements:
+             * Iter-13 (40m, final tune). Full 12-point sweep after
+             * the corrected iter-11/12 table landed:
              *
-             *   UI  5 ->  4   W    UI  60 ->  60   W  (spot on)
-             *   UI 10 ->  9.5 W    UI  70 ->  71   W  (spot on)
-             *   UI 20 -> 18.2 W    UI  80 ->  80   W  (spot on)
-             *   UI 30 -> 28.5 W    UI  90 ->  96   W
-             *   UI 40 -> 37.5 W    UI 100 ->  96   W
-             *   UI 50 -> 47.6 W
+             *   UI  5 ->  4   W (hardware low-drive dead-zone)
+             *   UI 10 ->  9.8 W   UI  60 ->  60 W  (exact)
+             *   UI 15 -> 16.3 W   UI  70 ->  70 W  (exact)
+             *   UI 20 -> 21   W   UI  80 ->  80 W  (exact)
+             *   UI 30 -> 30   W   UI  90 -> 91 W
+             *   UI 40 -> 40   W   UI 100 -> 97 W
+             *   UI 50 -> 50   W
              *
-             * Iter-10 commit was nearly a bulls-eye; only tiny tweaks
-             * needed. Each anchor's 10*log10(actual/target) delta
-             * folded into its adjust[i]. Mid-range residual is ~5 %
-             * undershoot; high range slight overshoot at UI 90.
+             * 30-80 W range is spot on. UI 15/20 slightly hot
+             * (+0.2-0.4 dB). Nudge adjust[1] from -0.34 to -0.55 to
+             * pull UI 20 down to target; interpolation improves UI 15
+             * in the same direction. Everything else kept; UI 100
+             * residual (-0.13 dB) is within measurement noise and
+             * radio PA ceiling.
              */
-            float[] adjust = new float[] { 0.13f, -0.34f, -0.84f, -1.05f, -1.13f, -1.35f, -1.40f, -1.41f, -1.26f };
+            float[] adjust = new float[] { 0.13f, -0.55f, -0.84f, -1.05f, -1.13f, -1.35f, -1.40f, -1.41f, -1.26f };
 
             int nLIndex = nDriveValue / 10;
             if (nDriveValue % 10 == 0)
