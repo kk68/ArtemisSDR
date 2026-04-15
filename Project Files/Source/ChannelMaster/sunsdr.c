@@ -1343,7 +1343,7 @@ static void sunsdr_dbg_note_tx_packet(unsigned int seq)
     sunsdr_dbg_last_fd_tick = now;
 }
 #define SUNSDR_TX_FIXED_DRIVE_BYTE 0xCE
-#define SUNSDR_TX_CAL_FULL_POWER_W 107.0
+#define SUNSDR_TX_CAL_HIGH_GAIN 2.30
 
 static double sunsdr_requested_watts_from_raw(int raw)
 {
@@ -1354,13 +1354,45 @@ static double sunsdr_requested_watts_from_raw(int raw)
 
 static double sunsdr_tx_iq_gain_for_watts(double watts)
 {
-    double gain;
+    static const double cal_w[] = {
+        0.0,
+        2.5,
+        8.6,
+        13.0,
+        20.0,
+        25.0,
+        30.0,
+        36.0,
+        41.0,
+        107.0,
+    };
+    static const double cal_gain[] = {
+        0.0,
+        0.0967,
+        0.2162,
+        0.3058,
+        0.4324,
+        0.5295,
+        0.6114,
+        0.6838,
+        0.9166,
+        SUNSDR_TX_CAL_HIGH_GAIN,
+    };
+    const int n = (int)(sizeof(cal_w) / sizeof(cal_w[0]));
+    int i;
 
     if (watts <= 0.0) return 0.0;
-    gain = sqrt(watts / SUNSDR_TX_CAL_FULL_POWER_W);
-    if (gain < 0.0) gain = 0.0;
-    if (gain > 1.0) gain = 1.0;
-    return gain;
+    if (watts >= cal_w[n - 1]) return cal_gain[n - 1];
+
+    for (i = 1; i < n; i++) {
+        if (watts <= cal_w[i]) {
+            double span_w = cal_w[i] - cal_w[i - 1];
+            double t = (span_w > 0.0) ? (watts - cal_w[i - 1]) / span_w : 0.0;
+            return cal_gain[i - 1] + t * (cal_gain[i] - cal_gain[i - 1]);
+        }
+    }
+
+    return cal_gain[n - 1];
 }
 
 static struct sockaddr_in sunsdr_stream_dest(void)
@@ -1527,8 +1559,8 @@ static void sunsdr_tx_outbound(int id, int nsamples, double* buff)
      *
      * Power calibration reset 2026-04-15: stop stacking drive, full_scale,
      * and correction curves. The old product became non-monotonic between
-     * measured points. Use one smooth actuator instead: fixed 0x17 PA-region
-     * byte plus IQ amplitude = sqrt(requested_watts / measured_full_power). */
+     * measured points. Use one actuator instead: fixed 0x17 PA-region byte
+     * plus a monotonic empirical inverse for effective IQ gain. */
 
     /*
      * Downsampling resampler: Fin=192 kHz -> Fout=39.0625 kHz (ratio ~4.9152).
@@ -2837,9 +2869,9 @@ void SunSDRLogTuneState(const char* label, int chk_tun, int chk_mox, int tuning,
 
 /* Use a fixed radio drive byte and make IQ amplitude the only smooth
  * power-control actuator. The previous multi-curve stack made in-between
- * slider values non-monotonic. 0xCE produced ~105-107 W in the recent
- * runs, so use it as the fixed PA-region selector for any nonzero power
- * request and let IQ gain follow sqrt(requested_watts / 107 W). */
+ * slider values non-monotonic. 0xCE produced ~105-107 W in recent runs,
+ * so use it as the fixed PA-region selector for any nonzero request.
+ * sunsdr_tx_iq_gain_for_watts() owns the smooth power curve. */
 static int sunsdr_drive_raw_to_wire_byte(int raw)
 {
     if (raw < 0) raw = 0;
