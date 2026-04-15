@@ -47103,7 +47103,18 @@ namespace Thetis
             else
             {
                 if (chkTUN.Checked)
-                    radio.GetDSPTX(0).TXPostGenRun = 1;
+                {
+                    // Keep PostGen off for SunSDR AM/FM TUNE — pure carrier
+                    // at dial, no sidebands. (Same reasoning as chkTUN
+                    // engagement handler above.)
+                    bool sunsdr_am_fm_tune =
+                        NetworkIO.CurrentRadioProtocol == RadioProtocol.SUNSDR &&
+                        (Audio.TXDSPMode == DSPMode.AM ||
+                         Audio.TXDSPMode == DSPMode.SAM ||
+                         Audio.TXDSPMode == DSPMode.DSB ||
+                         Audio.TXDSPMode == DSPMode.FM);
+                    radio.GetDSPTX(0).TXPostGenRun = sunsdr_am_fm_tune ? 0 : 1;
+                }
                 Audio.RadioVolume = (double)Math.Min((target_volts / 0.8), 1.0);
             }
 
