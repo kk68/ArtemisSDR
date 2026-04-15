@@ -2860,48 +2860,51 @@ void SunSDRLogTuneState(const char* label, int chk_tun, int chk_mox, int tuning,
  *
  * Drive calibration (bench measurement, Kosta, 40m band, matched
  * antenna SWR 1.2, AM/LSB TUNE — power identical across modes).
- * Iteration 6 data (taken with iteration-5 LUT active, so each row
- * is the actual watts observed at the byte iter-5 produced for that
- * slider value):
+ * Iteration 7 changes the strategy from a measured-output inverse LUT
+ * to direct UI-target byte anchors. The measured-output inverse looked
+ * reasonable on paper but behaved poorly on the radio: below 25 W, byte
+ * changes barely moved measured power; around 75 W, small byte changes
+ * moved power a lot. That made interpolation over measured watts keep
+ * re-raising the 75 W point.
  *
- *   UI   5 W -> byte 141 -> actual   0.7 W
- *   UI  10 W -> byte 144 -> actual   2.5 W
- *   UI  25 W -> byte 146 -> actual  10.0 W
- *   UI  50 W -> byte 150 -> actual  41.0 W
- *   UI  75 W -> byte 154 -> actual  74.0 W
- *   UI 100 W -> byte 189 -> actual  95.0 W
- *   UI 100 W -> byte 255 -> actual ~115 W (iter-1 carry-over, retained
- *               as the upper asymptote; radio hard caps there)
+ * Latest observed with iter-6 active:
+ *   UI   5 W -> byte 145 -> actual   0.9 W
+ *   UI  10 W -> byte 146 -> actual   2.5 W
+ *   UI  25 W -> byte 148 -> actual  11.0 W
+ *   UI  50 W -> byte 151 -> actual  51.0 W
+ *   UI  75 W -> byte 156 -> actual  91.0 W
+ *   UI 100 W -> byte 206 -> actual 105.0 W
  *
- * Iter-6 data is internally monotonic. The radio's response is still
- * steep and non-linear below 50 W, so LUT precision matters most there.
- * Iter-1 / iter-2 disagreement tracked in the git history; pinning band
- * + antenna resolved it.
+ * Next anchors:
+ *   keep 100 W frozen at byte 206 (user says this point is good enough)
+ *   keep 50 W essentially frozen near byte 151
+ *   pull 75 W back to byte 154 (previously measured ~74 W)
+ *   push low power more aggressively using the steep 0x92..0x97 region
  * TODO: per-band LUTs once other bands are measured. */
 static int sunsdr_drive_raw_to_wire_byte(int raw)
 {
-    /* Paired (measured_actual_W, wire_byte_sent). Monotonic in W. */
-    static const double drive_cal_w[] = {
+    /* Paired (requested_UI_W, wire_byte_to_send). Monotonic in requested W. */
+    static const double drive_target_w[] = {
         0.0,
-        0.7,
-        2.5,
+        1.0,
+        5.0,
         10.0,
-        41.0,
-        74.0,
-        95.0,
-        115.0,
+        25.0,
+        50.0,
+        75.0,
+        100.0,
     };
-    static const int drive_cal_b[] = {
+    static const int drive_target_b[] = {
         0,
-        141,
-        144,
-        146,
-        150,
+        145,
+        147,
+        148,
+        149,
+        151,
         154,
-        189,
-        255,
+        206,
     };
-    const int n = (int)(sizeof(drive_cal_w) / sizeof(drive_cal_w[0]));
+    const int n = (int)(sizeof(drive_target_w) / sizeof(drive_target_w[0]));
     double want_w;
     int i;
 
@@ -2911,20 +2914,20 @@ static int sunsdr_drive_raw_to_wire_byte(int raw)
     /* UI watts from linear raw: raw=255 <=> 100 W. */
     want_w = (double)raw * 100.0 / 255.0;
     if (want_w <= 0.0) return 0;
-    if (want_w >= drive_cal_w[n - 1]) return drive_cal_b[n - 1];
+    if (want_w >= drive_target_w[n - 1]) return drive_target_b[n - 1];
 
     for (i = 1; i < n; i++) {
-        if (want_w <= drive_cal_w[i]) {
-            double span_w = drive_cal_w[i] - drive_cal_w[i - 1];
-            int span_b = drive_cal_b[i] - drive_cal_b[i - 1];
-            double t = (span_w > 0.0) ? (want_w - drive_cal_w[i - 1]) / span_w : 0.0;
-            int b = (int)(drive_cal_b[i - 1] + t * (double)span_b + 0.5);
+        if (want_w <= drive_target_w[i]) {
+            double span_w = drive_target_w[i] - drive_target_w[i - 1];
+            int span_b = drive_target_b[i] - drive_target_b[i - 1];
+            double t = (span_w > 0.0) ? (want_w - drive_target_w[i - 1]) / span_w : 0.0;
+            int b = (int)(drive_target_b[i - 1] + t * (double)span_b + 0.5);
             if (b < 0) b = 0;
             if (b > 255) b = 255;
             return b;
         }
     }
-    return drive_cal_b[n - 1];
+    return drive_target_b[n - 1];
 }
 
 void SunSDRSetDrive(int raw)
