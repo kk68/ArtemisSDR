@@ -55,15 +55,12 @@ static void sunsdr_send_tx_packet(const double* iq);
 static struct sockaddr_in sunsdr_stream_dest(void);
 static void sunsdr_dbg_note_tx_packet(unsigned int seq);
 
-/* Logging temporarily re-enabled to diagnose the iter-7 -> iter-8
- * power-ceiling drop (107 W -> 19.8 W max) that cannot be explained
- * by the iqGain LUT change alone. TX_ATTEMPT_END records iq_gain,
- * pre_peak (WDSP output amplitude before our scaling), post_peak
- * (wire IQ amplitude after *iq_gain), plus RMS. One TUNE attempt
- * at UI 100 is enough to tell us whether WDSP's output shrank or
- * the radio's drive-to-RF curve shifted. Flip this back to 0 once
- * calibration is locked. */
-#define SUNSDR_DEBUG_LOG_ENABLED 1
+/* sunsdr_debug.log writer (sdr_logf path) and per-attempt IQ dumps.
+ * Both disabled in production. Flip to 1 only when actively
+ * diagnosing the TX/RX path; sunsdr.c will write to
+ * <Thetis_exe_dir>/sunsdr_debug.log when SUNSDR_DEBUG_LOG_ENABLED=1
+ * and append per-attempt IQ snapshots when SUNSDR_IQ_DUMP_ENABLED=1. */
+#define SUNSDR_DEBUG_LOG_ENABLED 0
 #define SUNSDR_IQ_DUMP_ENABLED 0
 
 /* Global SunSDR session state — moved above the iq_dump / tx_pace

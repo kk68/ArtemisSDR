@@ -29151,13 +29151,6 @@ namespace Thetis
                     NetworkIO.nativeSunSDRSetMode((int)Audio.TXDSPMode);
                     if (!_tuning || !chkTUN.Checked)
                         NetworkIO.nativeSunSDRSetTune(0);
-                    // Log the current cached AM carrier level so sunsdr_debug.log
-                    // captures the value in effect for this TX (the TXAMCarrierLevel
-                    // setter only fires on value change / SyncAll-force, which
-                    // happens before the native log file is open at startup).
-                    NetworkIO.nativeSunSDRLogTrace(
-                        string.Format("MOX_ENTRY TXAMCarrierLevel_cached={0:F4} mode={1}",
-                            radio.GetDSPTX(0).TXAMCarrierLevel, Audio.TXDSPMode));
                     NetworkIO.nativeSunSDRSetPTT(1);
                 }
 

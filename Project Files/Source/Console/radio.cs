@@ -2951,9 +2951,6 @@ namespace Thetis
 					{
                         WDSP.SetTXAAMCarrierLevel(WDSP.id(thread, 0), value);
 						tx_am_carrier_level_dsp = value;
-						if (NetworkIO.CurrentRadioProtocol == RadioProtocol.SUNSDR)
-							NetworkIO.nativeSunSDRLogTrace(
-								string.Format("TXAMCarrierLevel applied: c_level={0:F4} (UI -> WDSP)", value));
 					}
 				}
 			}

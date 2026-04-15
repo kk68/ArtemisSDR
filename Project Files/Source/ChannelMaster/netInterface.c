@@ -25,11 +25,11 @@
 #include "obbuffs.h"
 
 static void sunsdr_trace(const char* msg) {
-	FILE* f = fopen("C:\\Users\\kosta\\ham\\SUNSDR\\sunsdr_debug.log", "a");
-	if (f) { SYSTEMTIME st; GetLocalTime(&st);
-		fprintf(f, "[%02d:%02d:%02d.%03d] TRACE: %s\n", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, msg);
-		fclose(f);
-	}
+	/* Disabled. Was an early-bring-up trace writer to a hard-coded
+	 * absolute path outside the Thetis binary folder. Calibration is
+	 * locked; production builds should not write logs unless the
+	 * primary sdr_logf path in sunsdr.c is enabled. */
+	(void)msg;
 }
 
 #define MDECAY 0.99f;
