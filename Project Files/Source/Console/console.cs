@@ -14885,6 +14885,7 @@ namespace Thetis
             {
                 if (chkFWCATUBypass.Checked)
                     chkFWCATUBypass.Checked = false;
+                chkFWCATUBypass.Enabled = false;
                 if (psform != null)
                 {
                     psform.AutoCalEnabled = false;
