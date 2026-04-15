@@ -1406,60 +1406,86 @@ static double sunsdr_requested_watts_from_raw(int raw)
 
 /*
  * Single-actuator power: 0x17 is held at a fixed PA-region byte
- * (0xCE) and wire-IQ amplitude is the smooth dial. This LUT maps a
- * requested output power (watts) to the iqGain that produces it.
+ * (0xCE) and wire-IQ amplitude is the smooth dial.
  *
- * Built by inverting the measured forward response under this
- * architecture (40m band, matched antenna, AM/LSB TUNE). The
- * previous inverse LUT was wrong because it reused gain anchors
- * from an iqGain-clamped-to-1.0 regime:
+ * Key discovery from the iter-8 diagnostic log (13:47:06 TX_ATTEMPT_END):
  *
- *   Forward measurement (gain used -> actual W observed):
- *     gain 0.1457 -> 11 W
- *     gain 0.2447 -> 33 W
- *     gain 0.4324 -> 72 W
- *     gain 0.6114 -> 97 W
- *     gain 0.8700 -> 105 W
- *     gain >= 1.0 -> 107 W (radio PA / wire saturation asymptote)
+ *   WDSP TX TUNE output has peak amplitude ~0.857 (pre_rms 0.606 -> peak
+ *   pre_rms * sqrt(2) for a tone). Our iq_gain multiplies that peak.
+ *   The wire IQ sample is then quantized to 24-bit and clamped to +-1.0.
+ *   So iq_gain * 0.857 >= 1.0 (i.e. iq_gain >= 1.167) produces a CLIPPED
+ *   wire envelope pegged at 1.0; iq_gain below that leaves headroom.
  *
- * Above 105 W the curve is essentially flat, so we clamp the gain
- * at 0.87 for watts >= 105. Between anchors we linearly
- * interpolate. For target = 100 W we land at gain ~0.708 (well
- * inside the last rising segment, 97->105 W).
+ * Radio RF response vs wire peak amplitude (cross-run anchors, same 40m
+ * antenna, matched SWR, AM/LSB TUNE, fixed drive byte 0xCE):
+ *
+ *   wire peak 0.057  ->   1.0 W  (iter-8 UI  5)
+ *   wire peak 0.160  ->   3.5 W  (iter-8 UI 20)
+ *   wire peak 0.280  ->   9.1 W  (iter-8 UI 50)
+ *   wire peak 0.607  ->  19.5 W  (iter-8 UI 100, diagnostic log)
+ *   wire peak 0.828  ->  41.0 W  (Codex sqrt run, iqGain 0.966 * 0.857)
+ *   wire peak 1.000  -> 107.0 W  (iter-7 UI 100 with iqGain 2.15 clipped)
+ *
+ * The curve is approximately linear-low (P ~ 35 * amp for amp < 0.3) and
+ * steeply super-linear (amp ^ ~3.4) from amp 0.6 to 1.0. Biggest LUT
+ * precision matters in 0.6-1.0 since that is where 20 -> 107 W lives.
+ *
+ * Architecture: anchor the LUT on wire-peak amplitude, derive iq_gain as
+ * amp / WDSP_TX_PEAK_EST. This decouples the calibration from any future
+ * change in WDSP output level; if the WDSP peak shifts, change one
+ * constant instead of every LUT gain value.
  */
+#define SUNSDR_WDSP_TX_PEAK_EST 0.857  /* measured from txCbRmsAvg=0.606 */
+
 static double sunsdr_tx_iq_gain_for_watts(double watts)
 {
+    /* Wire IQ peak amplitude required to produce `cal_w[i]` watts on air. */
     static const double cal_w[] = {
         0.0,
-        11.0,
-        33.0,
-        72.0,
-        97.0,
-        105.0,
+        1.0,
+        3.5,
+        9.1,
+        19.5,
+        41.0,
+        107.0,
     };
-    static const double cal_gain[] = {
-        0.0,
-        0.1457,
-        0.2447,
-        0.4324,
-        0.6114,
-        0.8700,
+    static const double cal_amp[] = {
+        0.000,
+        0.057,
+        0.160,
+        0.280,
+        0.607,
+        0.828,
+        1.000,
     };
     const int n = (int)(sizeof(cal_w) / sizeof(cal_w[0]));
     int i;
+    double wire_amp;
+    double gain;
 
     if (watts <= 0.0) return 0.0;
-    if (watts >= cal_w[n - 1]) return cal_gain[n - 1];
 
-    for (i = 1; i < n; i++) {
-        if (watts <= cal_w[i]) {
-            double span_w = cal_w[i] - cal_w[i - 1];
-            double t = (span_w > 0.0) ? (watts - cal_w[i - 1]) / span_w : 0.0;
-            return cal_gain[i - 1] + t * (cal_gain[i] - cal_gain[i - 1]);
+    if (watts >= cal_w[n - 1]) {
+        wire_amp = cal_amp[n - 1];
+    } else {
+        wire_amp = cal_amp[n - 1];
+        for (i = 1; i < n; i++) {
+            if (watts <= cal_w[i]) {
+                double span_w = cal_w[i] - cal_w[i - 1];
+                double t = (span_w > 0.0) ? (watts - cal_w[i - 1]) / span_w : 0.0;
+                wire_amp = cal_amp[i - 1] + t * (cal_amp[i] - cal_amp[i - 1]);
+                break;
+            }
         }
     }
 
-    return cal_gain[n - 1];
+    /* Convert target wire peak to iq_gain. Allow slight >1.0 gain for the
+     * top of the range since WDSP peak is 0.857 (needs ~1.17 to reach full
+     * wire amplitude). Hard-cap well below any distortion danger zone. */
+    gain = wire_amp / SUNSDR_WDSP_TX_PEAK_EST;
+    if (gain < 0.0) gain = 0.0;
+    if (gain > 1.25) gain = 1.25;  /* ~7% clipping headroom above wire = 1.0 */
+    return gain;
 }
 
 static struct sockaddr_in sunsdr_stream_dest(void)
