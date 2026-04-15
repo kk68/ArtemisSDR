@@ -1543,25 +1543,37 @@ static void sunsdr_tx_outbound(int id, int nsamples, double* buff)
     full_scale = sunsdr_tx_full_scale_for_drive(drive);
 
     /*
-     * AM power compensation. WDSP's ammod (wdsp/ammod.c:39) hardcodes
-     * mult = 1/sqrt(2) for power normalization. With Thetis's default
-     * c_level=0.4 (radio.cs:2940), WDSP AM unmodulated carrier out is
-     *   I = Q = 0.7071 * 0.4 = 0.283
-     * Wire comparison vs EESDR (captures/annotated/20260413_174833 vs
-     * 20260413_184632): EESDR target carrier on wire is ~0.494, ours
-     * was ~0.334 -- about 32 % too low. At max drive our full_scale
-     * curve can't compensate because it's tuned for SSB which doesn't
-     * have the 1/sqrt(2) factor. Result: AM TX on-air came out at
-     * ~1.5 W instead of target ~100 W.
+     * AM TX rebuild. The previous sqrt(2) compensation attempt barely
+     * helped (1.5 W -> 1.7 W at drive=1.0) because even with the boost
+     * our full_scale=2.3 curve clipped WDSP's AM modulation peaks at
+     * +/-1.0, and AM power is driven by the DC carrier offset of the
+     * envelope -- clipping the peaks actually LOWERS the effective
+     * carrier DC, starving the radio's PA.
      *
-     * Fix: apply an additional AM-only scalar that undoes WDSP's
-     * 1/sqrt(2) normalization. Applied to I AND Q equally (WDSP emits
-     * I=Q for AM, radio expects I=Q). For LSB/USB the factor is 1.0
-     * (no change). */
-    double am_boost = 1.0;
-    if (sdr.currentMode == SUNSDR_MODE_AM) {
-        am_boost = 1.4142135623730951;  /* sqrt(2) compensates WDSP's 1/sqrt(2) */
-    }
+     * Correct approach: extract the audio sample out of WDSP's AM
+     * output, then rebuild AM in EESDR's exact wire format with a
+     * drive-scaled carrier and safe modulation depth. WDSP AM formula
+     * (wdsp/ammod.c mode 0, c_level=0.4):
+     *     WDSP_I = WDSP_Q = (1/sqrt(2)) * (c_level + (1 - c_level) * s)
+     *                    = 0.7071 * (0.4 + 0.6 * s), for s in [-1, 1]
+     * Inverse: s = (WDSP_I / 0.7071 - 0.4) / 0.6
+     *
+     * EESDR reference (capture 20260413_174833): wire carrier I=Q=0.494
+     * at full-modulation voice, peak I=Q=0.781, no negative envelope.
+     * This matches a target wire format:
+     *     wire_I = wire_Q = 0.5 * drive + 0.3 * drive * s_clamped
+     * which keeps peak at 0.8 at drive=1.0 and max modulation (no clip),
+     * carrier at 0.5 (matching EESDR reference), zero negative envelope.
+     *
+     * LSB/USB/CW/DIGI etc. unchanged — they use the drive * full_scale
+     * curve which is correct for complex-baseband modes.
+     */
+    int is_am = (sdr.currentMode == SUNSDR_MODE_AM);
+    const double wdsp_am_mult_inv = 1.4142135623730951;  /* 1 / (1/sqrt(2)) */
+    const double wdsp_am_c_level  = 0.4;
+    const double wdsp_am_a_level  = 0.6;  /* 1 - c_level */
+    const double am_wire_carrier  = 0.5;  /* EESDR reference target */
+    const double am_wire_mod      = 0.3;  /* keeps peak at 0.8 (no clip) */
 
     /*
      * Downsampling resampler: Fin=192 kHz -> Fout=39.0625 kHz (ratio ~4.9152).
@@ -1576,10 +1588,22 @@ static void sunsdr_tx_outbound(int id, int nsamples, double* buff)
     for (i = 0; i < nsamples; i++) {
         double in_I = buff[2 * i + 0];
         double in_Q = buff[2 * i + 1];
+        double cur_I, cur_Q;
 
-
-        double cur_I = in_I * drive * full_scale * am_boost;
-        double cur_Q = in_Q * drive * full_scale * am_boost;
+        if (is_am) {
+            /* Recover audio sample from WDSP's AM output (use I, which
+             * equals Q in mode 0). Then rebuild in EESDR wire format
+             * with carrier scaled by drive. */
+            double s = (in_I * wdsp_am_mult_inv - wdsp_am_c_level) / wdsp_am_a_level;
+            if (s >  1.0) s =  1.0;
+            if (s < -1.0) s = -1.0;
+            double am_out = (am_wire_carrier + am_wire_mod * s) * drive;
+            cur_I = am_out;
+            cur_Q = am_out;
+        } else {
+            cur_I = in_I * drive * full_scale;
+            cur_Q = in_Q * drive * full_scale;
+        }
         double in_mag = sqrt(in_I * in_I + in_Q * in_Q);
         double out_mag = sqrt(cur_I * cur_I + cur_Q * cur_Q);
 
