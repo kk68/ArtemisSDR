@@ -1510,13 +1510,22 @@ static void sunsdr_build_tx_packet(unsigned char* buf, unsigned int seq, const d
         int Q = sunsdr_quantize24(iq[2 * i + 1]);
         int k = i * SUNSDR_IQ_BYTES_PER_IQ;
 
-        /* SunSDR wire order is Q first, then I (24-bit LE each). */
-        payload[k + 0] = (unsigned char)(Q & 0xFF);
-        payload[k + 1] = (unsigned char)((Q >> 8) & 0xFF);
-        payload[k + 2] = (unsigned char)((Q >> 16) & 0xFF);
-        payload[k + 3] = (unsigned char)(I & 0xFF);
-        payload[k + 4] = (unsigned char)((I >> 8) & 0xFF);
-        payload[k + 5] = (unsigned char)((I >> 16) & 0xFF);
+        /* TX wire order is I first, then Q (24-bit LE each).
+         *
+         * The radio's RX->host byte order is the opposite (Q-first — see
+         * the RX unpack path). We verified the mirror empirically:
+         * ground-truth IQ analysis of our Thetis TUNE output showed the
+         * tone emitted at +600 Hz on wire when WDSP had generated a
+         * -600 Hz tone. Flipping the encoder byte order to I-first
+         * restores the correct sideband. Confirmed on-air by a QSO
+         * partner reporting the TUNE tone landing at the expected
+         * frequency after the swap. */
+        payload[k + 0] = (unsigned char)(I & 0xFF);
+        payload[k + 1] = (unsigned char)((I >> 8) & 0xFF);
+        payload[k + 2] = (unsigned char)((I >> 16) & 0xFF);
+        payload[k + 3] = (unsigned char)(Q & 0xFF);
+        payload[k + 4] = (unsigned char)((Q >> 8) & 0xFF);
+        payload[k + 5] = (unsigned char)((Q >> 16) & 0xFF);
     }
 }
 
