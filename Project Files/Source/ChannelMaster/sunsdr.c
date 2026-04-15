@@ -1392,11 +1392,11 @@ static double sunsdr_tx_amp_correction_for_drive(double drive)
     };
     static const double corr_gain[] = {
         1.00,
-        3.16,
-        2.58,
-        1.58,
-        0.99,
-        0.92,
+        4.47,
+        3.94,
+        2.59,
+        1.03,
+        0.82,
         1.00,
     };
     const int n = (int)(sizeof(corr_w) / sizeof(corr_w[0]));
@@ -2932,6 +2932,11 @@ void SunSDRLogTuneState(const char* label, int chk_tun, int chk_mox, int tuning,
  * 5/10/25 W still measured only 0.5/1.5/10 W, while 50 W was already good.
  * Apply a requested-watt amplitude correction: large lift below 25 W,
  * near no-op at 50 W, slight reduction at 75 W, and no correction at 100 W.
+ *
+ * Iteration 9 keeps the byte anchors fixed and adjusts only amplitude
+ * correction from the iter-8 readings:
+ *   5/10/25 W need more IQ amplitude; 50 W needs only a tiny bump;
+ *   75 W needs less amplitude; 100 W remains unchanged.
  * TODO: per-band LUTs once other bands are measured. */
 static int sunsdr_drive_raw_to_wire_byte(int raw)
 {
