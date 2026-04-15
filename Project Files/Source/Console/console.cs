@@ -29152,17 +29152,11 @@ namespace Thetis
                     if (!_tuning || !chkTUN.Checked)
                         NetworkIO.nativeSunSDRSetTune(0);
 
-                    // SunSDR TUNE-in-SSB: Thetis's PostGen tone sits at cw_pitch
-                    // offset from baseband, so standard SSB TUNE RF lands at
-                    // (dial - cw_pitch) for LSB or (dial + cw_pitch) for USB.
-                    // To put the TUNE tone AT the dial frequency (operator
-                    // expectation matching EESDR behavior), pre-shift the
-                    // radio's TX VFO by the inverse of the baseband tone
-                    // offset. Use the MOX-transition `freq` parameter (the
-                    // validated TX freq in MHz) rather than the TXFreq
-                    // property so we don't fight stale VFO state.
-                    double sunsdr_tx_dial_mhz = freq > 0.0 ? freq : TXFreq;
-                    int sunsdr_tx_dial_hz = (int)Math.Round(sunsdr_tx_dial_mhz * 1e6);
+                    // Tell NetworkIO the current SunSDR TUNE-in-SSB offset so
+                    // EVERY TX freq push (this one, Thetis's own refresh
+                    // ~230 ms later, VFO change during TX, etc.) is shifted
+                    // consistently. The actual shift is applied inside
+                    // NetworkIO.VFOfreq for all tx=1 writes.
                     int sunsdr_tune_offset_hz = 0;
                     if (chkTUN.Checked)
                     {
@@ -29179,13 +29173,13 @@ namespace Thetis
                             // CW/AM/FM TUNE already lands at dial — no shift.
                         }
                     }
-                    int sunsdr_tx_final_hz = sunsdr_tx_dial_hz + sunsdr_tune_offset_hz;
-                    NetworkIO.nativeSunSDRLogTrace(
-                        string.Format("SUNSDR_TUNE_FREQ dial_hz={0} mode={1} cw_pitch={2} offset_hz={3} final_hz={4} tun={5}",
-                            sunsdr_tx_dial_hz, Audio.TXDSPMode, cw_pitch,
-                            sunsdr_tune_offset_hz, sunsdr_tx_final_hz,
-                            chkTUN.Checked ? 1 : 0));
-                    NetworkIO.nativeSunSDRSetFreq(0, sunsdr_tx_final_hz, 1);
+                    NetworkIO.SunSDRTuneFreqOffsetHz = sunsdr_tune_offset_hz;
+
+                    // Force a fresh TX freq push so the shift takes effect
+                    // immediately at PTT-on (otherwise the radio would key
+                    // on the pre-offset freq from the most recent VFOfreq).
+                    double sunsdr_tx_dial_mhz = freq > 0.0 ? freq : TXFreq;
+                    NetworkIO.VFOfreq(0, sunsdr_tx_dial_mhz, 1);
 
                     NetworkIO.nativeSunSDRSetPTT(1);
                 }
@@ -29209,6 +29203,10 @@ namespace Thetis
                     if (!_tuning)
                         NetworkIO.nativeSunSDRSetTune(chkTUN.Checked ? 1 : 0);
                     NetworkIO.nativeSunSDRSetPTT(0);
+                    // Clear TUNE freq offset so the next voice TX starts
+                    // at the unshifted dial. (Re-applied at the next PTT-on
+                    // if TUNE is still engaged.)
+                    NetworkIO.SunSDRTuneFreqOffsetHz = 0;
                 }
 
                 if (m_bQSOTimerDuringMoxOnly && m_bQSOTimerRunning) QSOTimerRunning = false;

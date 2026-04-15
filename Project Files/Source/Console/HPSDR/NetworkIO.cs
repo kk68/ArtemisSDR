@@ -301,6 +301,19 @@ namespace Thetis
         }
 
         private static double[][] _lastVFOfreq = new double[2][] { new double[] { 0.0, 0.0, 0.0, 0.0 }, new double[] { 0.0 } };
+
+        // When non-zero, this Hz offset is ADDED to the TX frequency on every
+        // SunSDR tx=1 write. Set by the MOX/PTT handler when TUNE is engaged
+        // in SSB mode so the PostGen tone lands AT the dial frequency
+        // instead of being offset by cw_pitch. Cleared to 0 on TUNE-off and
+        // on PTT-off to restore normal voice/CW behavior.
+        private static int _sunsdr_tune_freq_offset_hz = 0;
+        public static int SunSDRTuneFreqOffsetHz
+        {
+            get { return _sunsdr_tune_freq_offset_hz; }
+            set { _sunsdr_tune_freq_offset_hz = value; }
+        }
+
         unsafe public static void VFOfreq(int id, double f, int tx)
         {
             _lastVFOfreq[tx][id] = f;
@@ -319,7 +332,10 @@ namespace Thetis
                     if (tx != 0)
                     {
                         if (id == 0)
-                            nativeSunSDRSetFreq(0, f_freq, tx);   // TX frequency
+                        {
+                            int tx_hz = f_freq + _sunsdr_tune_freq_offset_hz;
+                            nativeSunSDRSetFreq(0, tx_hz, tx);   // TX frequency
+                        }
                     }
                     else
                     {
