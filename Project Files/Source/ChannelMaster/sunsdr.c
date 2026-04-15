@@ -2856,24 +2856,72 @@ void SunSDRLogTuneState(const char* label, int chk_tun, int chk_mox, int tuning,
 }
 
 /* Compute the wire drive byte for a given 0..255 raw drive value.
- * Thetis passes raw = slider_watts * 255 / 100 linearly. The radio's
- * 0x17 drive command is sqrt-scaled so linear watts map to amplitude.
- * Formula (derived 2026-04-14 from EESDR AM TUNE captures at
- * 10/25/50/75/100W): byte = round(sqrt(watts/100) * 255).
- * Since our raw already equals watts*2.55 (raw=255 <=> 100W), this
- * simplifies to byte = round(sqrt(raw/255) * 255). */
+ * Thetis passes raw = slider_watts * 255 / 100 linearly.
+ *
+ * Drive calibration (bench measurement, Kosta 2026-04-14, single-band
+ * TUNE on dummy load). The radio's internal drive->RF curve is not
+ * pure sqrt; it is steeper in the mid range and compresses at the
+ * top. Raw bench data (byte sent with old sqrt formula -> actual W):
+ *   byte  57 ->   0.5 W   (UI  5 W)
+ *   byte  80 ->   3.0 W   (UI 10 W)
+ *   byte  99 ->   7.4 W   (UI 15 W)
+ *   byte 128 ->  22.0 W   (UI 25 W)
+ *   byte 181 ->  85.0 W   (UI 50 W)
+ *   byte 221 -> 111.0 W   (UI 75 W)
+ *   byte 255 -> 115.0 W   (UI 100 W)
+ *
+ * We invert this into a (UI-watts -> wire-byte) LUT and linearly
+ * interpolate so a slider setting of N watts produces ~N watts actual
+ * output. The radio's maximum achievable output is ~115 W at byte
+ * 0xFF; slider values above 100 are clamped there. TODO: extend to
+ * per-band LUTs once we measure additional bands. */
 static int sunsdr_drive_raw_to_wire_byte(int raw)
 {
-    double r;
+    /* Paired (measured_actual_W, wire_byte_sent). Monotonic in W. */
+    static const double drive_cal_w[] = {
+        0.0,    /* byte 0 -> 0 W assumed */
+        0.5,
+        3.0,
+        7.4,
+        22.0,
+        85.0,
+        111.0,
+        115.0,
+    };
+    static const int drive_cal_b[] = {
+        0,
+        57,
+        80,
+        99,
+        128,
+        181,
+        221,
+        255,
+    };
+    const int n = (int)(sizeof(drive_cal_w) / sizeof(drive_cal_w[0]));
+    double want_w;
+    int i;
+
     if (raw < 0) raw = 0;
     if (raw > 255) raw = 255;
-    r = (double)raw / 255.0;
-    if (r < 0.0) r = 0.0;
-    r = sqrt(r);
-    int b = (int)(r * 255.0 + 0.5);
-    if (b < 0) b = 0;
-    if (b > 255) b = 255;
-    return b;
+
+    /* UI watts from linear raw: raw=255 <=> 100 W. */
+    want_w = (double)raw * 100.0 / 255.0;
+    if (want_w <= 0.0) return 0;
+    if (want_w >= drive_cal_w[n - 1]) return drive_cal_b[n - 1];
+
+    for (i = 1; i < n; i++) {
+        if (want_w <= drive_cal_w[i]) {
+            double span_w = drive_cal_w[i] - drive_cal_w[i - 1];
+            int span_b = drive_cal_b[i] - drive_cal_b[i - 1];
+            double t = (span_w > 0.0) ? (want_w - drive_cal_w[i - 1]) / span_w : 0.0;
+            int b = (int)(drive_cal_b[i - 1] + t * (double)span_b + 0.5);
+            if (b < 0) b = 0;
+            if (b > 255) b = 255;
+            return b;
+        }
+    }
+    return drive_cal_b[n - 1];
 }
 
 void SunSDRSetDrive(int raw)
