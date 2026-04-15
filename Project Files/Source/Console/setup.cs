@@ -23415,21 +23415,24 @@ namespace Thetis
              * for <band>, and sets the PA Gain value below 99 so this
              * default table is no longer the fallback.
              *
-             * Iter-11 (40m, post-iter-10 refinement), still with all
-             * UI offsets at 0 and PA Gain = 100 (fallback active):
-             *   UI  5 ->  3.9 W    UI  60 ->  71 W
-             *   UI 10 ->  9.5 W    UI  70 ->  80 W
-             *   UI 15 -> 18.2 W    UI  80 ->  96 W
-             *   UI 20 -> 28.5 W    UI  90 ->  97 W
-             *   UI 30 -> 37.5 W    UI 100 -> (not measured, ~97 prior)
-             *   UI 40 -> 47.6 W
-             *   UI 50 -> 60   W
-             * Mid-range still overshoots 0.5-1.5 dB. Folded the new
-             * deltas back into the table per 10 log10(actual/target).
-             * All values well within the UI's +/- 6 dB budget for
-             * operator-level fine-tuning later.
+             * Iter-11/12 (40m, post-iter-10 refinement). Correct
+             * sweep mapping was UI 5/10/20/30/40/50/60/70/80/90/100
+             * (15 was skipped, not 100 as mis-read earlier). Proper
+             * reading of those measurements:
+             *
+             *   UI  5 ->  4   W    UI  60 ->  60   W  (spot on)
+             *   UI 10 ->  9.5 W    UI  70 ->  71   W  (spot on)
+             *   UI 20 -> 18.2 W    UI  80 ->  80   W  (spot on)
+             *   UI 30 -> 28.5 W    UI  90 ->  96   W
+             *   UI 40 -> 37.5 W    UI 100 ->  96   W
+             *   UI 50 -> 47.6 W
+             *
+             * Iter-10 commit was nearly a bulls-eye; only tiny tweaks
+             * needed. Each anchor's 10*log10(actual/target) delta
+             * folded into its adjust[i]. Mid-range residual is ~5 %
+             * undershoot; high range slight overshoot at UI 90.
              */
-            float[] adjust = new float[] { 0.13f, -2.29f, -2.03f, -2.08f, -2.13f, -2.08f, -1.92f, -2.20f, -1.31f };
+            float[] adjust = new float[] { 0.13f, -0.34f, -0.84f, -1.05f, -1.13f, -1.35f, -1.40f, -1.41f, -1.26f };
 
             int nLIndex = nDriveValue / 10;
             if (nDriveValue % 10 == 0)
