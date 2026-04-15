@@ -2860,20 +2860,20 @@ void SunSDRLogTuneState(const char* label, int chk_tun, int chk_mox, int tuning,
  *
  * Drive calibration (bench measurement, Kosta, 40m band, matched
  * antenna SWR 1.2, AM/LSB TUNE — power identical across modes).
- * Iteration 5 data (taken with iteration-4 LUT active, so each row
- * is the actual watts observed at the byte iter-4 produced for that
+ * Iteration 6 data (taken with iteration-5 LUT active, so each row
+ * is the actual watts observed at the byte iter-5 produced for that
  * slider value):
  *
- *   UI   5 W -> byte 136 -> actual   0.7 W
- *   UI  10 W -> byte 140 -> actual   2.5 W
- *   UI  25 W -> byte 144 -> actual  11.0 W
- *   UI  50 W -> byte 150 -> actual  50.0 W
- *   UI  75 W -> byte 156 -> actual  90.0 W
- *   UI 100 W -> byte 206 -> actual 105.0 W
+ *   UI   5 W -> byte 141 -> actual   0.7 W
+ *   UI  10 W -> byte 144 -> actual   2.5 W
+ *   UI  25 W -> byte 146 -> actual  10.0 W
+ *   UI  50 W -> byte 150 -> actual  41.0 W
+ *   UI  75 W -> byte 154 -> actual  74.0 W
+ *   UI 100 W -> byte 189 -> actual  95.0 W
  *   UI 100 W -> byte 255 -> actual ~115 W (iter-1 carry-over, retained
  *               as the upper asymptote; radio hard caps there)
  *
- * Iter-5 data is internally monotonic. The radio's response is still
+ * Iter-6 data is internally monotonic. The radio's response is still
  * steep and non-linear below 50 W, so LUT precision matters most there.
  * Iter-1 / iter-2 disagreement tracked in the git history; pinning band
  * + antenna resolved it.
@@ -2885,20 +2885,20 @@ static int sunsdr_drive_raw_to_wire_byte(int raw)
         0.0,
         0.7,
         2.5,
-        11.0,
-        50.0,
-        90.0,
-        105.0,
+        10.0,
+        41.0,
+        74.0,
+        95.0,
         115.0,
     };
     static const int drive_cal_b[] = {
         0,
-        136,
-        140,
+        141,
         144,
+        146,
         150,
-        156,
-        206,
+        154,
+        189,
         255,
     };
     const int n = (int)(sizeof(drive_cal_w) / sizeof(drive_cal_w[0]));
