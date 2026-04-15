@@ -55,6 +55,9 @@ static void sunsdr_send_tx_packet(const double* iq);
 static struct sockaddr_in sunsdr_stream_dest(void);
 static void sunsdr_dbg_note_tx_packet(unsigned int seq);
 
+#define SUNSDR_DEBUG_LOG_ENABLED 0
+#define SUNSDR_IQ_DUMP_ENABLED 0
+
 /* Global SunSDR session state — moved above the iq_dump / tx_pace
  * helpers which need sdr.currentPTT, sdr.streamSock, sdr.txSeq, etc. */
 static sunsdr_state_t sdr;
@@ -156,21 +159,38 @@ static DWORD WINAPI iq_dump_cleanup_thread_proc(LPVOID param)
 
 static void iq_dump_cleanup_old_files(void)
 {
+#if !SUNSDR_IQ_DUMP_ENABLED
+    return;
+#else
     /* Fire-and-forget background thread — do NOT block SunSDRInit. */
     HANDLE h = CreateThread(NULL, 0, iq_dump_cleanup_thread_proc, NULL, 0, NULL);
     if (h) CloseHandle(h);  /* detach; thread runs to completion on its own */
+#endif
 }
 
 static void iq_dump_reset(int attempt_id)
 {
+#if !SUNSDR_IQ_DUMP_ENABLED
+    (void)attempt_id;
+    InterlockedExchange(&iq_dump_enabled, 0);
+    InterlockedExchange(&iq_dump_count, 0);
+    InterlockedExchange(&iq_dump_dropped, 0);
+    return;
+#else
     InterlockedExchange(&iq_dump_count, 0);
     InterlockedExchange(&iq_dump_dropped, 0);
     iq_dump_attempt_id = attempt_id;
     InterlockedExchange(&iq_dump_enabled, 1);
+#endif
 }
 
 static void iq_dump_append(double I, double Q)
 {
+#if !SUNSDR_IQ_DUMP_ENABLED
+    (void)I;
+    (void)Q;
+    return;
+#else
     LONG n;
     int idx;
     if (!InterlockedAnd(&iq_dump_enabled, 0xffffffff)) return;
@@ -187,6 +207,7 @@ static void iq_dump_append(double I, double Q)
     idx = (int)(n - 1) * 2;
     iq_dump_buf[idx + 0] = I;
     iq_dump_buf[idx + 1] = Q;
+#endif
 }
 
 /* Per-attempt snapshot buffer handed off to the background writer.
@@ -230,6 +251,12 @@ static DWORD WINAPI iq_dump_writer_thread_proc(LPVOID p)
 
 static void iq_dump_flush_to_disk(void)
 {
+#if !SUNSDR_IQ_DUMP_ENABLED
+    InterlockedExchange(&iq_dump_enabled, 0);
+    InterlockedExchange(&iq_dump_count, 0);
+    InterlockedExchange(&iq_dump_dropped, 0);
+    return;
+#else
     LONG n;
     iq_dump_job_t *job;
     HANDLE h;
@@ -274,6 +301,7 @@ static void iq_dump_flush_to_disk(void)
         free(job->buf);
         free(job);
     }
+#endif
 }
 
 /* ============================================================
@@ -692,6 +720,9 @@ static void sdr_log_build_path(void)
 }
 
 static void sdr_log_open(void) {
+#if !SUNSDR_DEBUG_LOG_ENABLED
+    return;
+#else
     if (!sdr_log) {
         const char* mode;
 
@@ -709,6 +740,7 @@ static void sdr_log_open(void) {
             fflush(sdr_log);
         }
     }
+#endif
 }
 
 static DWORD WINAPI sdr_log_writer_thread(LPVOID param) {
@@ -763,6 +795,9 @@ static DWORD WINAPI sdr_log_writer_thread(LPVOID param) {
 }
 
 static void sdr_log_async_start(void) {
+#if !SUNSDR_DEBUG_LOG_ENABLED
+    return;
+#else
     if (sdr_log_async_ready) return;
     if (!sdr_log_cs_init) {
         InitializeCriticalSection(&sdr_log_ring_cs);
@@ -782,9 +817,13 @@ static void sdr_log_async_start(void) {
     if (sdr_log_thread) {
         sdr_log_async_ready = 1;
     }
+#endif
 }
 
 static void sdr_log_async_stop(void) {
+#if !SUNSDR_DEBUG_LOG_ENABLED
+    return;
+#else
     sdr_log_async_ready = 0;
     sdr_log_stop = 1;
     if (sdr_log_wake) SetEvent(sdr_log_wake);
@@ -797,9 +836,14 @@ static void sdr_log_async_stop(void) {
         CloseHandle(sdr_log_wake);
         sdr_log_wake = NULL;
     }
+#endif
 }
 
 static void sdr_logf(const char* fmt, ...) {
+#if !SUNSDR_DEBUG_LOG_ENABLED
+    (void)fmt;
+    return;
+#else
     va_list ap;
     SYSTEMTIME st;
     char local[SDR_LOG_ENTRY_MAX];
@@ -849,6 +893,7 @@ static void sdr_logf(const char* fmt, ...) {
         fputs(local, sdr_log);
         fflush(sdr_log);
     }
+#endif
 }
 #include "cmbuffs.h"
 
