@@ -2930,69 +2930,30 @@ void SunSDRLogTuneState(const char* label, int chk_tun, int chk_mox, int tuning,
 }
 
 /*
- * Drive byte (0x17) is the sole power dial under the new architecture.
- * Wire IQ is held at constant full-amplitude by SUNSDR_TX_IQ_GAIN;
- * this function maps UI target watts -> radio drive byte via the
- * inverted iter-1 forward curve (the only dataset we have under this
- * topology). Piecewise linear between anchors; monotonic.
+ * Drive byte = raw (pass-through).
  *
- * Initial anchors (will be replaced once a dense sweep is measured
- * under this architecture):
+ * Thetis already owns power calibration upstream of this function:
+ *   console.cs SetTXPwrAndTXFreq computes target_dbm from UI watts,
+ *   subtracts per-band PA gain via SetupForm.GetPAGain (which for
+ *   SUNSDR2DX layers in GetSunSDRDefaultAdjust offsets), converts
+ *   to a voltage fraction and feeds it through NetworkIO.SetOutputPower
+ *   -> nativeSunSDRSetDrive(int i) where i = 255 * f * swr_protect.
  *
- *   target W | byte
- *        0   |   0
- *        3   |  80  (0x50)
- *       22   | 128  (0x80)
- *       85   | 181  (0xB5)
- *      111   | 221  (0xDD)
- *      115   | 255  (0xFF)
+ * That integer IS the calibrated drive byte the radio should see. Our
+ * job is to forward it. Every previous LUT here was DOUBLE-compensating
+ * the Thetis curve, which made the end-to-end response non-monotonic
+ * and reagent to session/state drift.
  *
- * For requested watts below 3W we interpolate down to byte 0. The
- * radio PA may have a dead zone below some byte (unknown); if this
- * shows up as "slider 1-3W gives zero output", we will raise the
- * low anchor.
+ * Calibration from here is an operator workflow, not a code workflow:
+ *   Setup -> PA Settings -> PA Gain tab -> Offsets for <band> -> Drive
+ *   edit per-drive-level dB offsets until the curve is linear on that
+ *   band, then do the next band.
  */
 static int sunsdr_drive_raw_to_wire_byte(int raw)
 {
-    static const double cal_w[] = {
-        0.0,
-        3.0,
-        22.0,
-        85.0,
-        111.0,
-        115.0,
-    };
-    static const int cal_b[] = {
-        0,
-        80,
-        128,
-        181,
-        221,
-        255,
-    };
-    const int n = (int)(sizeof(cal_w) / sizeof(cal_w[0]));
-    double watts;
-    int i;
-
     if (raw < 0) raw = 0;
     if (raw > 255) raw = 255;
-
-    watts = sunsdr_requested_watts_from_raw(raw);
-    if (watts <= 0.0) return 0;
-    if (watts >= cal_w[n - 1]) return cal_b[n - 1];
-
-    for (i = 1; i < n; i++) {
-        if (watts <= cal_w[i]) {
-            double span_w = cal_w[i] - cal_w[i - 1];
-            int    span_b = cal_b[i] - cal_b[i - 1];
-            double t = (span_w > 0.0) ? (watts - cal_w[i - 1]) / span_w : 0.0;
-            int b = (int)(cal_b[i - 1] + t * (double)span_b + 0.5);
-            if (b < 0) b = 0;
-            if (b > 255) b = 255;
-            return b;
-        }
-    }
-    return cal_b[n - 1];
+    return raw;
 }
 
 void SunSDRSetDrive(int raw)
