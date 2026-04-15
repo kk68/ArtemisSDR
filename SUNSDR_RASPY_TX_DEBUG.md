@@ -1040,6 +1040,48 @@ Tabulate per-attempt metrics against the user's severity grades. Cross-reference
 - Amplitude modulation at envelope rate → AAMIX slew. Fix: `flush_aaslew`.
 - Phase jitter / frequency drift → rmatch resampler state (the prime suspect based on Run 9b/10 evidence). Fix: `xrmatchIN`/`xrmatchOUT` flush.
 
+## 2026-04-14 INVESTIGATION CLOSED — ROOT CAUSE + FIXES CONFIRMED
+
+After extensive instrumentation and iterative testing, the raspy / pulsing / zero-RF family of TX defects has been fully resolved. Final verification:
+
+- **TUNE: 11/11 success** (one attempt ran ~40 seconds without failure)
+- **Voice MOX: 10/10 success** (~3 second attempts)
+- **Clean tone on receive side** across all attempts
+- **Zero raspy, zero pulsing, zero silent TX, zero tone drops, zero zero-RF**
+
+### The arc of root causes found and fixed
+
+| # | Root cause | Fix | Result |
+|---|---|---|---|
+| 1 | Synchronous `sdr_logf` fflush stalling IQ thread | Async deferred logger (ring+writer thread at BELOW_NORMAL) | Closed 2-50 ms disk stalls |
+| 2 | Windows default 15.6 ms scheduler tick | `timeBeginPeriod(1)` | Shrunk tick to 1 ms |
+| 3 | RX read thread at NORMAL priority | `THREAD_PRIORITY_ABOVE_NORMAL` | No RX starvation |
+| 4 | Silence-injection accumulator used `GetTickCount64` (16 ms res) | `QueryPerformanceCounter` sub-µs pacing | Removed scheduler-tick jitter from silence feed |
+| 5 | `elapsed_ms` clamp too aggressive (2 ms → every TX tick) | Raised to 50 ms | Fixed VAC starvation regression |
+| 6 | WDSP TX callback thread at NORMAL | Self-elevate to `THREAD_PRIORITY_ABOVE_NORMAL` on first entry | TX thread no longer preempted |
+| 7 | TX packet emission tied to WDSP callback jitter | **Tier 3**: dedicated pacing thread + `CREATE_WAITABLE_TIMER_HIGH_RESOLUTION` + ring buffer + absolute QPC scheduling | Matched EESDR's 0.098 ms stdev, closed the pulsing |
+| 8 | Synchronous `fwrite` of IQ dump held `SunSDRSetPTT(0)` for 100+ ms | Async writer thread via `CreateThread` + `malloc` snapshot | Silent tail reduced from ~220 ms to ~120 ms on long attempts |
+| 9 | Synchronous `DeleteFileA` cleanup blocked `SunSDRInit` audio bringup | Async cleanup thread | RX audio healthy from startup |
+| 10 | Pre-buffer 4 packets delayed first FD by 15-32 ms vs EESDR's 7 ms | Reduced to 1 packet (emit-last-on-underrun stabilizes) | First FD ~5 ms after gate, matching EESDR |
+| 11 | **`sdr.txSeq` monotonic across TX sessions → radio silently dropped FD packets with high non-sequential seq → keyed but unmodulated carrier** | **`sdr.txSeq = 0` at every PTT-on to match EESDR reference** | **Zero silent-carrier failures (11/11 TUNE, 10/10 voice MOX)** |
+
+The 11th fix — reset `sdr.txSeq` to 0 at PTT-on — was the final piece. Identified by parsing EESDR's voice MOX capture TX FD seq numbers: every EESDR TX session starts at seq=0. We had been carrying seq monotonically through the whole session. Radio was keying fine (0x06 worked every time) but discarding our high-seq FD packets at its stream input filter, producing unmodulated carrier — user-visible as "radio is TX'ing but I hear nothing."
+
+### Key diagnostic tools that found the answers
+
+1. **EESDR reference captures** in `sunsdr-re/captures/annotated/`. Both inter-packet timing statistics (stdev 0.098 ms reference) and packet seq numbers (start at 0 per session) came from parsing these TSVs. Definitive.
+2. **Ground-truth IQ recorder** (`sunsdr_tx_iq_XXXX.raw`). Confirmed our wire content was identical for clean and failed attempts, isolating the bug to protocol-level behavior (seq) rather than content.
+3. **`RX_GAP_HIST` / `TX_CB_GAP_HIST`** histograms — proved RX thread was clean and the scheduler-jitter problem moved between RX thread → TX callback thread → wire emission.
+4. **`TIMING_INIT` startup lines** — verified each priority boost, timer resolution, and power request actually took effect.
+5. **`MANAGED_TRACE chkTUN_CheckedChanged`** — confirmed all user clicks were genuine UI events, no phantom programmatic triggers.
+
+### What remains (not raspy-related)
+
+1. **+600 Hz I/Q mirror**: TUNE tone emits at +600 Hz on wire instead of -600 Hz. Our TX encoder is sending the complex conjugate of WDSP's IQ. Cosmetic (tone still demodulates) but a real protocol correctness item. Small fix.
+2. **Diagnostic log cleanup**: `TX_CB_GAP_HIST`, per-callback `TX audio callback` spam, `MANAGED_TRACE`, and similar debugging instrumentation are verbose now that we're stable. Can be gated behind a debug flag or pruned.
+3. **Native 312.5 kHz rate refactor**: parked in `memory/project_native_312_5k_rate_refactor.md`. Not raspy-related; architectural cleanup.
+4. **Post-TX VAC rmatch transient raspy (~30-40 s recovery)**: pre-existing issue documented in `memory/project_raspy_audio_vac.md`. Not resolved by this investigation; separate work.
+
 ## Next Step
 
-User runs `Capture-RaspyTuneCycles.ps1` with 20 TUNE cycles + WAV recording + severity grading. Then sends back pcap + tsv + WAV path + grade list for spectral analysis.
+Investigation closed. Future raspy-like regressions should bisect against this commit history — each fix in the table above is reversible, and the ground-truth capture + spectral analysis tooling in `sunsdr-re/scripts/analysis/` remains the definitive way to isolate wire-vs-radio issues.
