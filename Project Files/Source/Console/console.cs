@@ -30219,7 +30219,21 @@ namespace Thetis
 
                     radio.GetDSPTX(0).TXPostGenMode = 0;
                     radio.GetDSPTX(0).TXPostGenToneMag = MAX_TONE_MAG;
-                    radio.GetDSPTX(0).TXPostGenRun = 1;
+                    // SunSDR + AM/FM: suppress the PostGen modulation tone
+                    // during TUNE so the AM modulator emits a pure carrier
+                    // at dial (classic AM-radio TUNE). With a tone, the AM
+                    // modulator produces carrier + sidebands at ±cw_pitch,
+                    // which a narrow-mode receiver sees as a spike offset
+                    // from the dial. Pure-carrier TUNE lands exactly on
+                    // dial with no sidebands. For FM, the equivalent clean
+                    // TUNE is unmodulated carrier at dial (no deviation).
+                    bool sunsdr_am_fm_tune =
+                        NetworkIO.CurrentRadioProtocol == RadioProtocol.SUNSDR &&
+                        (Audio.TXDSPMode == DSPMode.AM ||
+                         Audio.TXDSPMode == DSPMode.SAM ||
+                         Audio.TXDSPMode == DSPMode.DSB ||
+                         Audio.TXDSPMode == DSPMode.FM);
+                    radio.GetDSPTX(0).TXPostGenRun = sunsdr_am_fm_tune ? 0 : 1;
                 }
                 LogSunSDRTuneAudioState("TUNE_ON_POSTGEN_SET", -1);
 
