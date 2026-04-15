@@ -29155,13 +29155,14 @@ namespace Thetis
                     // SunSDR TUNE-in-SSB: Thetis's PostGen tone sits at cw_pitch
                     // offset from baseband, so standard SSB TUNE RF lands at
                     // (dial - cw_pitch) for LSB or (dial + cw_pitch) for USB.
-                    // To put the TUNE tone AT the dial frequency (the operator
+                    // To put the TUNE tone AT the dial frequency (operator
                     // expectation matching EESDR behavior), pre-shift the
                     // radio's TX VFO by the inverse of the baseband tone
-                    // offset. Always push a fresh TX freq here so voice TX
-                    // immediately after a TUNE attempt isn't left on the
-                    // shifted frequency.
-                    int sunsdr_tx_dial_hz = (int)Math.Round(TXFreq * 1e6);
+                    // offset. Use the MOX-transition `freq` parameter (the
+                    // validated TX freq in MHz) rather than the TXFreq
+                    // property so we don't fight stale VFO state.
+                    double sunsdr_tx_dial_mhz = freq > 0.0 ? freq : TXFreq;
+                    int sunsdr_tx_dial_hz = (int)Math.Round(sunsdr_tx_dial_mhz * 1e6);
                     int sunsdr_tune_offset_hz = 0;
                     if (chkTUN.Checked)
                     {
@@ -29178,8 +29179,13 @@ namespace Thetis
                             // CW/AM/FM TUNE already lands at dial — no shift.
                         }
                     }
-                    NetworkIO.nativeSunSDRSetFreq(0,
-                        sunsdr_tx_dial_hz + sunsdr_tune_offset_hz, 1);
+                    int sunsdr_tx_final_hz = sunsdr_tx_dial_hz + sunsdr_tune_offset_hz;
+                    NetworkIO.nativeSunSDRLogTrace(
+                        string.Format("SUNSDR_TUNE_FREQ dial_hz={0} mode={1} cw_pitch={2} offset_hz={3} final_hz={4} tun={5}",
+                            sunsdr_tx_dial_hz, Audio.TXDSPMode, cw_pitch,
+                            sunsdr_tune_offset_hz, sunsdr_tx_final_hz,
+                            chkTUN.Checked ? 1 : 0));
+                    NetworkIO.nativeSunSDRSetFreq(0, sunsdr_tx_final_hz, 1);
 
                     NetworkIO.nativeSunSDRSetPTT(1);
                 }
