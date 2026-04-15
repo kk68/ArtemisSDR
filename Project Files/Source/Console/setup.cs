@@ -23385,23 +23385,37 @@ namespace Thetis
             if (nDriveValue >= 100) return 0.0f;
 
             /*
-             * Default SunSDR2DX drive shaping.
+             * Default SunSDR2DX drive shaping for 40m (other bands fall
+             * back to this table until separately measured).
              *
-             * The actual TX power path is now fundamentally working, but live 40m
-             * measurements show the top end compresses too early:
-             *   0 -> 0W
-             *   10 -> 9.4W
-             *   25 -> 26W
-             *   50 -> 51W
-             *   75 -> 70W
-             *   100 -> 106W
+             * 2026-04-15 calibration sweep on 40m, matched antenna SWR 1.2,
+             * after architecture reset (wire peak clipped to ~1.0 via
+             * iq_gain=1.167, raw drive byte passes straight through from
+             * Thetis's calibrated computation). Observed UI -> actual W:
              *
-             * So keep the low-end compensation modest, then taper into negative
-             * offsets above ~60W to add attenuation only in the upper range.
-             * Points represent dB reduction of PA attenuation at 10W..90W.
-             * Positive values increase output. Negative values reduce output.
+             *   UI  5 ->   4.3 W    UI  60 ->  80 W
+             *   UI 10 ->  12   W    UI  70 ->  84 W
+             *   UI 15 ->  19   W    UI  80 ->  86 W
+             *   UI 20 ->  27   W    UI  90 ->  97 W
+             *   UI 30 ->  42   W    UI 100 ->  97 W
+             *   UI 40 ->  58   W
+             *   UI 50 ->  70   W
+             *
+             * Middle range over-shoots by 30-50%. Computed the dB delta
+             * needed per anchor (10 log10(target / actual)) and applied
+             * it to the prior adjust[i] — the table below is the result.
+             * Array indices map to 10W..90W; 0W and 100W have no entry
+             * (top returns 0 anyway, consistent with the UI 100->97 W
+             * result within +/- 3%).
+             *
+             * Points are dB reduction of PA attenuation; positive =
+             * more power, negative = less power. If linearity is off
+             * on a different band the operator enters their own
+             * offsets via Setup -> PA Settings -> PA Gain -> Offsets
+             * for <band>, and sets the PA Gain value below 99 so this
+             * default table is no longer the fallback.
              */
-            float[] adjust = new float[] { 0.70f, 0.55f, 0.40f, 0.28f, 0.12f, -0.10f, -0.55f, -1.10f, -0.65f };
+            float[] adjust = new float[] { -0.09f, -0.75f, -1.06f, -1.33f, -1.34f, -1.35f, -1.34f, -1.41f, -0.98f };
 
             int nLIndex = nDriveValue / 10;
             if (nDriveValue % 10 == 0)
