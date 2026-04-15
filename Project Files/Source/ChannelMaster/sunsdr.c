@@ -1379,6 +1379,48 @@ static double sunsdr_tx_full_scale_for_drive(double drive)
     return 1.0 + (0.5 * d2) + (0.8 * d10);
 }
 
+static double sunsdr_tx_amp_correction_for_drive(double drive)
+{
+    static const double corr_w[] = {
+        0.0,
+        5.0,
+        10.0,
+        25.0,
+        50.0,
+        75.0,
+        100.0,
+    };
+    static const double corr_gain[] = {
+        1.00,
+        3.16,
+        2.58,
+        1.58,
+        0.99,
+        0.92,
+        1.00,
+    };
+    const int n = (int)(sizeof(corr_w) / sizeof(corr_w[0]));
+    double want_w;
+    int i;
+
+    if (drive < 0.0) drive = 0.0;
+    if (drive > 1.0) drive = 1.0;
+
+    want_w = drive * 100.0;
+    if (want_w <= corr_w[0]) return corr_gain[0];
+    if (want_w >= corr_w[n - 1]) return corr_gain[n - 1];
+
+    for (i = 1; i < n; i++) {
+        if (want_w <= corr_w[i]) {
+            double span_w = corr_w[i] - corr_w[i - 1];
+            double t = (span_w > 0.0) ? (want_w - corr_w[i - 1]) / span_w : 0.0;
+            return corr_gain[i - 1] + t * (corr_gain[i] - corr_gain[i - 1]);
+        }
+    }
+
+    return corr_gain[n - 1];
+}
+
 static struct sockaddr_in sunsdr_stream_dest(void)
 {
     struct sockaddr_in dest = sdr.radioAddr;
@@ -1514,6 +1556,7 @@ static void sunsdr_tx_outbound(int id, int nsamples, double* buff)
     double pre_rms = 0.0;
     double post_rms = 0.0;
     double full_scale = 1.0;
+    double amp_correction = 1.0;
 
     (void)id;
 
@@ -1541,6 +1584,7 @@ static void sunsdr_tx_outbound(int id, int nsamples, double* buff)
     }
 
     full_scale = sunsdr_tx_full_scale_for_drive(drive);
+    amp_correction = sunsdr_tx_amp_correction_for_drive(drive);
 
     /* The previous AM-specific "am_boost = 1.48" wire-IQ multiplier
      * was compensating for a misrouted drive command (we were sending
@@ -1548,7 +1592,9 @@ static void sunsdr_tx_outbound(int id, int nsamples, double* buff)
      * drive). Now that SunSDRSetDrive sends 0x17 with the proper
      * sqrt-scaled drive byte, the radio's RF stage does the
      * amplification and the wire IQ does not need any mode-specific
-     * boost. Scaling is uniform: drive * full_scale. */
+     * boost. Current calibration uses 0x17 for coarse PA-region selection,
+     * then a requested-watt IQ amplitude correction to cover ranges where
+     * adjacent 0x17 bytes jump too far or barely move at all. */
 
     /*
      * Downsampling resampler: Fin=192 kHz -> Fout=39.0625 kHz (ratio ~4.9152).
@@ -1565,8 +1611,8 @@ static void sunsdr_tx_outbound(int id, int nsamples, double* buff)
         double in_Q = buff[2 * i + 1];
         double cur_I, cur_Q;
 
-        cur_I = in_I * drive * full_scale;
-        cur_Q = in_Q * drive * full_scale;
+        cur_I = in_I * drive * full_scale * amp_correction;
+        cur_Q = in_Q * drive * full_scale * amp_correction;
         double in_mag = sqrt(in_I * in_I + in_Q * in_Q);
         double out_mag = sqrt(cur_I * cur_I + cur_Q * cur_Q);
 
@@ -1721,8 +1767,8 @@ static void sunsdr_tx_outbound(int id, int nsamples, double* buff)
             }
 
             dbg_packets = sdr.txAudioPackets;
-            sdr_logf("TX audio callback: nsamples=%d, pkts=%u, drive=%.3f (%d), fs=%.2f, pre_peak=%.3f, pre_rms=%.3f, post_peak=%.3f, post_rms=%.3f, in_rate=%.0f Hz, out_rate=%.0f Hz, step=%.4f\n",
-                nsamples, sdr.txAudioPackets, drive, raw_drive, full_scale, pre_peak, pre_rms, post_peak, post_rms,
+            sdr_logf("TX audio callback: nsamples=%d, pkts=%u, drive=%.3f (%d), fs=%.2f, ampCorr=%.2f, pre_peak=%.3f, pre_rms=%.3f, post_peak=%.3f, post_rms=%.3f, in_rate=%.0f Hz, out_rate=%.0f Hz, step=%.4f\n",
+                nsamples, sdr.txAudioPackets, drive, raw_drive, full_scale, amp_correction, pre_peak, pre_rms, post_peak, post_rms,
                 in_rate_hz, out_rate_hz, SUNSDR_TX_RESAMPLE_STEP);
 
             dbg_last_tick = now_tick;
@@ -2880,6 +2926,12 @@ void SunSDRLogTuneState(const char* label, int chk_tun, int chk_mox, int tuning,
  *   keep 50 W essentially frozen near byte 151
  *   pull 75 W back to byte 154 (previously measured ~74 W)
  *   push low power more aggressively using the steep 0x92..0x97 region
+ *
+ * Iteration 8 adds host IQ amplitude correction because byte-only tuning
+ * still cannot solve the low/mid curve. With byte anchors near 0x93..0x95,
+ * 5/10/25 W still measured only 0.5/1.5/10 W, while 50 W was already good.
+ * Apply a requested-watt amplitude correction: large lift below 25 W,
+ * near no-op at 50 W, slight reduction at 75 W, and no correction at 100 W.
  * TODO: per-band LUTs once other bands are measured. */
 static int sunsdr_drive_raw_to_wire_byte(int raw)
 {
