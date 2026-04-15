@@ -2860,23 +2860,23 @@ void SunSDRLogTuneState(const char* label, int chk_tun, int chk_mox, int tuning,
  *
  * Drive calibration (bench measurement, Kosta, 40m band, matched
  * antenna SWR 1.2, AM/LSB TUNE — power identical across modes).
- * Iteration 3 data (taken with iteration-2 LUT active, so each row
- * is the actual watts observed at the byte iter-2 produced for that
+ * Iteration 4 data (taken with iteration-3 LUT active, so each row
+ * is the actual watts observed at the byte iter-3 produced for that
  * slider value):
  *
- *   UI   5 W -> byte 115 -> actual   0.2 W
- *   UI  10 W -> byte 126 -> actual   0.9 W
- *   UI  25 W -> byte 136 -> actual  12.0 W
- *   UI  50 W -> byte 148 -> actual  46.0 W
- *   UI  75 W -> byte 164 -> actual  92.0 W
- *   UI 100 W -> byte 217 -> actual 109.0 W
+ *   UI   5 W -> byte 130 -> actual   0.2 W
+ *   UI  10 W -> byte 134 -> actual   2.5 W
+ *   UI  25 W -> byte 141 -> actual  11.0 W
+ *   UI  50 W -> byte 149 -> actual  44.0 W
+ *   UI  70 W -> byte 156 -> actual  77.0 W
+ *   UI 100 W -> byte 189 -> actual  95.0 W
  *   UI 100 W -> byte 255 -> actual ~115 W (iter-1 carry-over, retained
  *               as the upper asymptote; radio hard caps there)
  *
- * Iter-3 data is internally monotonic. The radio's response is
- * extremely steep in the 12-46 W region (~0.35 byte per watt), so
- * LUT precision matters most there. Iter-1 / iter-2 disagreement
- * tracked in the git history; pinning band + antenna resolved it.
+ * Iter-4 data is internally monotonic. The radio's response is still
+ * steep and non-linear below 50 W, so LUT precision matters most there.
+ * Iter-1 / iter-2 disagreement tracked in the git history; pinning band
+ * + antenna resolved it.
  * TODO: per-band LUTs once other bands are measured. */
 static int sunsdr_drive_raw_to_wire_byte(int raw)
 {
@@ -2884,21 +2884,21 @@ static int sunsdr_drive_raw_to_wire_byte(int raw)
     static const double drive_cal_w[] = {
         0.0,
         0.2,
-        0.9,
-        12.0,
-        46.0,
-        92.0,
-        109.0,
+        2.5,
+        11.0,
+        44.0,
+        77.0,
+        95.0,
         115.0,
     };
     static const int drive_cal_b[] = {
         0,
-        115,
-        126,
-        136,
-        148,
-        164,
-        217,
+        130,
+        134,
+        141,
+        149,
+        156,
+        189,
         255,
     };
     const int n = (int)(sizeof(drive_cal_w) / sizeof(drive_cal_w[0]));
