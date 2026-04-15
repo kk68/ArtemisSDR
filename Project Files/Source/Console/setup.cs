@@ -23414,8 +23414,22 @@ namespace Thetis
              * offsets via Setup -> PA Settings -> PA Gain -> Offsets
              * for <band>, and sets the PA Gain value below 99 so this
              * default table is no longer the fallback.
+             *
+             * Iter-11 (40m, post-iter-10 refinement), still with all
+             * UI offsets at 0 and PA Gain = 100 (fallback active):
+             *   UI  5 ->  3.9 W    UI  60 ->  71 W
+             *   UI 10 ->  9.5 W    UI  70 ->  80 W
+             *   UI 15 -> 18.2 W    UI  80 ->  96 W
+             *   UI 20 -> 28.5 W    UI  90 ->  97 W
+             *   UI 30 -> 37.5 W    UI 100 -> (not measured, ~97 prior)
+             *   UI 40 -> 47.6 W
+             *   UI 50 -> 60   W
+             * Mid-range still overshoots 0.5-1.5 dB. Folded the new
+             * deltas back into the table per 10 log10(actual/target).
+             * All values well within the UI's +/- 6 dB budget for
+             * operator-level fine-tuning later.
              */
-            float[] adjust = new float[] { -0.09f, -0.75f, -1.06f, -1.33f, -1.34f, -1.35f, -1.34f, -1.41f, -0.98f };
+            float[] adjust = new float[] { 0.13f, -2.29f, -2.03f, -2.08f, -2.13f, -2.08f, -1.92f, -2.20f, -1.31f };
 
             int nLIndex = nDriveValue / 10;
             if (nDriveValue % 10 == 0)
