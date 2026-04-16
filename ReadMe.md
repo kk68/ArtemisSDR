@@ -59,6 +59,8 @@ If you're brand new to SDR in general, Thetis, or your radio, work through your 
 
 **General**
 
+- Power-on to RX in ~1-1.5 seconds, comparable to ExpertSDR3
+- Sub-second band switching — native protocol, no session teardown
 - All of Thetis's DSP: NR, NR4, ANF, NB/NB2, EQ, CESSB, CFC, notch, compander — everything works
 - VAC audio routing (CABLE, VoiceMeeter, etc.) works on both RX and TX
 - Clean Power off / Power on cycling from the Thetis UI
@@ -72,7 +74,6 @@ Honest list of what's partially done or missing. None of these prevent normal op
 | --- | --- |
 | **TX power calibration** | 40 m is locked. Other bands fall back to the 40 m curve — expect a few dB deviation until separately calibrated. |
 | **Thetis `Fwd Pwr` meter** | Not yet wired to the SunSDR telemetry stream. Use an external wattmeter for now. |
-| **RX band switching** | Uses an automatic power-cycle workaround. Works reliably; will be replaced with a proper reconfigure sequence later. |
 | **PS-A, 2-TONE, DUP** | Grayed out on SunSDR. These depend on a feedback-loop path the radio doesn't expose; not a bug, a hardware-architecture constraint. |
 | **Diversity mode** | Unsupported. RX2 follows RX1's antenna selection; no independent per-receiver antenna path has been found. |
 | **MON / DUP audio routing** | Not fully settled during TX. If you need to monitor your own transmission, a second receiver is the reliable path. |
