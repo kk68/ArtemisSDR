@@ -75,15 +75,26 @@ namespace Thetis
             int model_id = (int)HardwareSpecific.Model;
             int protocol = ri.Protocol == RadioDiscoveryRadioProtocol.P1 ? 0 : 1;
 
-            // SunSDR native protocol — skip HPSDR discovery, init directly
+            // SunSDR native protocol — skip HPSDR discovery, init directly.
+            //
+            // Ordering: CurrentRadioProtocol and CMLoadRouterAll run BEFORE
+            // nativeInitMetis starts the IQ stream, because the router must
+            // be wired for SUNSDR before any IQ packet flows through it.
+            // At cold Thetis launch, comboRadioModel_SelectedIndexChanged
+            // (the only other caller of CMLoadRouterAll) is suppressed by
+            // the setup form's `initializing` flag during DB restore, so
+            // without this explicit call the router is never SUNSDR-aware
+            // and the first IQ packets feed the wrong WDSP inputs.
             if (HardwareSpecific.Model == HPSDRModel.SUNSDR2DX)
             {
                 protocol = (int)RadioProtocol.SUNSDR;
+                CurrentRadioProtocol = RadioProtocol.SUNSDR;
+                cmaster.CMLoadRouterAll(HardwareSpecific.Model);
+
                 ret = nativeInitMetis(radioIP, ratioPort, hostIP, hostPort, protocol, model_id);
                 if (ret == 0)
                 {
                     BoardID = HPSDRHW.SunSDR;
-                    CurrentRadioProtocol = RadioProtocol.SUNSDR;
                     FWCodeVersion = 0;
                     BetaVersion = 0;
                     Protocol2VersionSupported = 0;

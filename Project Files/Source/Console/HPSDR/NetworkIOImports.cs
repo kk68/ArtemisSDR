@@ -433,6 +433,9 @@ namespace Thetis
         [DllImport("ChannelMaster.dll", CallingConvention = CallingConvention.Cdecl)]
         public static extern void nativeSunSDRSetPA(int enabled);
 
+        [DllImport("ChannelMaster.dll", CallingConvention = CallingConvention.Cdecl)]
+        public static extern void nativeSunSDRSetRxWdspReady(int ready);
+
         [DllImport("ChannelMaster.dll", CharSet = CharSet.Ansi, CallingConvention = CallingConvention.Cdecl)]
         public static extern int nativeSunSDRGetVersionText(StringBuilder buffer, int maxlen);
 

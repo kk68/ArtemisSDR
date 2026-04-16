@@ -57,9 +57,7 @@ static void sunsdr_dbg_note_tx_packet(unsigned int seq);
 
 /* sunsdr_debug.log writer (sdr_logf path) and per-attempt IQ dumps.
  * Both disabled in production. Flip to 1 only when actively
- * diagnosing the TX/RX path; sunsdr.c will write to
- * <Thetis_exe_dir>/sunsdr_debug.log when SUNSDR_DEBUG_LOG_ENABLED=1
- * and append per-attempt IQ snapshots when SUNSDR_IQ_DUMP_ENABLED=1. */
+ * diagnosing the TX/RX path. */
 #define SUNSDR_DEBUG_LOG_ENABLED 0
 #define SUNSDR_IQ_DUMP_ENABLED 0
 
@@ -2710,10 +2708,15 @@ int SunSDRPowerOn(void)
     /* sdr.hKeepaliveThread = CreateThread(NULL, 0, SunSDRKeepaliveThread, NULL, 0, NULL); */
     sdr_logf("Keepalive thread DISABLED for testing\n");
 
-    /* Replay the existing info query and drain follow-on control replies. */
+    /* Replay the existing info query and drain follow-on control replies.
+     * Trimmed from 2000 to 200 ms: the original 2s was a reverse-engineering
+     * capture window, overkill in production. 200 ms is enough to catch
+     * the 0x1A firmware reply which arrives within ~50 ms; any later
+     * replies land during normal running and get handled by the read
+     * thread. Cuts ~1.8s off cold-start. */
     sunsdr_query_firmware_manager_version();
     sunsdr_probe_identity_query();
-    sunsdr_capture_control_window("post_probe", 2000);
+    sunsdr_capture_control_window("post_probe", 200);
 
     /* Start IQ read thread */
     sdr.hReadThread = CreateThread(NULL, 0, SunSDRReadThread, NULL, 0, NULL);
@@ -2764,6 +2767,9 @@ void SunSDRPowerOff(void)
     sdr.powered = 0;
     sdr.currentPTT = 0;
     InterlockedExchange(&sunsdr_tx_iq_enabled, 0);
+    /* Close the WDSP-ready gate on every PowerOff so the next Power-on
+     * gets a fresh gate that requires C# to re-flip after SetChannelState. */
+    InterlockedExchange(&sdr.rxWdspReady, 0);
     sdr.currentTune = 0;
     sdr.currentMode = -1;
     sdr.currentDriveRaw = -1;
@@ -2974,6 +2980,19 @@ void SunSDRSetDrive(int raw)
     if (sdr.powered) {
         sunsdr_send_u32_cmd(SUNSDR_OP_DRIVE, (unsigned int)wire_byte);
     }
+}
+
+/* C#-callable gate for the cold-start race. C# invokes this with 1
+ * right after WDSP.SetChannelState(RX1, 1, 1) completes in
+ * chkPower_CheckedChanged, which tells the SunSDR read thread it is
+ * safe to start dispatching IQ to xrouter. Until then, real-IQ and
+ * silence-injection xrouter calls are skipped (packets dropped,
+ * resampler continues so its state stays continuous). */
+void SunSDRSetRxWdspReady(int ready)
+{
+    int r = ready ? 1 : 0;
+    InterlockedExchange(&sdr.rxWdspReady, r);
+    sdr_logf("SunSDRSetRxWdspReady(%d)\n", r);
 }
 
 void SunSDRSetPA(int enabled)
@@ -3305,6 +3324,14 @@ DWORD WINAPI SunSDRReadThread(LPVOID param)
     int pkt_count = 0;
     int telemetry_count = 0;
     unsigned int last_tx_audio_packets = 0;
+
+    /* WDSP-ready gate — no Sleep, use sdr.rxWdspReady (checked below
+     * before xrouter() dispatch). C# flips it to 1 after
+     * WDSP.SetChannelState(RX1, 1, 1) completes. Until then, incoming
+     * IQ packets are DROPPED (not buffered), so there is no burst when
+     * the gate opens. Addresses the cold-start race where WDSP latched
+     * a default AM-wide-filter state if first IQ packets arrived before
+     * SetChannelState ran. */
     /* QPC-based pacing: sub-us resolution, immune to Windows scheduler-tick
      * granularity. Replaces GetTickCount64() which had ~16 ms resolution and
      * directly caused the observed fdGapMax=16.000 ms on every TUNE (Run 8).
@@ -3482,7 +3509,9 @@ DWORD WINAPI SunSDRReadThread(LPVOID param)
              * RX/VAC path is underfed. Keep a bounded cap to avoid a large burst
              * after a long scheduler delay, but leave headroom for jitter. */
             int emitted = 0;
-            while (rx_silence_accum >= 1.0 && emitted < 16) {
+            /* Same WDSP-ready gate as the real-IQ dispatch below. */
+            while (rx_silence_accum >= 1.0 && emitted < 16 &&
+                   InterlockedAnd(&sdr.rxWdspReady, 0xffffffff)) {
                 __try {
                     xrouter(NULL, 0, 0, rx_resample_outsize, rx_silence_buf);
                 } __except(EXCEPTION_EXECUTE_HANDLER) {
@@ -3793,7 +3822,11 @@ DWORD WINAPI SunSDRReadThread(LPVOID param)
                 source = pktbuf[9];
 
             int out_n = sunsdr_resample(source, sdr.rxBuf, SUNSDR_IQ_COMPLEX_PER_PKT);
-            if (out_n > 0) {
+            /* WDSP-ready gate: drop IQ dispatch until C# has configured
+             * the WDSP RX channel (see SunSDRSetRxWdspReady). Resampler
+             * is still fed above so its phase/prev state is continuous;
+             * we just skip xrouter. */
+            if (out_n > 0 && InterlockedAnd(&sdr.rxWdspReady, 0xffffffff)) {
                 __try {
                     xrouter(NULL, 0, source, out_n, resampler[source].out);
                     if (source == 0) {

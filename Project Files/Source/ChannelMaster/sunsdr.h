@@ -123,6 +123,12 @@ typedef struct _sunsdr_state
     int currentRxAntenna;
     int currentTxAntenna;
     int currentPAEnabled;
+    /* WDSP-ready gate. 0 at init, flipped to 1 by C# after
+     * WDSP.SetChannelState(RX1, 1, 1) completes in
+     * chkPower_CheckedChanged. SunSDRReadThread drops xrouter dispatch
+     * while this is 0, preventing the cold-start race where WDSP
+     * latches a default bad state from the first IQ packets. */
+    volatile LONG rxWdspReady;
     int currentTune;
     int currentDriveRaw;
     int lastTxWasTune;
@@ -174,6 +180,7 @@ void SunSDRSetDrive(int raw);
 void SunSDRSetAntenna(int antenna);
 void SunSDRSetTxAntenna(int antenna);
 void SunSDRSetPA(int enabled);
+void SunSDRSetRxWdspReady(int ready);
 int  SunSDRGetVersionText(char* buffer, int maxlen);
 int  SunSDRGetProtocolText(char* buffer, int maxlen);
 int  SunSDRGetSerialText(char* buffer, int maxlen);
