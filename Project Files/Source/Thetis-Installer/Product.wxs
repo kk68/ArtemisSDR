@@ -8,17 +8,17 @@
 <!-- 32-bit / 64-bit variables -->
 <?if $(var.Platform) = x64 ?>
 <?define Win64 = "yes" ?>
-<?define UpgradeCode = "DEC025E2-4B27-425D-8EFE-AD6F5F780D52"?>
-<?define ProductName = "Thetis (64-bit)" ?>
-<?define ThetisName = "Thetis-x64"?>
+<?define UpgradeCode = "A72E5C1F-8D4B-4A9E-B2D3-1F5C8A0E9B4D"?>
+<?define ProductName = "ArtemisSDR (64-bit)" ?>
+<?define ThetisName = "ArtemisSDR-x64"?>
 <?define VC145 = "Microsoft_VC145_CRT_x64.msm" ?>
 <?define PlatformProgramFilesFolder = "ProgramFiles64Folder" ?>
 <?define FilesPath = "..\..\Bin\$(var.Platform)\$(var.Configuration)\" ?>
 <?else ?>
 <?define Win64 = "no" ?>
-<?define UpgradeCode = "CE4756C9-3CA7-4A55-8980-7F0A920890DE"?>
-<?define ProductName = "Thetis (32-bit)" ?>
-<?define ThetisName = "Thetis"?>
+<?define UpgradeCode = "B83F6D20-9E5C-4B0F-C3E4-2F6D9B1E0C5F"?>
+<?define ProductName = "ArtemisSDR (32-bit)" ?>
+<?define ThetisName = "ArtemisSDR"?>
 <?define VC145 = "Microsoft_VC145_CRT_x86.msm" ?>
 <?define PlatformProgramFilesFolder = "ProgramFilesFolder" ?>
 <?define FilesPath = "..\..\Bin\$(var.Platform)\$(var.Configuration)\" ?>
@@ -61,7 +61,7 @@
 
     <WixVariable Id="WixUILicenseRtf" Value="GNU_GENERAL_PUBLIC_LICENSE.rtf" />
 
-    <Feature Id="ProductFeature" Title="Thetis" Level="1" ConfigurableDirectory="INSTALLFOLDER">
+    <Feature Id="ProductFeature" Title="ArtemisSDR" Level="1" ConfigurableDirectory="INSTALLFOLDER">
       <ComponentGroupRef Id="ProductComponents" />
       <ComponentRef Id="StartMenuShortcut" />
       <ComponentRef Id="DesktopShortcut" />
@@ -117,16 +117,12 @@
       <Merge Id="VC145Redist" SourceFile="$(var.VC145)" DiskId="1" Language="0"/>
 
       <Directory Id="$(var.PlatformProgramFilesFolder)">
-        <Directory Id="HPSDRFolder" Name="OpenHPSDR">
-          <Directory Id="INSTALLFOLDER" Name="Thetis">
-		  </Directory>
+        <Directory Id="INSTALLFOLDER" Name="ArtemisSDR">
         </Directory>
       </Directory>
 
       <Directory Id="ProgramMenuFolder">
-        <Directory Id="OpenHPSDRShortcutsDir" Name="OpenHPSDR">
-          <Directory Id="ShortcutsDir" Name="$(var.ThetisName)">           
-          </Directory>
+        <Directory Id="ShortcutsDir" Name="$(var.ThetisName)">
         </Directory>
       </Directory>
 
@@ -141,10 +137,10 @@
       <Component Id="DesktopShortcut" Guid="6A395378-66D6-4986-97C6-8CF9423A066C">       
         <Shortcut Id="ProgramDesktopShortcut"
                   Name="$(var.ThetisName)"
-                  Description="Run Thetis"
+                  Description="Run ArtemisSDR"
                   Target="[INSTALLFOLDER]Thetis.exe"
                   WorkingDirectory="INSTALLFOLDER" />
-        <RegistryValue Root="HKLM" Key="Software\OpenHPSDR\$(var.ThetisName)"
+        <RegistryValue Root="HKLM" Key="Software\ArtemisSDR\$(var.ThetisName)"
                 Name="desktopShortcut" Type="integer" Value="1" KeyPath="yes" />
       </Component>
     </DirectoryRef>
@@ -154,14 +150,14 @@
               
         <Shortcut Id="ThetisShortcut"
                   Name="$(var.ThetisName)"
-                  Description="Run Thetis"
+                  Description="Run ArtemisSDR"
                   Target="[INSTALLFOLDER]Thetis.exe"
                   WorkingDirectory="INSTALLFOLDER"
                   />
         <RemoveFolder Id="RemoveShortcutsDir" On="uninstall" />
-        
+
         <RegistryValue Root="HKLM"
-                     Key="SOFTWARE\OpenHPSDR\$(var.ThetisName)"
+                     Key="SOFTWARE\ArtemisSDR\$(var.ThetisName)"
                      Name="installed"
                      Type="integer"
                      Value="1"

@@ -1,8 +1,11 @@
-# Thetis-SunSDR
+# ArtemisSDR
 
 **Current release: Beta v1.0.1**
+*Dedicated to the Artemis II mission.*
 
-**A Thetis fork that speaks the SunSDR2 DX's native network protocol.** If you own a SunSDR2 DX and have been looking for a richer, more active alternative to ExpertSDR, this brings Thetis — with its full DSP stack, panadapter, filter set, NR/NB/notch toolkit, VAC routing, and everything else Thetis offers — directly to your radio. No ExpertSDR proxy, no bridge, no firmware changes.
+**An SDR host for the SunSDR2 DX — forked from Thetis.** If you own a SunSDR2 DX and have been looking for a richer, more active alternative to ExpertSDR, ArtemisSDR brings the full Thetis DSP stack — panadapter, filter set, NR/NB/notch toolkit, VAC routing, and everything else — directly to your radio. No ExpertSDR proxy, no bridge, no firmware changes.
+
+ArtemisSDR is maintained by Kosta Kanchev (K0KOZ). It is a fork of [Thetis](https://github.com/ramdor/Thetis) by Richard Samphire (MW0LGE), which itself descends from OpenHPSDR (Doug Wigley, W5WC) and PowerSDR (FlexRadio Systems). Specialized for the SunSDR2 DX and released under GPL v2.
 
 ---
 

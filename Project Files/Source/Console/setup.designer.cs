@@ -8513,19 +8513,6 @@
             this.comboRadioModel.Font = new System.Drawing.Font("Segoe UI", 9F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
             this.comboRadioModel.FormattingEnabled = true;
             this.comboRadioModel.Items.AddRange(new object[] {
-            "HERMES",
-            "ANAN-10",
-            "ANAN-10E",
-            "ANAN-100",
-            "ANAN-100B",
-            "ANAN-100D",
-            "ANAN-200D",
-            "ANAN-7000DLE",
-            "ANAN-8000DLE",
-            "ANAN-G2",
-            "ANAN-G2-1K",
-            "ANVELINA-PRO3",
-            "RED-PITAYA",
             "SUNSDR2-DX"});
             this.comboRadioModel.Location = new System.Drawing.Point(6, 19);
             this.comboRadioModel.Name = "comboRadioModel";

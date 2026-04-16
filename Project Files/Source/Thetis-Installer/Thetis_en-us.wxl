@@ -3,11 +3,11 @@
   <String Id="Language">1033</String>
   <!-- Supported language and codepage codes can be found here: http://www.tramontana.co.hu/wix/lesson2.php#2.4 -->
 
-  <String Id="ApplicationName">Thetis</String>
-  <String Id="ManufacturerName">OpenHPSDR</String>
-  <String Id="ManufacturerFullName">Doug Wigley, W5WC</String>
-  <String Id="ProductDescription">Software Defined Radio</String>
-  <String Id="Comments">Installs Thetis</String>
+  <String Id="ApplicationName">ArtemisSDR</String>
+  <String Id="ManufacturerName">Kosta Kanchev, K0KOZ</String>
+  <String Id="ManufacturerFullName">Kosta Kanchev, K0KOZ — ArtemisSDR. Derived from Thetis (Richard Samphire, MW0LGE), itself derived from OpenHPSDR (Doug Wigley, W5WC) and PowerSDR (FlexRadio Systems). Licensed under GPL v2.</String>
+  <String Id="ProductDescription">SDR host for the SunSDR2 DX — dedicated to the Artemis II mission</String>
+  <String Id="Comments">Installs ArtemisSDR</String>
 
   <String Id="LicenseRtf" Overridable="yes">Eula-en.rtf</String>
 
@@ -20,7 +20,7 @@
   <String Id="FeatureMainProgramDescription">The main version including all dependencies.</String>
   <String Id="FeatureMainProgramTitle">Main program</String>
 
-  <String Id="ServiceDisplayName">Thetis</String>
-  <String Id="ServiceDescription">Controls a Software Defined Radio</String>
+  <String Id="ServiceDisplayName">ArtemisSDR</String>
+  <String Id="ServiceDescription">Controls a SunSDR2 DX software-defined radio</String>
 
  </WixLocalization>

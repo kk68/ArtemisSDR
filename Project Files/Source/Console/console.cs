@@ -681,10 +681,10 @@ namespace Thetis
             {
                 if (Environment.Is64BitProcess)
                     app_data_path = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData)
-                    + "\\OpenHPSDR\\Thetis-x64\\";
+                    + "\\ArtemisSDR\\";
                 else
                     app_data_path = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData)
-                        + "\\OpenHPSDR\\Thetis\\";
+                        + "\\ArtemisSDR\\";
             }
 
 #if(DEBUG)
@@ -705,7 +705,7 @@ namespace Thetis
             _use_additional_sas = !Common.HasArg(args, "-nospec"); // prevent the use of additional spec analysers           
             _touch_support = Common.HasArg(args, "-touch"); // configure touch support for mouse down/up/move, used primarily by containers, and ucMeter
 
-            string splash_screen_folder = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData) + "\\OpenHPSDR\\SplashScreens";
+            string splash_screen_folder = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData) + "\\ArtemisSDR\\SplashScreens";
             if (!Directory.Exists(splash_screen_folder))
             {
                 try
