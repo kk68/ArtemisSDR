@@ -1,5 +1,7 @@
 # Thetis-SunSDR
 
+**Current release: Beta v1.0.1**
+
 **A Thetis fork that speaks the SunSDR2 DX's native network protocol.** If you own a SunSDR2 DX and have been looking for a richer, more active alternative to ExpertSDR, this brings Thetis — with its full DSP stack, panadapter, filter set, NR/NB/notch toolkit, VAC routing, and everything else Thetis offers — directly to your radio. No ExpertSDR proxy, no bridge, no firmware changes.
 
 ---
