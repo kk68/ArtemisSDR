@@ -90,21 +90,6 @@ Short version:
 3. Connect the radio, hit Power in Thetis, verify you're receiving.
 4. Dummy load, 25 W drive, LSB TUNE on 40 m → confirm ~25 W on an external wattmeter.
 
-## TX power calibration per band
-
-Each band has its own RF response curve. 40 m is calibrated in the fallback table; others may need a quick one-time sweep.
-
-1. Dummy load. Select the band.
-2. Mode = LSB (or AM — same underlying calibration).
-3. Drive slider at 5 / 10 / 15 / 20 / 30 / 40 / 50 / 60 / 70 / 80 / 90 / 100 W in turn, 3 seconds of TUNE per point.
-4. Record actual watts on the external meter at each point.
-5. Open `Setup → PA Settings → PA Gain`.
-6. Set the band's **PA Gain By Band** dB value to anything other than `100.0` (even `100.1`) — that tells Thetis to honor your per-drive offsets instead of the built-in fallback.
-7. In the **Offsets for `<band>`** column, enter `10 × log10(UI_watts / actual_watts)` dB at each drive-level row. Positive values increase power at that point, negative decrease it.
-8. Re-sweep to verify. Repeat once if needed.
-
-> The `Watt Meter` page only affects Thetis's on-screen meter, not RF output. And since the on-screen meter isn't wired to SunSDR telemetry yet, those numbers aren't meaningful today — rely on the external meter.
-
 ## Troubleshooting
 
 **Thetis doesn't see the radio.** Check that the radio's IP is reachable (`ping 10.0.3.50` from the host machine). Make sure no other ExpertSDR instance is running anywhere on the network — the radio's control port is exclusive.
