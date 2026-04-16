@@ -14874,15 +14874,29 @@ namespace Thetis
             // SUNSDR: PureSignal is not supported on this protocol. Force the
             // PS-A UI unchecked and the internal PS state to disabled whenever
             // the selected radio is SUNSDR2DX, so no PS-A code path can arm.
+            // 2-Tone test is part of the PS-A IMD calibration flow, so
+            // disable it too — on SunSDR it has no useful function without
+            // the matched feedback-loop sampling path.
+            // DUP button (chkRX2SR) is also inert on SunSDR — the radio's
+            // MOX path shuts down the RX LO during TX, so duplex receive
+            // cannot be supported structurally. See memory
+            // project_dup_behavior_sunsdr.md for the analysis.
             if (HardwareSpecific.Model == HPSDRModel.SUNSDR2DX)
             {
                 if (chkFWCATUBypass.Checked)
                     chkFWCATUBypass.Checked = false;
+                chkFWCATUBypass.Enabled = false;
                 if (psform != null)
                 {
                     psform.AutoCalEnabled = false;
                     psform.PSEnabled = false;
                 }
+                if (chk2TONE.Checked)
+                    chk2TONE.Checked = false;
+                chk2TONE.Enabled = false;
+                if (chkRX2SR.Checked)
+                    chkRX2SR.Checked = false;
+                chkRX2SR.Enabled = false;
             }
 
             cmaster.CMSetTXOutputLevelRun();
@@ -15307,7 +15321,7 @@ namespace Thetis
                     chkPower.Checked)
                     chkMOX.Enabled = !_rx_only;
                 chkTUN.Enabled = !_rx_only;
-                chk2TONE.Enabled = !_rx_only; // MW0LGE_21a
+                chk2TONE.Enabled = !_rx_only && HardwareSpecific.Model != HPSDRModel.SUNSDR2DX; // MW0LGE_21a — 2TONE is PS-A-only, not supported on SunSDR
                 chkVOX.Enabled = !_rx_only;
                 if (_rx_only && chkMOX.Checked)
                     chkMOX.Checked = false;
@@ -15338,7 +15352,7 @@ namespace Thetis
                     chkMOX.Enabled = !_tx_inhibit;
 
                 chkTUN.Enabled = !_tx_inhibit;
-                chk2TONE.Enabled = !_tx_inhibit; //MW0LGE_21a
+                chk2TONE.Enabled = !_tx_inhibit && HardwareSpecific.Model != HPSDRModel.SUNSDR2DX; //MW0LGE_21a — 2TONE is PS-A-only, not supported on SunSDR
                 chkVOX.Enabled = !_tx_inhibit;
 
                 if ((_rx1_dsp_mode == DSPMode.CWL ||
@@ -27425,7 +27439,7 @@ namespace Thetis
                 {
                     chkMOX.Enabled = true;
                     chkTUN.Enabled = true;
-                    chk2TONE.Enabled = true; //MW0LGE_21a
+                    chk2TONE.Enabled = HardwareSpecific.Model != HPSDRModel.SUNSDR2DX; //MW0LGE_21a — 2TONE is PS-A-only, not supported on SunSDR
                 }
                 chkVFOLock.Enabled = true;
                 chkVFOBLock.Enabled = true;
@@ -29151,6 +29165,36 @@ namespace Thetis
                     NetworkIO.nativeSunSDRSetMode((int)Audio.TXDSPMode);
                     if (!_tuning || !chkTUN.Checked)
                         NetworkIO.nativeSunSDRSetTune(0);
+
+                    // Tell NetworkIO the current SunSDR TUNE-in-SSB offset so
+                    // EVERY TX freq push (this one, Thetis's own refresh
+                    // ~230 ms later, VFO change during TX, etc.) is shifted
+                    // consistently. The actual shift is applied inside
+                    // NetworkIO.VFOfreq for all tx=1 writes.
+                    int sunsdr_tune_offset_hz = 0;
+                    if (chkTUN.Checked)
+                    {
+                        switch (Audio.TXDSPMode)
+                        {
+                            case DSPMode.LSB:
+                            case DSPMode.DIGL:
+                                sunsdr_tune_offset_hz = +cw_pitch;
+                                break;
+                            case DSPMode.USB:
+                            case DSPMode.DIGU:
+                                sunsdr_tune_offset_hz = -cw_pitch;
+                                break;
+                            // CW/AM/FM TUNE already lands at dial — no shift.
+                        }
+                    }
+                    NetworkIO.SunSDRTuneFreqOffsetHz = sunsdr_tune_offset_hz;
+
+                    // Force a fresh TX freq push so the shift takes effect
+                    // immediately at PTT-on (otherwise the radio would key
+                    // on the pre-offset freq from the most recent VFOfreq).
+                    double sunsdr_tx_dial_mhz = freq > 0.0 ? freq : TXFreq;
+                    NetworkIO.VFOfreq(0, sunsdr_tx_dial_mhz, 1);
+
                     NetworkIO.nativeSunSDRSetPTT(1);
                 }
 
@@ -29173,6 +29217,10 @@ namespace Thetis
                     if (!_tuning)
                         NetworkIO.nativeSunSDRSetTune(chkTUN.Checked ? 1 : 0);
                     NetworkIO.nativeSunSDRSetPTT(0);
+                    // Clear TUNE freq offset so the next voice TX starts
+                    // at the unshifted dial. (Re-applied at the next PTT-on
+                    // if TUNE is still engaged.)
+                    NetworkIO.SunSDRTuneFreqOffsetHz = 0;
                 }
 
                 if (m_bQSOTimerDuringMoxOnly && m_bQSOTimerRunning) QSOTimerRunning = false;
@@ -30179,7 +30227,21 @@ namespace Thetis
 
                     radio.GetDSPTX(0).TXPostGenMode = 0;
                     radio.GetDSPTX(0).TXPostGenToneMag = MAX_TONE_MAG;
-                    radio.GetDSPTX(0).TXPostGenRun = 1;
+                    // SunSDR + AM/FM: suppress the PostGen modulation tone
+                    // during TUNE so the AM modulator emits a pure carrier
+                    // at dial (classic AM-radio TUNE). With a tone, the AM
+                    // modulator produces carrier + sidebands at ±cw_pitch,
+                    // which a narrow-mode receiver sees as a spike offset
+                    // from the dial. Pure-carrier TUNE lands exactly on
+                    // dial with no sidebands. For FM, the equivalent clean
+                    // TUNE is unmodulated carrier at dial (no deviation).
+                    bool sunsdr_am_fm_tune =
+                        NetworkIO.CurrentRadioProtocol == RadioProtocol.SUNSDR &&
+                        (Audio.TXDSPMode == DSPMode.AM ||
+                         Audio.TXDSPMode == DSPMode.SAM ||
+                         Audio.TXDSPMode == DSPMode.DSB ||
+                         Audio.TXDSPMode == DSPMode.FM);
+                    radio.GetDSPTX(0).TXPostGenRun = sunsdr_am_fm_tune ? 0 : 1;
                 }
                 LogSunSDRTuneAudioState("TUNE_ON_POSTGEN_SET", -1);
 
@@ -47049,7 +47111,18 @@ namespace Thetis
             else
             {
                 if (chkTUN.Checked)
-                    radio.GetDSPTX(0).TXPostGenRun = 1;
+                {
+                    // Keep PostGen off for SunSDR AM/FM TUNE — pure carrier
+                    // at dial, no sidebands. (Same reasoning as chkTUN
+                    // engagement handler above.)
+                    bool sunsdr_am_fm_tune =
+                        NetworkIO.CurrentRadioProtocol == RadioProtocol.SUNSDR &&
+                        (Audio.TXDSPMode == DSPMode.AM ||
+                         Audio.TXDSPMode == DSPMode.SAM ||
+                         Audio.TXDSPMode == DSPMode.DSB ||
+                         Audio.TXDSPMode == DSPMode.FM);
+                    radio.GetDSPTX(0).TXPostGenRun = sunsdr_am_fm_tune ? 0 : 1;
+                }
                 Audio.RadioVolume = (double)Math.Min((target_volts / 0.8), 1.0);
             }
 

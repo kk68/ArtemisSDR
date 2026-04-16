@@ -1510,7 +1510,16 @@ static void sunsdr_build_tx_packet(unsigned char* buf, unsigned int seq, const d
         int Q = sunsdr_quantize24(iq[2 * i + 1]);
         int k = i * SUNSDR_IQ_BYTES_PER_IQ;
 
-        /* SunSDR wire order is Q first, then I (24-bit LE each). */
+        /* SunSDR wire order is Q first, then I (24-bit LE each).
+         * Symmetric with the RX unpack path — Q occupies bytes 0-2 of
+         * each 6-byte sample, I occupies bytes 3-5. An earlier attempt
+         * to swap this to I-first (commit 62c3f5e3) was a regression:
+         * it actually mirrored the sideband on-air (LSB became USB and
+         * vice versa). Standard LSB TUNE is supposed to place the tone
+         * cw_pitch Hz below the dial, which is what Q-first produces.
+         * The "tone off-frequency" complaint from a QSO partner is fixed
+         * by the separate TUNE-at-dial TX-freq shift in NetworkIO, not
+         * by touching the encoder byte order. */
         payload[k + 0] = (unsigned char)(Q & 0xFF);
         payload[k + 1] = (unsigned char)((Q >> 8) & 0xFF);
         payload[k + 2] = (unsigned char)((Q >> 16) & 0xFF);
