@@ -27452,6 +27452,16 @@ namespace Thetis
                 if (radio.GetDSPRX(0, 1).Active) WDSP.SetChannelState(WDSP.id(0, 1), 1, 1);
                 if (radio.GetDSPRX(1, 0).Active) WDSP.SetChannelState(WDSP.id(2, 0), 1, 1);
 
+                // WDSP RX channel is now armed — open the SunSDR read
+                // thread's xrouter-dispatch gate so buffered radio IQ
+                // flows through to the configured DSP. Before this
+                // call, the native read thread drops all IQ packets
+                // to prevent WDSP from latching a default bad state
+                // (cold-start race that was previously masked by log
+                // overhead; see sunsdr.c SunSDRSetRxWdspReady).
+                if (NetworkIO.CurrentRadioProtocol == RadioProtocol.SUNSDR)
+                    NetworkIO.nativeSunSDRSetRxWdspReady(1);
+
                 DataFlowing = true;
                 SetupForm.UpdateGeneraHardware();
                 SetMicGain();
@@ -45651,7 +45661,24 @@ namespace Thetis
                  * switch Thetis briefly emits stale old-band writes while it churns
                  * through the band-stack update. Replay the final settled SunSDR RX
                  * state here, after SetBand has completed, so the correct DDS state
-                 * wins and the native cache is refreshed for any later POWER cycle.
+                 * wins.
+                 *
+                 * EESDR3-matched lightweight band switch:
+                 *   wire capture of ExpertSDR3 40m -> 20m shows exactly 3 commands
+                 *   in 1 ms total: 0x09 (primary freq), 0x18 (keepalive), 0x08 (DDC
+                 *   companion). No antenna, no PA, no session teardown, no macro
+                 *   replay. The radio handles everything else internally.
+                 *
+                 * The previous implementation here also performed a full
+                 * chkPower off/on cycle (~900 ms delay plus the entire ~500 ms
+                 * power-on macro), which was a workaround for an earlier bug
+                 * where Thetis emitted stale old-band writes mid-change. The
+                 * VFOfreq replay below already handles that case correctly,
+                 * so the power cycle is no longer needed — and was the source
+                 * of the 3-4 s band-switch delay, the extra relay clicks
+                 * from replayed 0x15/0x24 commands, and the Bug 3 17m
+                 * saturation caused by the delayed refresh burst toggling
+                 * antenna/PA during stream resumption.
                  */
                 BeginInvoke(new MethodInvoker(() =>
                 {
@@ -45668,50 +45695,6 @@ namespace Thetis
                     if (RX2Enabled)
                         NetworkIO.VFOfreq(3, RX2DDSFreq, 0);
                 }));
-
-                if (!_sunSDRBandPowerRecyclePending && !MOX && !chkTUN.Checked)
-                {
-                    _sunSDRBandPowerRecyclePending = true;
-                    Band targetBand = newBand;
-
-                    Task.Run(async () =>
-                    {
-                        await Task.Delay(150).ConfigureAwait(false);
-
-                        if (IsDisposed)
-                            return;
-
-                        BeginInvoke(new MethodInvoker(() =>
-                        {
-                            if (IsDisposed)
-                                return;
-
-                            if (!chkPower.Checked || RX1Band != targetBand || MOX || chkTUN.Checked)
-                            {
-                                _sunSDRBandPowerRecyclePending = false;
-                                return;
-                            }
-
-                            chkPower.Checked = false;
-                        }));
-
-                        await Task.Delay(900).ConfigureAwait(false);
-
-                        if (IsDisposed)
-                            return;
-
-                        BeginInvoke(new MethodInvoker(() =>
-                        {
-                            if (IsDisposed)
-                                return;
-
-                            if (RX1Band == targetBand)
-                                chkPower.Checked = true;
-
-                            _sunSDRBandPowerRecyclePending = false;
-                        }));
-                    });
-                }
             }
         }
 

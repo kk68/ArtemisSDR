@@ -1591,6 +1591,11 @@ PORT void nativeSunSDRSetPA(int enabled)
     SunSDRSetPA(enabled);
 }
 
+PORT void nativeSunSDRSetRxWdspReady(int ready)
+{
+    SunSDRSetRxWdspReady(ready);
+}
+
 PORT int nativeSunSDRGetVersionText(char* buffer, int maxlen)
 {
     return SunSDRGetVersionText(buffer, maxlen);

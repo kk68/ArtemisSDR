@@ -105,6 +105,58 @@ AM/FM TUNE uses a different strategy: PostGen is suppressed so the modulator emi
 
 Implementation: `ChannelMaster/sunsdr.c` — `last_rx_pkt_tick` tracking + silence injection loop.
 
+## Cold-start race + band-switch over-init (2026-04-16 investigation)
+
+Two related bugs diagnosed through wire-capture diffs against EESDR3 and fixed by shortening Thetis's SunSDR startup and band-switch paths.
+
+### Symptoms
+
+- Cold-start (Thetis launch + Power on): ~10-20 % of launches came up with RX showing "wide / AM-shape signals" and robotic audio. Survived Thetis Power off/on cycles. Only full process restart recovered. Masked throughout development by `sdr_logf` overhead; surfaced when logging was disabled for production.
+- Band switch: 3-4 s delay, extra relay clicks, 17m specifically left RX saturated (fluorescent-magenta waterfall, ADC overload look).
+- Overall Thetis-SunSDR startup: 4-5 s, versus ~1 s for EESDR3-SunSDR and ~1 s for Thetis-Anan on the same hardware.
+
+### Ground truth (wire captures)
+
+Side-by-side diff of EESDR3 vs Thetis control-channel traffic on port 50001:
+
+| Scenario | EESDR3 | Thetis (before fix) |
+|---|---:|---:|
+| Power-on, main init | 32 cmds in 251 ms | 32 cmds in 505 ms |
+| Power-on, delayed refresh burst | none | 9 cmds at t ≈ 3 s (redundant antenna/PA/freq) |
+| Power-on, blocking wait in init | none | 2,000 ms (`sunsdr_capture_control_window`) |
+| Band switch (40 m → 20 m) | 3 cmds in 1 ms | 47 cmds in 3,859 ms (full macro replay) |
+
+EESDR3's band switch is `0x09` primary freq → `0x18` keepalive → `0x08` DDC. That's the entire protocol — no session teardown, no antenna/PA reassertion, radio handles the rest internally.
+
+### Root causes
+
+1. **Cold-start race**: `chkPower_CheckedChanged` in `console.cs` calls `Audio.Start()` at line 27280 (which starts the SunSDR IQ stream via `nativeInitMetis`), then runs ~170 lines of UI/state work before reaching `WDSP.SetChannelState(RX1, 1, 1)` at line 27451. If real IQ packets arrive in that window, WDSP latches a default bad RX state that persists until process exit.
+2. **Xrouter mis-wiring at cold start**: at DB restore, `HardwareSpecific.Model = SUNSDR2DX` is set silently without firing `comboRadioModel_SelectedIndexChanged` (the setup form's `initializing` flag suppresses it). That handler is the only caller of `CMLoadRouterAll`, so the router stays in its default/ETH wiring and SunSDR's IQ feeds the wrong WDSP inputs.
+3. **Band-switch replay**: `OnSetBandChangeHander` in `console.cs` performed a full `chkPower = false → 900 ms → chkPower = true` cycle on every band change, replaying the entire power-on macro including a 2.5-s delayed refresh burst. Each replay re-toggled RX antenna twice, TX antenna once, PA once — sources of relay clicks and the 17m ADC saturation.
+4. **Startup blocking wait**: `SunSDRInit` contained a hard-coded `sunsdr_capture_control_window("post_probe", 2000)` — a 2-second blocking drain of control-channel replies, leftover from the reverse-engineering capture work, useless in production.
+
+### Fixes
+
+1. **WDSP-ready gate**: added `sdr.rxWdspReady` (volatile LONG) to the state struct and an exported `SunSDRSetRxWdspReady(int)` setter wrapped as `nativeSunSDRSetRxWdspReady`. `SunSDRReadThread` skips xrouter dispatch (both real IQ and silence injection) while the flag is 0. C# calls `nativeSunSDRSetRxWdspReady(1)` immediately after `WDSP.SetChannelState(RX1, 1, 1)` completes. Flag is reset to 0 in `SunSDRPowerOff`. Packets during the race window are DROPPED, not buffered, so there is no burst-through-socket-queue artifact when the gate opens.
+2. **Router wired before stream**: `CurrentRadioProtocol = SUNSDR` and `cmaster.CMLoadRouterAll` now run inside the SUNSDR branch of `NetworkIO.InitRadio()` **before** `nativeInitMetis` starts the stream, so the first IQ packet hits a correctly-wired xrouter.
+3. **Band-switch auto-power-cycle removed**: the `chkPower` toggle block in `OnSetBandChangeHander` is gone. The VFOfreq replay immediately above it (antenna + mode + freq + RX2 freq refresh) is sufficient to match EESDR3's behavior.
+4. **Startup wait trimmed**: `sunsdr_capture_control_window` reduced from 2000 ms to 200 ms. 200 ms is enough to catch firmware-reply arrivals; any later replies are handled by the running read thread.
+
+### Result
+
+20 / 20 cold starts clean on the bench after fixes. Band switch ~5-20 ms (match EESDR3). Overall power-on dropped from ~4-5 s to ~1.2 s.
+
+Implementation: `NetworkIO.cs`, `NetworkIOImports.cs`, `console.cs`, `sunsdr.c`, `sunsdr.h`, `network.c`, `network.h`. Commit `d67caa64` on `feature/sunsdr2dx`.
+
+### Residual slowness — optional future work
+
+Two offenders remain that account for another ~200-250 ms but don't affect correctness:
+
+- **Synchronous ACK-wait per command**. Every `sunsdr_send_u32_cmd` blocks on `recv`. Pipelining the init macro (send all, receive in the background) closes the ~230 ms gap vs EESDR3.
+- **Delayed ~2.5 s UI refresh burst** post-init. `Alex.UpdateAlexAntSelection` cascade fires redundant antenna + PA + freq writes ~2.5 s after chkPower completes. Doesn't block anything — RX is already good — but produces a late cluster of relay clicks that EESDR3 doesn't make.
+
+Neither is a bug. Cold start is already matching EESDR3 within ~200 ms of wall-clock time.
+
 ## TX reliability (raspy / zero-RF) investigation
 
 Multi-round investigation in early development produced a set of structural fixes that now give 100 % reliable TX across consecutive attempts. Key discoveries in temporal order:
