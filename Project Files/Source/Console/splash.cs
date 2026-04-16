@@ -113,7 +113,6 @@ namespace Thetis
         public Splash()
 		{
             InitializeComponent();
-            ApplyDefaultSplashImage();
 			Common.DoubleBufferAll(this, true);
 			this.Opacity = .00;
 			timer1.Interval = TIMER_INTERVAL;
@@ -331,48 +330,6 @@ namespace Thetis
         private void setVersion(string version)
         {
 			lblVersion.Text = string.IsNullOrEmpty(version) ? "" : version.Left(16);
-        }
-
-        private void ApplyDefaultSplashImage()
-        {
-            string[] candidates =
-            {
-                Path.Combine(Application.StartupPath, "EElogo.jpg"),
-                Path.Combine(Application.StartupPath, "..", "EElogo.jpg"),
-                Path.Combine(Application.StartupPath, "..", "..", "EElogo.jpg"),
-                Path.Combine(Application.StartupPath, "..", "..", "..", "EElogo.jpg"),
-                Path.Combine(Application.StartupPath, "..", "..", "..", "..", "EElogo.jpg"),
-                Path.Combine(Application.StartupPath, "..", "..", "..", "..", "..", "EElogo.jpg")
-            };
-
-            foreach (string candidate in candidates)
-            {
-                try
-                {
-                    string fullPath = Path.GetFullPath(candidate);
-                    if (!File.Exists(fullPath)) continue;
-
-                    using (Image source = Image.FromFile(fullPath))
-                    {
-                        Bitmap bmp = new Bitmap(400, 320);
-                        using (Graphics g = Graphics.FromImage(bmp))
-                        {
-                            g.Clear(Color.Black);
-                            g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
-                            g.DrawImage(source, 0, 0, 400, 320);
-                        }
-
-                        Image old = this.BackgroundImage;
-                        this.BackgroundImage = bmp;
-                        if (old != null && !object.ReferenceEquals(old, Properties.Resources.thetis_logo2))
-                            old.Dispose();
-                    }
-                    return;
-                }
-                catch
-                {
-                }
-            }
         }
 
         private void setBackground(string splash_screen_folder)
