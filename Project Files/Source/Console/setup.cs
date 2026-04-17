@@ -270,8 +270,8 @@ namespace Thetis
 
             sTip =
             "In/Out pairs can be chosen when the device is NOT active." + System.Environment.NewLine +
-            "If active, disable the device, restart Thetis, then make your choice and" + System.Environment.NewLine +
-            "restart Thetis for it to take effect." + System.Environment.NewLine +
+            "If active, disable the device, restart ArtemisSDR, then make your choice and" + System.Environment.NewLine +
+            "restart ArtemisSDR for it to take effect." + System.Environment.NewLine +
             "Default is normally ch1+2 for In/Out";
             toolTip1.SetToolTip(pbCMasio_InOut_Info, sTip);
 
@@ -1788,7 +1788,7 @@ namespace Thetis
                 string val = a["comboRadioModel"];
                 if (!comboRadioModel.Items.Contains(val))
                 {
-                    DialogResult dr = MessageBox.Show($"The radio model stored in the database is not known by this version of Thetis [{val}]. \n\nAre you using the correct version ? It will be reset back to HERMES.",
+                    DialogResult dr = MessageBox.Show($"The radio model stored in the database is not known by this version of ArtemisSDR [{val}]. \n\nAre you using the correct version ? It will be reset back to HERMES.",
                     "Model version issue",
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Information, MessageBoxDefaultButton.Button1, Common.MB_TOPMOST);
@@ -2013,7 +2013,7 @@ namespace Thetis
 
                 if (!MeterManager.RestoreSettings(ref a)) // pass this dictionary of settings to the meter manager to restore from
                 {
-                    MessageBox.Show("There was an issue restoring the settings for MultiMeter. Please remove all meters, re-add, and restart Thetis.", "MultiMeter RestoreSettings",
+                    MessageBox.Show("There was an issue restoring the settings for MultiMeter. Please remove all meters, re-add, and restart ArtemisSDR.", "MultiMeter RestoreSettings",
                         MessageBoxButtons.OK, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button1, Common.MB_TOPMOST);
                 }
             }
@@ -24691,6 +24691,8 @@ namespace Thetis
             {
                 MeterType mt = (MeterType)n;
 
+                if (mt == MeterType.DISCORD_BUTTONS) continue;
+
                 if (m.HasMeterType(mt))
                 {
                     List<int> orders = m.GetOrderForMeterType(mt); // can be muliple orders
@@ -27798,7 +27800,7 @@ namespace Thetis
                 picSkinThumbnail.Image = null;
 
             lblSkinVersion.Text = "Version: " + validateVersion(ts.SkinVersion);
-            lblSkinThetisVersion.Text = "Min Thetis Version: " + validateVersion(ts.FromThetisVersion);
+            lblSkinThetisVersion.Text = "Min ArtemisSDR Version: " + validateVersion(ts.FromThetisVersion);
             lblSkinDateReleased.Text = "Release Date: " + validateDate(ts.DateReleased).Left(14);
             lblSkinOverview.Text = ts.SkinName + Environment.NewLine + ts.Overview.Left(1024);
             lblSkinMeters.Text = "Type: " + (ts.IsMeterSkin ? "MultiMeter Skin" : "Console Skin");
@@ -34097,7 +34099,7 @@ namespace Thetis
                 return;
             }
             // ask user
-            DialogResult dr = MessageBox.Show("This test will change lots of settings, modes, band, resolution, sample rates, etc etc, to maintain consistancy between tests.\n\nPlease use a FRESH database using the DB manager for this test, with just radio model, region and connection details changed. You should be able to connect and power on/off using Thetis. Failure to do so may result in unexpected changes to configuration. No transmissions will be made.\n\nDo you want to perform this test?",
+            DialogResult dr = MessageBox.Show("This test will change lots of settings, modes, band, resolution, sample rates, etc etc, to maintain consistancy between tests.\n\nPlease use a FRESH database using the DB manager for this test, with just radio model, region and connection details changed. You should be able to connect and power on/off using ArtemisSDR. Failure to do so may result in unexpected changes to configuration. No transmissions will be made.\n\nDo you want to perform this test?",
                 "FPS Profile Test",
                 MessageBoxButtons.OKCancel,
                 MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2, Common.MB_TOPMOST);
@@ -36392,7 +36394,7 @@ namespace Thetis
             if (string.IsNullOrEmpty(txtRecording_customFolder.Text))
             {
                 txtRecording_customFolder.TextChanged -= txtRecording_customFolder_TextChanged;
-                txtRecording_customFolder.Text = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyMusic), "Thetis");
+                txtRecording_customFolder.Text = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyMusic), "ArtemisSDR");
                 txtRecording_customFolder.TextChanged += txtRecording_customFolder_TextChanged;
             }
 

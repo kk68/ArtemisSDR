@@ -2515,7 +2515,7 @@ namespace Thetis
 			if (m_server != null && m_server.EmulateExpertSDR3Protocol)
 				sProtocol = "ExpertSDR3";
             else
-				sProtocol = "Thetis";
+				sProtocol = "ArtemisSDR";
 
 			sendTextFrame("protocol:" + sProtocol + ",2.0;");
 
@@ -3057,7 +3057,7 @@ namespace Thetis
 			}
 			else if(opcode == EOpcodeType.Ping)
             {
-				sendPongFrame("Thetis");
+				sendPongFrame("ArtemisSDR");
             }
 			else if(opcode == EOpcodeType.Binary)
             {
@@ -6000,7 +6000,7 @@ namespace Thetis
 
 		private void PingFrameTimer(object o)
 		{
-			sendPingFrame("Thetis");
+			sendPingFrame("ArtemisSDR");
 		}
 
         private void VFOcallback(Object o)

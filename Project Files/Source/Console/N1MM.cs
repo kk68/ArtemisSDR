@@ -343,7 +343,7 @@ namespace Thetis
                     XmlElement name = doc.CreateElement("Name");
                     if(string.IsNullOrEmpty(rsd.ID))
                     {
-                        name.InnerText = "Thetis_" + (nn + 1).ToString();
+                        name.InnerText = "ArtemisSDR_" + (nn + 1).ToString();
                     }
                     else
                     {

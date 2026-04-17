@@ -606,7 +606,7 @@ namespace Thetis
             this.Opacity = 0f; // FadeIn below. Note: console form has 0% set in form designer
 
             LogTool.ShowNewLog(this.Handle);
-            LogTool.AddLogEntry("Thetis is loading...", "THET", false);
+            LogTool.AddLogEntry("ArtemisSDR is loading...", "THET", false);
 
             Display.specready = false;
             bool bShowReleaseNotes = false;
@@ -884,9 +884,9 @@ namespace Thetis
             {
                 if (ex.Message.Contains("does not belong to table", StringComparison.InvariantCultureIgnoreCase))
                 {
-                    string msg = "The database is incorrectly configured for this version of Thetis.\n\n" +
+                    string msg = "The database is incorrectly configured for this version of ArtemisSDR.\n\n" +
                         "This is most likely because the database has not yet been updated.\n\n" +
-                        "Try holding left CTRL as you start up Thetis,\n" +
+                        "Try holding left CTRL as you start up ArtemisSDR,\n" +
                         "and keep it held until you see a message.";
                     MessageBox.Show(msg, "Database Error",
                         MessageBoxButtons.OK, MessageBoxIcon.Error, MessageBoxDefaultButton.Button1, Common.MB_TOPMOST);
@@ -1335,8 +1335,9 @@ namespace Thetis
                 if (new_szie != _error_log_initial_size)
                 {
                     //log file has changed
-                    MessageBox.Show("The ErrorLog.txt has been updated during this sesson.\n\n" +
-                    "Please email it to MW0LGE at : [mw0lge@grange-lane.co.uk].\n\n" +
+                    MessageBox.Show("The ErrorLog.txt has been updated during this session.\n\n" +
+                    "Please email it to Kosta (K0KOZ) at : [K0KOZ@philibe.com]\n" +
+                    "or open an issue at: https://github.com/kk68/ArtemisSDR/issues\n\n" +
                     "It is located in this folder : [" + AppDataPath + "].",
                     "Error Log Change",
                     MessageBoxButtons.OK,
@@ -1376,7 +1377,7 @@ namespace Thetis
 
             if (bOk)
             {
-                string s = "\n\nThetis v" + Common.GetVerNum(true, false) + " command line help :\n\n";
+                string s = "\n\nArtemisSDR v" + Common.GetVerNum(true, false) + " command line help :\n\n";
 
                 s += "  -help   this help\n\n";
                 s += "  -autostart         attempt to power on radio at start up\n";
@@ -1532,10 +1533,10 @@ namespace Thetis
             if (string.IsNullOrEmpty(app_data_path))
             {
                 app_data_path = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData)
-                    + "\\OpenHPSDR\\Thetis\\";
+                    + "\\ArtemisSDR\\";
                 if (Environment.Is64BitProcess)
                     app_data_path = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData)
-                    + "\\OpenHPSDR\\Thetis-x64\\";
+                    + "\\ArtemisSDR\\";
 
 #if(DEBUG)
                 app_data_path += "Debug\\";
@@ -1582,9 +1583,9 @@ namespace Thetis
                 // could not find exception for column not found //MW0LGE_21k9rc6
                 if (ex.Message.Contains("does not belong to table", StringComparison.InvariantCultureIgnoreCase))
                 {
-                    string msg = "The database is incorrectly configured for this version of Thetis.\n\n" +
+                    string msg = "The database is incorrectly configured for this version of ArtemisSDR.\n\n" +
                         "This is most likely because the database has not yet been updated.\n\n" +
-                        "Try holding left CTRL as you start up Thetis,\n" +
+                        "Try holding left CTRL as you start up ArtemisSDR,\n" +
                         "and keep it held until you see a message.";
                     MessageBox.Show(msg, "Database Error",
                         MessageBoxButtons.OK, MessageBoxIcon.Error, MessageBoxDefaultButton.Button1, Common.MB_TOPMOST);
@@ -3997,7 +3998,7 @@ namespace Thetis
                         }
                         else
                         {
-                            DialogResult dr = MessageBox.Show($"The version of hardware stored in the database is not known by this version of Thetis [{hw.ToString()}]. Are you using the correct version ?",
+                            DialogResult dr = MessageBox.Show($"The version of hardware stored in the database is not known by this version of ArtemisSDR [{hw.ToString()}]. Are you using the correct version ?",
                             "Hardware version issue",
                             MessageBoxButtons.OK,
                             MessageBoxIcon.Information, MessageBoxDefaultButton.Button1, Common.MB_TOPMOST);
@@ -21359,7 +21360,7 @@ namespace Thetis
 
             if (_check_for_bad_adc && adc_oload_num == -1)
             {
-                MessageBox.Show("There has been an issue obtaining the ADC overload state. This will not be performed until the power is turned off/on inside Thetis.",
+                MessageBox.Show("There has been an issue obtaining the ADC overload state. This will not be performed until the power is turned off/on inside ArtemisSDR.",
                     "ADC Overload Issue",
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Error, MessageBoxDefaultButton.Button1, Common.MB_TOPMOST);
@@ -48872,6 +48873,12 @@ namespace Thetis
                     sProto = "2";
                     sSupportedProtocol = NetworkIO.Protocol2VersionSupported.ToString("0\\.0");
                 }
+                else if (NetworkIO.CurrentRadioProtocol == RadioProtocol.SUNSDR)
+                {
+                    sFW = NetworkIO.GetSunSDRVersionText();
+                    sProto = NetworkIO.GetSunSDRProtocolText();
+                    sSupportedProtocol = "";
+                }
                 else
                 {
                     sFW = NetworkIO.FWCodeVersion.ToString("0\\.0");
@@ -51538,7 +51545,7 @@ namespace Thetis
                 if (Common.AltlKeyDown && Common.ShiftKeyDown && Common.CtrlKeyDown)
                 {
                     DialogResult dr = MessageBox.Show("CTRL+ALT+SHIFT key combo has been detected.\n\n" +
-                    "The location of the main Thetis console window and Setup will be moved to the primary monitor.\n\n" +
+                    "The location of the main ArtemisSDR console window and Setup will be moved to the primary monitor.\n\n" +
                     "If other forms are 'missing' you can use Setup->Tools->[Reposition Forms] to recover them.\n\n\n" +
                     "Do you want to do this?\n\n\n" +
                     "NOTE: release the keys",

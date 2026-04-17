@@ -1124,7 +1124,7 @@ namespace Thetis
                         if (!resizeDX2D(out string err))
                         {
                             ShutdownDX2D();
-                            MessageBox.Show("Unable to resize DirectX render target (Target). DirectX has been shut down.\n\n" + err, "Thetis DirectX", MessageBoxButtons.OK, MessageBoxIcon.Error, MessageBoxDefaultButton.Button1, Common.MB_TOPMOST);
+                            MessageBox.Show("Unable to resize DirectX render target (Target). DirectX has been shut down.\n\n" + err, "ArtemisSDR DirectX", MessageBoxButtons.OK, MessageBoxIcon.Error, MessageBoxDefaultButton.Button1, Common.MB_TOPMOST);
                             return;
                         }
 
@@ -3298,7 +3298,7 @@ namespace Thetis
                 }
                 catch (Exception e)
                 {
-                    MessageBox.Show("Problem Shutting Down DirectX !" + System.Environment.NewLine + System.Environment.NewLine + "[" + e.ToString() + "]", "Thetis DirectX", MessageBoxButtons.OK, MessageBoxIcon.Exclamation, MessageBoxDefaultButton.Button1, Common.MB_TOPMOST);
+                    MessageBox.Show("Problem Shutting Down DirectX !" + System.Environment.NewLine + System.Environment.NewLine + "[" + e.ToString() + "]", "ArtemisSDR DirectX", MessageBoxButtons.OK, MessageBoxIcon.Exclamation, MessageBoxDefaultButton.Button1, Common.MB_TOPMOST);
                 }
             }
         }
@@ -3602,7 +3602,7 @@ namespace Thetis
                 {
                     // issue setting up dx
                     ShutdownDX2D();
-                    MessageBox.Show("Problem initialising DirectX !" + System.Environment.NewLine + System.Environment.NewLine + "[" + e.ToString() + "]", "Thetis DirectX", MessageBoxButtons.OK, MessageBoxIcon.Exclamation, MessageBoxDefaultButton.Button1, Common.MB_TOPMOST);
+                    MessageBox.Show("Problem initialising DirectX !" + System.Environment.NewLine + System.Environment.NewLine + "[" + e.ToString() + "]", "ArtemisSDR DirectX", MessageBoxButtons.OK, MessageBoxIcon.Exclamation, MessageBoxDefaultButton.Button1, Common.MB_TOPMOST);
                 }
             }
         }
@@ -3648,7 +3648,7 @@ namespace Thetis
                     if (!resizeDX2D(out string err))
                     {
                         ShutdownDX2D();
-                        MessageBox.Show("Unable to resize DirectX render target (ResetDX2DModeDescription). DirectX has been shut down.\n\n" + err, "Thetis DirectX", MessageBoxButtons.OK, MessageBoxIcon.Error, MessageBoxDefaultButton.Button1, Common.MB_TOPMOST);
+                        MessageBox.Show("Unable to resize DirectX render target (ResetDX2DModeDescription). DirectX has been shut down.\n\n" + err, "ArtemisSDR DirectX", MessageBoxButtons.OK, MessageBoxIcon.Error, MessageBoxDefaultButton.Button1, Common.MB_TOPMOST);
                         return;
                     }
 
@@ -3711,7 +3711,7 @@ namespace Thetis
                 //    msg += "\n\nDeviceRemoved or DeviceReset reported by DirectX, this indicates a problem with the graphics device or its driver.\n\nRemoval Code : " + _device.DeviceRemovedReason.Code.ToString();
                 //}
                 //ShutdownDX2D();
-                //MessageBox.Show(msg, "Thetis DirectX", MessageBoxButtons.OK, MessageBoxIcon.Error, MessageBoxDefaultButton.Button1, Common.MB_TOPMOST);
+                //MessageBox.Show(msg, "ArtemisSDR DirectX", MessageBoxButtons.OK, MessageBoxIcon.Error, MessageBoxDefaultButton.Button1, Common.MB_TOPMOST);
 
                 error = e.Message;
                 error += "\n\nDeviceRemovedReason : " + _device.DeviceRemovedReason.ToString();
@@ -4290,7 +4290,7 @@ namespace Thetis
             catch (Exception e)
             {
                 ShutdownDX2D();
-                MessageBox.Show("Problem in DirectX Renderer !" + System.Environment.NewLine + System.Environment.NewLine + "[ " + e.ToString() + " ]", "Thetis DirectX", MessageBoxButtons.OK, MessageBoxIcon.Exclamation, MessageBoxDefaultButton.Button1, Common.MB_TOPMOST);
+                MessageBox.Show("Problem in DirectX Renderer !" + System.Environment.NewLine + System.Environment.NewLine + "[ " + e.ToString() + " ]", "ArtemisSDR DirectX", MessageBoxButtons.OK, MessageBoxIcon.Exclamation, MessageBoxDefaultButton.Button1, Common.MB_TOPMOST);
             }
         }
         private static readonly List<int> _fps_profile_data = new List<int>();

@@ -109,7 +109,7 @@ namespace Thetis
                 if (File.GetLastWriteTime(filePath) < DateTime.Now.AddMonths(-3))
                 {
                     // at least 3 months old
-                    DialogResult result = MessageBox.Show("The fft wisdom file is older than 3 months.\n\nIt can yeild performance improvements if rebuilt, especially if the Thetis version/install has changed.\n\nThis process can take upwards of 5 minutes or more depending upon your system.\n\nYou will be notified when complete. Do you want to rebuild it?\n\nnote: you will not be asked again for another 3 months", "Wisdom File", MessageBoxButtons.YesNo, MessageBoxIcon.Question, MessageBoxDefaultButton.Button2, Common.MB_TOPMOST);
+                    DialogResult result = MessageBox.Show("The fft wisdom file is older than 3 months.\n\nIt can yeild performance improvements if rebuilt, especially if the ArtemisSDR version/install has changed.\n\nThis process can take upwards of 5 minutes or more depending upon your system.\n\nYou will be notified when complete. Do you want to rebuild it?\n\nnote: you will not be asked again for another 3 months", "Wisdom File", MessageBoxButtons.YesNo, MessageBoxIcon.Question, MessageBoxDefaultButton.Button2, Common.MB_TOPMOST);
                     if (result == DialogResult.No)
                     {
                         // touch it

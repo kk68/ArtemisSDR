@@ -15,6 +15,8 @@ This project is **not affiliated with, endorsed by, sponsored by, or otherwise c
 
 The implementation is the product of independent, clean-room reverse engineering — passive observation of UDP traffic between a genuine ExpertSDR instance and an owned radio. **No ExpertSDR code, binaries, firmware, artwork, or other Expert Electronics intellectual property is used.** The radio's firmware is not modified in any way; this is purely a host-side client that speaks the same wire protocol ExpertSDR does.
 
+ArtemisSDR is **not affiliated with, endorsed by, or otherwise connected to NASA or the Artemis program.** The Artemis II reference is a personal dedication by the author honoring the mission; no NASA affiliation is implied or claimed.
+
 Distributed free of charge under the GNU General Public License v2 for the amateur radio community.
 
 ---
@@ -120,10 +122,10 @@ Source-only distribution for now. Build locally with Visual Studio 2022.
 **Steps**
 
 1. Clone this repository.
-2. Open `Project Files/Source/Thetis_VS2026.sln`.
+2. Open `Project Files/Source/ArtemisSDR.sln`.
 3. Configuration: **Debug | x64** (Release | x64 also builds).
 4. Build → Rebuild Solution.
-5. Run the resulting `Thetis.exe`.
+5. Run the resulting `ArtemisSDR.exe`.
 
 ## For contributors
 
@@ -140,6 +142,13 @@ Contributions welcome: bug fixes, per-band calibration data, UI polish, completi
 This fork inherits the **GNU General Public License, version 2** from upstream Thetis. See [LICENSE](LICENSE) for full terms. All source code must remain under GPL v2; any redistributed modifications must also be under GPL v2 and must provide full source.
 
 The SunSDR native protocol implementation (`sunsdr.c`, `sunsdr.h`) is original work and is licensed the same way. It is derived from independent clean-room reverse engineering of owned hardware — no Expert Electronics code, binaries, firmware, or other intellectual property was used.
+
+**Dual-licensing statements** — both present in the repo:
+
+- [LICENSE-DUAL-LICENSING](LICENSE-DUAL-LICENSING) — Richard Samphire (MW0LGE) reserves the right to also offer his own Thetis contributions under different licensing terms, in addition to GPL v2.
+- [LICENSE-DUAL-LICENSING-K0KOZ](LICENSE-DUAL-LICENSING-K0KOZ) — Kosta Kanchev (K0KOZ) makes the corresponding reservation for his own original ArtemisSDR contributions (SunSDR2 DX native protocol, rebrand, integration work), also in addition to GPL v2.
+
+Neither dual-licensing statement restricts anyone's rights under GPL v2. ArtemisSDR in this repository is and will remain freely distributable under GPL v2.
 
 ## Acknowledgments
 

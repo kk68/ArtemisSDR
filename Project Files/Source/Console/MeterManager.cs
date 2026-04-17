@@ -6130,7 +6130,7 @@ namespace Thetis
                     lock (_metersLock)
                     {
                         data.Add("FileVersion", "1");
-                        data.Add("ThetisVersion", _console != null ? _console.BasicTitleBar : "unknown");
+                        data.Add("ArtemisSDRVersion", _console != null ? _console.BasicTitleBar : "unknown");
                         data.Add("CustomTitle", _console != null && !_console.IsSetupFormNull ? _console.SetupForm.CustomTitle : "empty");
                         data.Add("DiscordCallsign", _console != null && !_console.IsSetupFormNull ? _console.SetupForm.DiscordCallsign : "empty");
                         data.Add("TCIOwnCallsign", _console != null && !_console.IsSetupFormNull ? _console.SetupForm.TCIOwnCallsign : "empty");
@@ -12240,7 +12240,7 @@ namespace Thetis
                         }
                         break;
                     case 9:
-                        sendMsg("Is running Thetis v" + Common.GetVerNum(true, true));
+                        sendMsg("Is running ArtemisSDR v" + Common.GetVerNum(true, true));
                         break;
                     case 10:
                         sendMsg("Is starting a net on : " + formatNumber(tx_freq) + " MHz");
@@ -30618,7 +30618,7 @@ namespace Thetis
                                     if (!resizeDX(out string err))
                                     {
                                         ShutdownDX();
-                                        MessageBox.Show("Unable to resize DirectX render target (target size changed). DirectX has been shut down.\n\n" + err, "Thetis DirectX", MessageBoxButtons.OK, MessageBoxIcon.Error, MessageBoxDefaultButton.Button1, Common.MB_TOPMOST);
+                                        MessageBox.Show("Unable to resize DirectX render target (target size changed). DirectX has been shut down.\n\n" + err, "ArtemisSDR DirectX", MessageBoxButtons.OK, MessageBoxIcon.Error, MessageBoxDefaultButton.Button1, Common.MB_TOPMOST);
                                         break;
                                     }
                                 }

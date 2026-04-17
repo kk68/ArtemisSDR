@@ -129,28 +129,16 @@
             this.lstLinks.FormattingEnabled = true;
             this.lstLinks.ItemHeight = 16;
             this.lstLinks.Items.AddRange(new object[] {
-            "Thetis Releases on GitHub",
-            "Join Thetis Discord Server",
-            "Apache Labs Community Forums",
-            "Apache Labs Home Page",
-            "Protocol1 Programmers on GitHub",
-            "Protocol2 Programmers on GitHub",
-            "Firmware Discussions (all)",
-            "Protocol1 Firmware (7000/8000)",
-            "Protocol2 Firmware (7000/8000) RF fix",
-            "G2 Firmware & Software \"p2app\"",
-            "Thetis for Hermes Lite 2 on GitHub",
+            "ArtemisSDR Releases on GitHub",
             "WDSP Documentation on GitHub",
             "OE3IDE\'s (Ernst) Connectors & Tools",
             "---MANUALS---",
-            "Thetis",
+            "Thetis (inherited manual)",
             "Cat Command Reference",
-            "PureSignal",
             "Midi",
             "cmASIO",
             "Behringer",
-            "APF Types",
-            "Network Settings"});
+            "APF Types"});
             this.lstLinks.Location = new System.Drawing.Point(345, 108);
             this.lstLinks.Name = "lstLinks";
             this.lstLinks.Size = new System.Drawing.Size(267, 130);
@@ -303,7 +291,7 @@
             this.labelTS1.Name = "labelTS1";
             this.labelTS1.Size = new System.Drawing.Size(126, 42);
             this.labelTS1.TabIndex = 1;
-            this.labelTS1.Text = "Thetis";
+            this.labelTS1.Text = "ArtemisSDR";
             // 
             // frmAbout
             // 
@@ -331,7 +319,7 @@
             this.MinimizeBox = false;
             this.Name = "frmAbout";
             this.StartPosition = System.Windows.Forms.FormStartPosition.CenterParent;
-            this.Text = "About Thetis";
+            this.Text = "About ArtemisSDR";
             this.ResumeLayout(false);
             this.PerformLayout();
 

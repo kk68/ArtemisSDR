@@ -40,7 +40,7 @@
             this.labelTS1.Name = "labelTS1";
             this.labelTS1.Size = new System.Drawing.Size(344, 24);
             this.labelTS1.TabIndex = 0;
-            this.labelTS1.Text = "Please wait... Thetis closing down...";
+            this.labelTS1.Text = "Please wait... ArtemisSDR closing down...";
             // 
             // ShutdownForm
             // 

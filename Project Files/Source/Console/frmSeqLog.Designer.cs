@@ -156,7 +156,7 @@
             this.chkClearRingBufferFolderOnRestart.Name = "chkClearRingBufferFolderOnRestart";
             this.chkClearRingBufferFolderOnRestart.Size = new System.Drawing.Size(211, 17);
             this.chkClearRingBufferFolderOnRestart.TabIndex = 4;
-            this.chkClearRingBufferFolderOnRestart.Text = "Clear DumpCap folder on Thetis startup";
+            this.chkClearRingBufferFolderOnRestart.Text = "Clear DumpCap folder on ArtemisSDR startup";
             this.chkClearRingBufferFolderOnRestart.UseVisualStyleBackColor = true;
             this.chkClearRingBufferFolderOnRestart.CheckedChanged += new System.EventHandler(this.chkClearRingBufferFolderOnRestart_CheckedChanged);
             // 

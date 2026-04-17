@@ -71,7 +71,7 @@ namespace Thetis
         //SOFTWARE\\OpenHPSDR\\Thetis-x64
         //ASIOdrivername
         //ASIOblocknum
-        private const string _registry_path = @"SOFTWARE\OpenHPSDR\Thetis-x64";
+        private const string _registry_path = @"SOFTWARE\ArtemisSDR";
 
         private static RegistryKey openRegistryKey()
         {

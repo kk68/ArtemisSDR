@@ -1,13 +1,13 @@
-# Start Here: SunSDR2 DX Setup In Thetis
+# Start Here: SunSDR2 DX Setup In ArtemisSDR
 
-This guide is the shortest reliable path to get a SunSDR2 DX working in this Thetis fork.
+This guide is the shortest reliable path to get a SunSDR2 DX working in this ArtemisSDR fork.
 
 ## Before You Start
 
 You need:
 
 - a working SunSDR2 DX on the network
-- Thetis built from this SunSDR-enabled fork
+- ArtemisSDR built from this SunSDR-enabled fork
 - a Windows audio path you intend to use
   - ASIO if available
   - or VAC if you prefer that workflow
@@ -17,19 +17,19 @@ Recommended:
 - put the PC and the radio on the same local subnet
 - use wired Ethernet while bringing the radio up the first time
 
-## 1. Start Thetis
+## 1. Start ArtemisSDR
 
-Launch Thetis and open:
+Launch ArtemisSDR and open:
 
 - `Setup`
 
 ## 2. Select The Radio Model
 
-In Thetis, set the hardware model to:
+In ArtemisSDR, set the hardware model to:
 
 - `SunSDR2DX`
 
-If Thetis was previously configured for another radio, close and reopen it after changing the model.
+If ArtemisSDR was previously configured for another radio, close and reopen it after changing the model.
 
 ## 3. Open The Hardware Network Page
 
@@ -67,7 +67,7 @@ The title bar should also show the same live radio identity.
 
 ## 5. Power The Radio On
 
-Use the normal Thetis `Power` control.
+Use the normal ArtemisSDR `Power` control.
 
 On a good connection:
 
@@ -110,11 +110,11 @@ Minimum working setup:
 2. Set `Transmit Pin Action` to `Mox/Tune/2Tone`
 3. Apply the change
 
-After that, the `xPA` button should appear in the main Thetis UI.
+After that, the `xPA` button should appear in the main ArtemisSDR UI.
 
 What it means:
 
-- `xPA` is the Thetis UI gate for external/PA control
+- `xPA` is the ArtemisSDR UI gate for external/PA control
 - on this SunSDR fork, that UI state now drives the native SunSDR PA control path
 
 ## 9. Initial Power Calibration
@@ -127,7 +127,7 @@ For initial calibration:
 - start at low drive
 - verify output on each band you care about
 
-The main Thetis controls that matter are:
+The main ArtemisSDR controls that matter are:
 
 - `Drive`
 - `Tune`
