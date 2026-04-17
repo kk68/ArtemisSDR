@@ -1,7 +1,10 @@
 # ArtemisSDR
 
-**Current release: Beta v1.0.2**
-*Dedicated to the Artemis II mission.*
+*Open source. Native protocol. Dedicated to Artemis II.*
+
+**Current version: Beta v1.0.2** — [**Download installer**](https://github.com/kk68/ArtemisSDR/releases/latest) · [What's new](https://github.com/kk68/ArtemisSDR/releases/latest) · [Discussions](https://github.com/kk68/ArtemisSDR/discussions) · [Issues](https://github.com/kk68/ArtemisSDR/issues)
+
+![ArtemisSDR running on 40m — panadapter + waterfall, SunSDR2 DX native protocol](docs/screenshot-main.png)
 
 **An SDR host for the SunSDR2 DX — forked from Thetis.** ArtemisSDR is an additional option for SunSDR2 DX users who want to run their radio with the Thetis DSP stack — panadapter, filter set, NR/NB/notch toolkit, VAC routing, and everything else Thetis offers — directly via the radio's native wire protocol. No ExpertSDR proxy, no bridge, no firmware changes.
 
