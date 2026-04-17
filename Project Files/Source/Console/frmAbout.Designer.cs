@@ -55,6 +55,8 @@
             this.lstContributors.FormattingEnabled = true;
             this.lstContributors.ItemHeight = 16;
             this.lstContributors.Items.AddRange(new object[] {
+            "K0KOZ, Kosta (ArtemisSDR fork — SunSDR2 DX native protocol & integration)",
+            "",
             "NR0V, Warren (WDSP & too many other contributions to list)",
             "G8NJJ, Laurence (G2, Andromeda & protocols)",
             "N1GP, Rick (Firmware related changes)",
@@ -186,7 +188,7 @@
             this.btnVisit.Size = new System.Drawing.Size(88, 23);
             this.btnVisit.TabIndex = 10;
             this.btnVisit.Text = "View";
-            this.toolTip1.SetToolTip(this.btnVisit, "Visit he selected link");
+            this.toolTip1.SetToolTip(this.btnVisit, "Visit the selected link");
             this.btnVisit.UseVisualStyleBackColor = false;
             this.btnVisit.Click += new System.EventHandler(this.btnVisit_Click);
             // 

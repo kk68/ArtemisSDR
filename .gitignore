@@ -408,3 +408,14 @@ Project Files/lib/NR_Algorithms_x64/src/libspecbleach/build
 Project Files/lib/NR_Algorithms_x64/src/libspecbleach/old.git
 Project Files/lib/NR_Algorithms_x64/src/libspecbleach/old.github
 
+
+# ArtemisSDR hygiene additions
+*.bak
+*.orig
+*.rej
+sunsdr_debug.log
+*.raw
+.env
+.envrc
+secrets.json
+appsettings.Development.json

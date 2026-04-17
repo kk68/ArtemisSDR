@@ -6,6 +6,34 @@ Report issues at: https://github.com/kk68/ArtemisSDR/issues
 
 ---
 
+## Beta v1.0.2 — Legal and documentation polish
+
+Same binary functionality as v1.0.1 with a thorough pre-public-release cleanup pass:
+
+- Added `MODIFICATIONS.md` documenting ArtemisSDR changes to upstream files (GPL v2 §2(a) compliance)
+- Added `THIRD_PARTY_LICENSES.md` with full attribution roll-up for every bundled library
+- Added `Privacy & network activity` section to README documenting the version-check and skin-server HTTPS calls, AppData writes, firewall rules, and registry state
+- About dialog now displays the warranty disclaimer and redistribution notice required by GPL v2 §2(c)
+- K0KOZ added to the About-dialog contributors list (was missing in v1.0.1)
+- About-dialog third-party attribution expanded to include WDSP, fftw, rnnoise, libspecbleach, NAudio, Markdig, HtmlAgilityPack, WindowsFirewallHelper, System.Reactive
+- Reverse-engineering language corrected from "clean-room" to "black-box" — more accurate characterisation of solo-developer protocol observation, preserving DMCA §1201(f) interop safe harbor
+- Third-party prebuilt installer EXEs removed from source tree (`MeterSkinInstaller.exe`, `OpenHPSDR_Skins.exe`) — licence provenance unclear; users who want upstream Thetis skins can fetch them separately
+- Hardcoded list of 33 upstream-tester callsigns removed from `setup.cs` (they consented to being in upstream Thetis, not this fork)
+- ExpertSDR non-affiliation statement added to the About-dialog text
+- README rephrased to remove comparative-superlative phrasing against ExpertSDR
+- Lab-IP `10.0.3.50` in README troubleshooting replaced with a generic placeholder
+- Dangling `SUNSDR_RASPY_TX_DEBUG.md` reference cleaned up in START_HERE
+- GPL v2 file headers restored on `NetworkIO.cs` and `clsDiscord.cs`
+- Splash screen version line now reads `ArtemisSDR <version> SunSDR2 DX`
+- Tooltip typo fixed in About dialog ("Visit he" → "Visit the")
+- `sunsdr.c` / `sunsdr.h` copyright updated to full name `Kosta Kanchev (K0KOZ)`
+- `.gitignore` tightened (`*.bak`, `*.raw`, `.env`, `sunsdr_debug.log`, etc.)
+- Repo backup (`.bak`) files removed, duplicate `LICENSE-DUAL-LICENSING.rtf` removed, duplicate manual PDF under `Documentation/Radio/` removed
+
+No functional changes; recommended upgrade for all v1.0.1 users. Uninstall v1.0.1 before installing v1.0.2.
+
+---
+
 ## Beta v1.0.1 — First public release
 
 First ArtemisSDR release under its own name and version line. Speaks the SunSDR2 DX's native UDP protocol directly, with no ExpertSDR proxy, bridge, or firmware changes.

@@ -1,9 +1,9 @@
 # ArtemisSDR
 
-**Current release: Beta v1.0.1**
+**Current release: Beta v1.0.2**
 *Dedicated to the Artemis II mission.*
 
-**An SDR host for the SunSDR2 DX — forked from Thetis.** If you own a SunSDR2 DX and have been looking for a richer, more active alternative to ExpertSDR, ArtemisSDR brings the full Thetis DSP stack — panadapter, filter set, NR/NB/notch toolkit, VAC routing, and everything else — directly to your radio. No ExpertSDR proxy, no bridge, no firmware changes.
+**An SDR host for the SunSDR2 DX — forked from Thetis.** ArtemisSDR is an additional option for SunSDR2 DX users who want to run their radio with the Thetis DSP stack — panadapter, filter set, NR/NB/notch toolkit, VAC routing, and everything else Thetis offers — directly via the radio's native wire protocol. No ExpertSDR proxy, no bridge, no firmware changes.
 
 ArtemisSDR is maintained by Kosta Kanchev (K0KOZ). It is a fork of [Thetis](https://github.com/ramdor/Thetis) by Richard Samphire (MW0LGE), which itself descends from OpenHPSDR (Doug Wigley, W5WC) and PowerSDR (FlexRadio Systems). Specialized for the SunSDR2 DX and released under GPL v2.
 
@@ -13,7 +13,7 @@ ArtemisSDR is maintained by Kosta Kanchev (K0KOZ). It is a fork of [Thetis](http
 
 This project is **not affiliated with, endorsed by, sponsored by, or otherwise connected to Expert Electronics.** "SunSDR", "SunSDR2 DX", and "ExpertSDR" are trademarks of their respective owners; they appear in this project only to identify the hardware this software is compatible with.
 
-The implementation is the product of independent, clean-room reverse engineering — passive observation of UDP traffic between a genuine ExpertSDR instance and an owned radio. **No ExpertSDR code, binaries, firmware, artwork, or other Expert Electronics intellectual property is used.** The radio's firmware is not modified in any way; this is purely a host-side client that speaks the same wire protocol ExpertSDR does.
+The implementation is the product of independent, black-box reverse engineering — passive observation of UDP traffic between a genuine ExpertSDR instance and a lawfully-owned SunSDR2 DX radio. **No ExpertSDR code, binaries, firmware, artwork, or other Expert Electronics intellectual property is used.** The radio's firmware is not modified in any way; this is purely a host-side client that speaks the same wire protocol ExpertSDR does. Protocol-compatibility reverse engineering for interoperability is a well-established practice in open-source software (Samba, WINE, ReactOS) and is specifically recognized under 17 U.S.C. § 1201(f).
 
 ArtemisSDR is **not affiliated with, endorsed by, or otherwise connected to NASA or the Artemis program.** The Artemis II reference is a personal dedication by the author honoring the mission; no NASA affiliation is implied or claimed.
 
@@ -26,6 +26,7 @@ Distributed free of charge under the GNU General Public License v2 for the amate
 - [Who this is for](#who-this-is-for)
 - [What works](#what-works)
 - [Current limitations](#current-limitations)
+- [Privacy & network activity](#privacy--network-activity)
 - [Getting started](#getting-started)
 - [TX power calibration per band](#tx-power-calibration-per-band)
 - [Troubleshooting](#troubleshooting)
@@ -86,6 +87,23 @@ Honest list of what's partially done or missing. None of these prevent normal op
 | **MON / DUP audio routing** | Not fully settled during TX. If you need to monitor your own transmission, a second receiver is the reliable path. |
 | **Occasional post-TX raspy audio** | Intermittent; cycling VAC clears it. Tracked as a polish item. |
 
+## Privacy & network activity
+
+ArtemisSDR is a local-network SDR host; it does not include telemetry, crash reporting, analytics, or any identifying phone-home. That said, it does make the following outbound connections so you know what to expect:
+
+- **Version check on launch and when opening About** — fetches `https://raw.githubusercontent.com/kk68/ArtemisSDR/refs/heads/main/version.json` (a small JSON file with the latest release version). The GitHub HTTPS connection itself logs a standard IP request log at GitHub's infrastructure. No identifying payload is sent.
+- **Skin-server list refresh** (inherited from upstream Thetis) — fetches `https://raw.githubusercontent.com/ramdor/Thetis/master/skin_servers.json` to resolve the list of servers from which skin packs can be downloaded. Only fetched when the user navigates to the skin manager UI.
+- **Optional skin downloads** — if the user chooses to download a skin pack, it is fetched from whichever third-party server the skin manager resolves. No data is sent other than the standard HTTPS request.
+
+On the local filesystem, ArtemisSDR creates and writes to:
+
+- `%AppData%\ArtemisSDR\` — all persistent state: the settings database, per-instance logs (`ErrorLog.txt` and, if the user enables native diagnostic logging, `sunsdr_debug.log`), installed skins, memory and DX memory lists, and the UI window-layout cache. Nothing in this folder is transmitted anywhere by ArtemisSDR.
+- Audio recording (opt-in, Setup → Audio → Recording) — WAV files land in `My Music\ArtemisSDR\` when the user explicitly records.
+- Windows Firewall — the installer registers inbound rules for `ArtemisSDR.exe` (TCP and UDP) so the radio can initiate connections to the host. These are standard rules named "ArtemisSDR (TCP In)" / "ArtemisSDR (UDP In)" and can be audited in Windows Defender Firewall at any time.
+- Windows Registry — install state lives under `HKLM\Software\ArtemisSDR\` (installer-owned) and cmASIO settings under `HKLM\SOFTWARE\ArtemisSDR\` (app-owned). Uninstalling removes the installer-owned keys.
+
+ArtemisSDR does **not** send any data to the author (K0KOZ), to kk68, or to any third party — including when an error occurs. If you hit a bug and want to send a log, you have to attach `ErrorLog.txt` to an email or GitHub issue yourself; the app will never do it for you.
+
 ## Getting started
 
 A complete step-by-step walkthrough lives in **[START_HERE_SUNSDR2DX.md](START_HERE_SUNSDR2DX.md)** — covers the Windows/network prerequisites, radio discovery, first-run setup, audio routing, and first TX. Read that one after you have a build.
@@ -99,7 +117,7 @@ Short version:
 
 ## Troubleshooting
 
-**Thetis doesn't see the radio.** Check that the radio's IP is reachable (`ping 10.0.3.50` from the host machine). Make sure no other ExpertSDR instance is running anywhere on the network — the radio's control port is exclusive.
+**ArtemisSDR doesn't see the radio.** Check that the radio's IP is reachable (`ping <your-radio-IP>` — e.g. `ping 192.168.1.50`, substituting your radio's actual address) from the host machine. Make sure no other ExpertSDR instance is running anywhere on the network — the radio's control port is exclusive.
 
 **No TX RF output.** Confirm `Setup → General → Use watts on Drive/Tune slider` is on. Confirm the drive slider isn't at zero. Confirm you're in a transmittable mode (not SPEC or DRM).
 
@@ -129,7 +147,7 @@ Source-only distribution for now. Build locally with Visual Studio 2022.
 
 ## For contributors
 
-Protocol implementation lives in `Project Files/Source/ChannelMaster/sunsdr.c` and `sunsdr.h`. These are clean-room original work — no external sources referenced.
+Protocol implementation lives in `Project Files/Source/ChannelMaster/sunsdr.c` and `sunsdr.h`. These are original work authored for ArtemisSDR via black-box reverse engineering — no external source code referenced.
 
 Deeper architecture notes, opcode tables, TX power-calibration design, VAC underflow root-cause analysis, and the file-by-file changelog are in **[TECHNICAL.md](TECHNICAL.md)**.
 
@@ -141,7 +159,7 @@ Contributions welcome: bug fixes, per-band calibration data, UI polish, completi
 
 This fork inherits the **GNU General Public License, version 2** from upstream Thetis. See [LICENSE](LICENSE) for full terms. All source code must remain under GPL v2; any redistributed modifications must also be under GPL v2 and must provide full source.
 
-The SunSDR native protocol implementation (`sunsdr.c`, `sunsdr.h`) is original work and is licensed the same way. It is derived from independent clean-room reverse engineering of owned hardware — no Expert Electronics code, binaries, firmware, or other intellectual property was used.
+The SunSDR native protocol implementation (`sunsdr.c`, `sunsdr.h`) is original work and is licensed the same way. It is derived from independent black-box reverse engineering of lawfully-owned hardware — no Expert Electronics code, binaries, firmware, or other intellectual property was used.
 
 **Dual-licensing statements** — both present in the repo:
 

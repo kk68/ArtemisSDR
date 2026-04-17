@@ -716,7 +716,7 @@ namespace Thetis
             }
             LogTool.AddLogEntry("Directories ok");
 
-            Splash.ShowSplashScreen(Common.GetVerNum(true, true), splash_screen_folder);							// Start splash screen with version number
+            Splash.ShowSplashScreen("ArtemisSDR " + Common.GetVerNum(true, true), splash_screen_folder);							// Start splash screen with version number
 
             LogTool.AddLogEntry("Splash screen shown");
 

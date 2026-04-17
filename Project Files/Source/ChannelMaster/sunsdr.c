@@ -6,10 +6,12 @@ All SunSDR-specific protocol logic is contained in this file.
 This includes: discovery, bootstrap, power on/off, frequency,
 mode, PTT, and IQ stream reception.
 
-Protocol details derived from clean-room reverse engineering.
-See: sunsdr-re/docs/protocol/ for canonical documentation.
+Protocol details derived from black-box reverse engineering — passive
+observation of UDP traffic between a genuine ExpertSDR instance and an
+owned SunSDR2 DX radio. No ExpertSDR code, binaries, firmware, or artwork
+was referenced or used. The radio's firmware was not modified.
 
-Copyright (C) 2026 Kosta
+Copyright (C) 2026 Kosta Kanchev (K0KOZ)
 
 This program is free software; you can redistribute it and/or
 modify it under the terms of the GNU General Public License

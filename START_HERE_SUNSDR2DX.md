@@ -178,7 +178,7 @@ The live values currently come from the SunSDR native control path during connec
 - diversity is not currently supported on SunSDR2 DX in this fork
 - the displayed TX wattmeter is not yet authoritative for SunSDR calibration
 - RX band switching works, but the current implementation still uses a SunSDR-specific recovery path behind the scenes
-- intermittent raspy TUNE/MOX TX is under active debug; track current status in `SUNSDR_RASPY_TX_DEBUG.md`
+- intermittent raspy TUNE/MOX TX is a known polish item; cycling VAC (Enable VAC off/on from the sidebar) clears it
 
 ## Quick Checklist
 

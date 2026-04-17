@@ -742,29 +742,15 @@
 		</Component>
 	</ComponentGroup>
 
-    <Binary Id="InstallSkins" SourceFile="OpenHPSDR_Skins.exe" />
-    <CustomAction Id="InstallSkins_CA" BinaryKey="InstallSkins"
-        Impersonate="yes" Execute="deferred" ExeCommand="[SystemFolder]cmd.exe /C start OpenHPSDR_Skins.exe &amp; exit"
-                  Return="check"/>
-
-	  <Binary Id="InstallMeterSkins" SourceFile="MeterSkinInstaller.exe" />
-	  <CustomAction Id="InstallMeterSkins_CA" BinaryKey="InstallMeterSkins"
-		  Impersonate="yes" Execute="deferred" ExeCommand="[SystemFolder]cmd.exe /C start MeterSkinInstaller.exe"
-					Return="check"/>
-
-    <InstallExecuteSequence>
-      <Custom Action='InstallSkins_CA' Before='InstallFinalize'>
-        NOT Installed
-      </Custom>
-    </InstallExecuteSequence>
-
-	  <InstallExecuteSequence>
-		  <Custom Action='InstallMeterSkins_CA' Before='InstallFinalize'>
-			  NOT Installed
-		  </Custom>
-	  </InstallExecuteSequence>
-	  
-    <!--   -->
+    <!--
+    Upstream Thetis bundled two prebuilt third-party installer EXEs
+    (OpenHPSDR_Skins.exe and MeterSkinInstaller.exe) and ran them as deferred
+    custom actions at the end of MSI install. ArtemisSDR does not ship those
+    binaries: their licence provenance is unclear and bundling prebuilt
+    closed-source executables inside a GPL source repository is a supply-chain
+    trust concern. Users who want upstream Thetis skins can download them
+    separately from the ramdor/Thetis project.
+    -->
   </Fragment>
 
 </Wix>

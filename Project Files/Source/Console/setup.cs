@@ -75,11 +75,12 @@ namespace Thetis
 
     public partial class Setup : Form
     {
-        // for these callsigns always show cmasio tab, as a perk to the testers from discord
-        private readonly List<string> CMASIO_ALWAYS_SHOW = new List<string>() {  "dl5tt", "dh1klm", "ea8djr", "ei7bmb", "kc1lko", "k1lsb", "k1sr", "k2gx", "k2tc", "kb2uka",
-                                                                                 "ki4tga", "ko6dlv", "kw4ex", "m0cke", "mw0lge", "n6mud", "nc3z", "nj2us",
-                                                                                 "nr0v", "ny8t", "oe3ide", "oz1ct", "sa3atf", "ve2jn", "ve9iou", "vk6ia",
-                                                                                 "w1aex", "w1izz", "wr1s", "w2pa", "w3ub", "w9ac", "w9ez" };
+        // Upstream Thetis showed the cmASIO tab unconditionally only for a
+        // hardcoded list of tester callsigns. Those individuals consented to
+        // being listed in upstream Thetis — not here. For ArtemisSDR the list
+        // is empty; the cmASIO tab visibility rule falls through to the normal
+        // "per-radio-model" logic in updateCmASIO_Visibility().
+        private readonly List<string> CMASIO_ALWAYS_SHOW = new List<string>();
         #region Variable Declaration
 
         private Console console;

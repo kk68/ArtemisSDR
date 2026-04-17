@@ -1,22 +1,34 @@
-/*  clsDiscord.cs  (ArtemisSDR stub)
- *
- *  The original Thetis Discord bot integration has been removed for ArtemisSDR.
- *  Upstream Thetis fetched a config file from ramdor/Thetis on GitHub and
- *  connected to a specific Discord server on startup, which is not
- *  appropriate for this fork.
- *
- *  This stub preserves the `ThetisBotDiscord` public API surface so that
- *  callers elsewhere in the codebase (MeterManager, setup, console) still
- *  compile, but every entry point is inert:
- *    - No network calls
- *    - No Discord.Net dependencies
- *    - IsReady / IsConnected always false
- *    - Event handlers exist but never fire
- *    - SendMessage / GetMessagesString / SetCallsign / SetEnabled are no-ops
- *
- *  Removal of the dormant consumer code (clsDiscordButtonBox, AddDiscordButtons,
- *  DISCORD_BUTTONS meter-type switch branches) is deferred to a later release.
- */
+//=================================================================
+// clsDiscord.cs  (ArtemisSDR stub)
+//=================================================================
+// The original Thetis Discord bot integration has been removed for
+// ArtemisSDR. Upstream Thetis fetched a config file from ramdor/Thetis on
+// GitHub and connected to a specific Discord server on startup, which is
+// not appropriate for this fork.
+//
+// This stub preserves the `ThetisBotDiscord` public API surface so that
+// callers elsewhere in the codebase (MeterManager, setup, console) still
+// compile, but every entry point is inert:
+//   - No network calls
+//   - No Discord.Net dependencies
+//   - IsReady / IsConnected always false
+//   - Event handlers exist but never fire
+//   - SendMessage / GetMessagesString / SetCallsign / SetEnabled are no-ops
+//
+// Removal of the dormant consumer code (clsDiscordButtonBox,
+// AddDiscordButtons, DISCORD_BUTTONS meter-type switch branches) is
+// deferred to a later release.
+//
+// Replaces upstream Thetis Discord integration by Richard Samphire (MW0LGE).
+// Stub authored by Kosta Kanchev (K0KOZ) for ArtemisSDR.
+//
+// Copyright (C) 2019-2026 Richard Samphire (MW0LGE) — original module
+// Copyright (C) 2026      Kosta Kanchev (K0KOZ) — this stub rewrite
+//
+// This program is free software; you can redistribute it and/or modify it
+// under the terms of the GNU General Public License version 2 as published
+// by the Free Software Foundation. Distributed WITHOUT ANY WARRANTY.
+//=================================================================
 
 using System;
 using System.Threading.Tasks;

@@ -4,7 +4,7 @@ SunSDR2 DX native protocol support for Thetis.
 
 This file is part of a program that implements a Software-Defined Radio.
 
-Copyright (C) 2026 Kosta
+Copyright (C) 2026 Kosta Kanchev (K0KOZ)
 
 This program is free software; you can redistribute it and/or
 modify it under the terms of the GNU General Public License
