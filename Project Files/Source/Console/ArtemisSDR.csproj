@@ -1289,24 +1289,7 @@
   </ItemGroup>
   <Import Project="$(MSBuildBinPath)\Microsoft.CSharp.targets" />
   <PropertyGroup>
-    <PreBuildEvent>@echo off
-for /f "delims=" %25%25x in ('wmic os get localdatetime ^| find "."') do set datetime=%25%25x
-set year=%25datetime:~2,2%25
-set month=%25datetime:~4,2%25
-set day=%25datetime:~6,2%25
-set formatted_date=%25month%25/%25day%25/%25year%25
-
-echo // &gt;  "$(ProjectDir)VersionInfo.cs"
-echo //Auto Generated Pre-Build event MW0LGE &gt;&gt; "$(ProjectDir)VersionInfo.cs"
-echo // &gt;&gt;  "$(ProjectDir)VersionInfo.cs"
-echo using System; &gt;&gt; "$(ProjectDir)VersionInfo.cs"
-echo namespace Thetis &gt;&gt; "$(ProjectDir)VersionInfo.cs"
-echo { &gt;&gt; "$(ProjectDir)VersionInfo.cs"
-echo     public static class VersionInfo &gt;&gt; "$(ProjectDir)VersionInfo.cs"
-echo     { &gt;&gt; "$(ProjectDir)VersionInfo.cs"
-echo         public static string BuildDate { get { return "%25formatted_date%25"; } }  &gt;&gt; "$(ProjectDir)VersionInfo.cs"
-echo     } &gt;&gt; "$(ProjectDir)VersionInfo.cs"
-echo } &gt;&gt; "$(ProjectDir)VersionInfo.cs"
+    <PreBuildEvent>powershell -NoProfile -ExecutionPolicy Bypass -Command "$d = Get-Date -Format 'MM/dd/yy'; Set-Content -LiteralPath '$(ProjectDir)VersionInfo.cs' -Value @(\"// Auto-generated pre-build event. Do not edit.\", \"using System;\", \"namespace Thetis\", \"{\", \"    public static class VersionInfo\", \"    {\", \"        public static string BuildDate { get { return `\"$d`\"; } }\", \"    }\", \"}\")"
 </PreBuildEvent>
     <PostBuildEvent>copy /Y "..\..\..\lib\fftw_$(PlatformName)\libfftw3-3.dll" "$(ProjectDir)$(OutDir)";
 copy /Y "..\..\..\lib\fftw_$(PlatformName)\libfftw3f-3.dll" "$(ProjectDir)$(OutDir)";
