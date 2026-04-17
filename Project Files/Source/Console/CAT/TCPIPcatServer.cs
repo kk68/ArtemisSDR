@@ -95,7 +95,7 @@ namespace Thetis
 
             if (m_server != null && m_server.SendWelcome && console != null)
             {
-                internal_send_data("#ArtemisSDR TCP/IP Cat - " + console.VersionWithoutFW.Replace(";", "") + "#;");
+                internal_send_data("#Thetis TCP/IP Cat - " + console.VersionWithoutFW.Replace(";", "") + "#;"); // wire identifier — CAT clients match "Thetis" prefix
             }
 
             while (!m_stopClient)
