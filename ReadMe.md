@@ -6,7 +6,7 @@
 
 ![ArtemisSDR running on 40m — panadapter + waterfall, SunSDR2 DX native protocol](docs/screenshot-main.png)
 
-**An SDR host for the SunSDR2 DX — forked from Thetis.** ArtemisSDR is an additional option for SunSDR2 DX users who want to run their radio with the Thetis DSP stack — panadapter, filter set, NR/NB/notch toolkit, VAC routing, and everything else Thetis offers — directly via the radio's native wire protocol. No ExpertSDR proxy, no bridge, no firmware changes.
+**An SDR host for the SunSDR2 DX — forked from Thetis.** ArtemisSDR is an additional option for SunSDR2 DX users who want the Thetis-lineage DSP stack — panadapter, filter set, NR/NB/notch toolkit, VAC routing, and the full feature set — running against the radio's native wire protocol. No ExpertSDR proxy, no bridge, no firmware changes.
 
 ArtemisSDR is maintained by Kosta Kanchev (K0KOZ). It is a fork of [Thetis](https://github.com/ramdor/Thetis) by Richard Samphire (MW0LGE), which itself descends from OpenHPSDR (Doug Wigley, W5WC) and PowerSDR (FlexRadio Systems). Specialized for the SunSDR2 DX and released under GPL v2.
 
@@ -42,18 +42,18 @@ Distributed free of charge under the GNU General Public License v2 for the amate
 
 You'll get the most out of this fork if:
 
-- You own a **SunSDR2 DX** and want to use it with Thetis instead of (or alongside) ExpertSDR.
+- You own a **SunSDR2 DX** and want to use it with ArtemisSDR instead of (or alongside) ExpertSDR.
 - You're comfortable building a Visual Studio project once. There's no pre-built installer yet.
 - You have an external wattmeter and dummy load handy for the first TX bring-up on each band.
 - You operate with normal amateur-radio discipline — we transmit into dummy loads for testing, not onto the air.
 
-If you're brand new to SDR in general, Thetis, or your radio, work through your radio's official documentation and a basic Thetis tutorial first. This fork assumes you already understand what panadapters, VAC, and a drive slider do.
+If you're brand new to SDR or to your radio, work through your radio's official documentation first. ArtemisSDR inherits its UI from Thetis, so any beginner tutorial explaining the Thetis interface applies directly here. This fork assumes you already understand what panadapters, VAC, and a drive slider do.
 
 ## What works
 
 **Receive**
 
-- RX1 with panadapter, waterfall, and audio on every mode Thetis supports
+- RX1 with panadapter, waterfall, and audio on every mode ArtemisSDR supports
 - RX2 as an independent second receiver with its own VFO B and audio path
 - RX antenna selection (primary / auxiliary inputs)
 - Live firmware-version and serial-number display in the title bar and `Setup → H/W Select`
@@ -72,10 +72,10 @@ If you're brand new to SDR in general, Thetis, or your radio, work through your 
 
 - Power-on to RX in ~1-1.5 seconds, comparable to ExpertSDR3
 - Sub-second band switching — native protocol, no session teardown
-- All of Thetis's DSP: NR, NR4, ANF, NB/NB2, EQ, CESSB, CFC, notch, compander — everything works
+- The full WDSP-based DSP stack inherited from Thetis: NR, NR4, ANF, NB/NB2, EQ, CESSB, CFC, notch, compander — everything works
 - VAC audio routing (CABLE, VoiceMeeter, etc.) works on both RX and TX
-- Clean Power off / Power on cycling from the Thetis UI
-- Proper Thetis-native `PA Gain By Band` and per-drive offsets integration — calibrate the way you'd calibrate any Thetis radio
+- Clean Power off / Power on cycling from the ArtemisSDR UI
+- Proper `PA Gain By Band` and per-drive offsets integration — calibrate the way you'd calibrate any Thetis-family radio
 
 ## Current limitations
 
@@ -84,7 +84,7 @@ Honest list of what's partially done or missing. None of these prevent normal op
 | Area | Status |
 | --- | --- |
 | **TX power calibration** | 40 m is locked. Other bands fall back to the 40 m curve — expect a few dB deviation until separately calibrated. |
-| **Thetis `Fwd Pwr` meter** | Not yet wired to the SunSDR telemetry stream. Use an external wattmeter for now. |
+| **`Fwd Pwr` meter** | Not yet wired to the SunSDR telemetry stream. Use an external wattmeter for now. |
 | **PS-A, 2-TONE, DUP** | Grayed out on SunSDR. These depend on a feedback-loop path the radio doesn't expose; not a bug, a hardware-architecture constraint. |
 | **Diversity mode** | Unsupported. RX2 follows RX1's antenna selection; no independent per-receiver antenna path has been found. |
 | **MON / DUP audio routing** | Not fully settled during TX. If you need to monitor your own transmission, a second receiver is the reliable path. |
@@ -114,8 +114,8 @@ A complete step-by-step walkthrough lives in **[START_HERE_SUNSDR2DX.md](START_H
 Short version:
 
 1. Build the solution (see [Building from source](#building-from-source) below).
-2. Launch Thetis, pick **SunSDR2DX** as the hardware model, confirm **"Use watts on Drive/Tune slider"** is on in `Setup → General`.
-3. Connect the radio, hit Power in Thetis, verify you're receiving.
+2. Launch ArtemisSDR, pick **SunSDR2DX** as the hardware model, confirm **"Use watts on Drive/Tune slider"** is on in `Setup → General`.
+3. Connect the radio, hit Power in ArtemisSDR, verify you're receiving.
 4. Dummy load, 25 W drive, LSB TUNE on 40 m → confirm ~25 W on an external wattmeter.
 
 ## Troubleshooting
@@ -126,7 +126,7 @@ Short version:
 
 **Audio is garbled or robotic after a TX cycle.** Cycle VAC off and on from its sidebar (the "Enable VAC" checkbox). This clears a resampler transient that occasionally lingers after certain TX → RX transitions.
 
-**Signals on the panadapter look unusually wide, audio quality is off, right after startup.** Rare, but seen. Power-cycle Thetis (Power off → Power on) to re-initialize the RX DSP.
+**Signals on the panadapter look unusually wide, audio quality is off, right after startup.** Rare, but seen. Power-cycle ArtemisSDR (Power off → Power on) to re-initialize the RX DSP.
 
 **`Fwd Pwr` meter reads zero.** Expected for now. The meter isn't wired to SunSDR forward-power telemetry yet — use an external wattmeter. This is the next planned feature.
 
