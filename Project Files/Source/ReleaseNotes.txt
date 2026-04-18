@@ -6,6 +6,28 @@ Report issues at: https://github.com/kk68/ArtemisSDR/issues
 
 ---
 
+## Beta v1.0.3 — Flag fix + setup-doc clarity
+
+**Recommended upgrade for everyone on v1.0.2.** Same binary functionality as v1.0.2 — this release exists primarily to push the country-flag fix to anyone who installed the original v1.0.2 MSI before it was hot-patched on 2026-04-17.
+
+### Fixed
+
+- **Country flags in front of DX-cluster spot callsigns now render correctly on the panadapter.** The original v1.0.2 MSI shipped with broken flag rendering — every callsign came up flag-less, even with a working TCI feed. Two underlying causes (both addressed):
+  1. *TCI wire identifier:* during the rebrand, four wire-level TCI protocol strings had been renamed from "Thetis" to "ArtemisSDR". DX-cluster apps and loggers match on the literal "Thetis" to know whether to send rich JSON spot payloads (which carry the flag info). Reverted those four wire strings to "Thetis" — they are protocol-level only, never user-visible.
+  2. *BinaryFormatter assembly resolution:* the bundled `cty` country-data resource is a binary blob serialized when the assembly was named "Thetis", referencing `List<Thetis.CountryData+PrefixData, Thetis, ...>` in its type header. After AssemblyName changed to "ArtemisSDR", BinaryFormatter could no longer resolve the old "Thetis" assembly when loading generic type arguments → CountryData's static initializer silently caught a `FileNotFoundException` and left its prefix list null → every callsign lookup returned null → no flags. Added an `AppDomain.AssemblyResolve` handler at startup that redirects requests for the pre-rebrand "Thetis" assembly to the currently-executing ArtemisSDR assembly. Also extended the BinaryFormatter type-rename binder to cover the same redirect for any saved user database carried over from a pre-rebrand install.
+
+### Documentation
+
+- **`START_HERE_SUNSDR2DX.md` rewritten with a screenshot-driven manual-add walkthrough.** Auto-discovery does not work for the SunSDR2 DX in ArtemisSDR — every user must add the radio manually as a Custom entry. The new Step 3 walks through it click-by-click with three screenshots: (3a) tick `Advanced` and click `Custom`; (3b) fill in the Add Custom Radio dialog with NIC + IP:Port; (3c) select the new entry and click `Apply`. A strongly-worded callout explains the two distinct ports (`Fixed listen port` for control, `Radio IP:Port` for discovery/data) and that **both must match what the radio is actually configured for**. Also calls out picking the correct `Via NIC` (the LAN adapter on the same subnet as the radio) — the most common reason a manual add fails.
+- README "Troubleshooting → ArtemisSDR doesn't see the radio" entry rewritten to lead with the manual-add requirement and link directly into the new Step 3 walkthrough.
+
+### Notes
+
+- AppData and registry layout unchanged from v1.0.2 — your settings, skins, and memory lists carry over automatically.
+- If you installed the pre-hotfix v1.0.2 MSI (the one originally published 2026-04-16), uninstall it before installing v1.0.3. The mid-day-replaced v1.0.2 MSI on the GitHub release is functionally identical to v1.0.3 and can be upgraded in place.
+
+---
+
 ## Beta v1.0.2 — Legal and documentation polish
 
 Same binary functionality as v1.0.1 with a thorough pre-public-release cleanup pass:
