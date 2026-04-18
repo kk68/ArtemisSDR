@@ -6,6 +6,22 @@ Report issues at: https://github.com/kk68/ArtemisSDR/issues
 
 ---
 
+## Beta v1.0.4 — Skins fix
+
+**Recommended upgrade for everyone — skin downloading was broken in v1.0.3 and earlier.**
+
+### Fixed
+
+- **Skin server Download button was always disabled.** The skin-compatibility check compared the skin's `FromThetisVersion` (e.g. `2.7.0`) against `Common.GetFileVersion()` (`1.0.x` for ArtemisSDR). Since 1.0.x is numerically "older" than any Thetis-era 2.x value, the check failed for every skin on every server → button permanently greyed out. Fixed by reporting a Thetis-compat baseline of `2.10.3.13` (the upstream release ArtemisSDR functionally inherits) for this check only. Every skin targeting Thetis 2.10.3.13 or earlier is now downloadable.
+- **Skin directories still pointed at the old Thetis AppData path.** Six hardcoded `%AppData%\OpenHPSDR\Skins` references (skin-list read, restore fallback, export destination, and four extract destinations covering console + meter skins, root + subfolder variants) all still used the pre-rebrand Thetis location. Every one redirected to `%AppData%\ArtemisSDR\Skins` to match the rest of the app's AppData layout. Users who had a prior Thetis install with skins already in `%AppData%\OpenHPSDR\Skins` can copy (or move) that folder's contents into `%AppData%\ArtemisSDR\Skins` to carry their existing skins over — or simply re-download from the skin server now that the Download button works.
+- **"Skins files not found" first-launch dialog rewritten.** The old text ("Appearance will suffer until this is rectified") was scary and didn't tell users what to do. New text says "No skins installed yet" and points directly at Setup → Appearance → Skin Servers with install instructions.
+
+### What did NOT change
+
+All RX/TX functionality, PA gain ranges, country-flag rendering, TCI interop, and the setup walkthrough are identical to v1.0.3.
+
+---
+
 ## Beta v1.0.3 — Flag fix + setup-doc clarity
 
 **Recommended upgrade for everyone on v1.0.2.** Same binary functionality as v1.0.2 — this release exists primarily to push the country-flag fix to anyone who installed the original v1.0.2 MSI before it was hot-patched on 2026-04-17.

@@ -1170,14 +1170,17 @@ namespace Thetis
                 path = ".\\Skins\\";
             else
                 path = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData) +
-                    "\\OpenHPSDR\\Skins";
+                    "\\ArtemisSDR\\Skins";
             _skinPath = path;
 
             if (!Directory.Exists(path))
             {
-                MessageBox.Show("The console presentation files (skins) were not found.\n" +
-                    "Appearance will suffer until this is rectified.\n",
-                    "Skins files not found",
+                MessageBox.Show("No skins are installed yet.\n\n" +
+                    "To install one, go to Setup -> Appearance -> Skin Servers,\n" +
+                    "pick a server (default: \"Thetis default skins\"), select a skin,\n" +
+                    "and click Download. ArtemisSDR will install it automatically.\n\n" +
+                    "Appearance will look plain until a skin is applied.",
+                    "No skins installed",
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Error, MessageBoxDefaultButton.Button1, Common.MB_TOPMOST); //MW0LGE_[2.9.0.7]);
                 return;
@@ -1194,9 +1197,12 @@ namespace Thetis
 
             if (comboAppSkin.Items.Count == 0)
             {
-                MessageBox.Show("The console presentation files (skins) were not found.\n" +
-                    "Appearance will suffer until this is rectified.\n",
-                    "Skins files not found",
+                MessageBox.Show("No skins are installed yet.\n\n" +
+                    "To install one, go to Setup -> Appearance -> Skin Servers,\n" +
+                    "pick a server (default: \"Thetis default skins\"), select a skin,\n" +
+                    "and click Download. ArtemisSDR will install it automatically.\n\n" +
+                    "Appearance will look plain until a skin is applied.",
+                    "No skins installed",
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Error, MessageBoxDefaultButton.Button1, Common.MB_TOPMOST); //MW0LGE_[2.9.0.7]);
                 return;
@@ -12536,7 +12542,7 @@ namespace Thetis
             string path = ".\\Skins\\";
             if (!Directory.Exists(path + comboAppSkin.Text))
                 path = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData) +
-                        "\\OpenHPSDR\\Skins";
+                        "\\ArtemisSDR\\Skins";
 
             if (_skinPath == "") _skinPath = path;
 
@@ -12565,7 +12571,7 @@ namespace Thetis
         {
 
             string path = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData) +
-                    "\\OpenHPSDR\\Skins\\";
+                    "\\ArtemisSDR\\Skins\\";
 
             if (Directory.Exists(path + comboAppSkin.Text))
                 Skin.Save(comboAppSkin.Text, path, console);
@@ -27819,7 +27825,13 @@ namespace Thetis
             if (ts.SkinUrl != "" && Common.IsValidUri(ts.SkinUrl))
             {
                 btnDownloadSkin.Tag = ts.SkinUrl.Left(1024);
-                btnDownloadSkin.Enabled = Common.CompareVersions(ts.FromThetisVersion, Common.GetFileVersion()) <= 0;
+                // Skin servers are authored against Thetis version numbering (2.x.y.z).
+                // ArtemisSDR uses an independent 1.x numbering that is "lower" by literal
+                // comparison, so a naive check against GetFileVersion would disable every
+                // skin. This fork is functionally based on Thetis 2.10.3.13; report that
+                // as our compat version so skins targeting that or earlier are enabled.
+                const string THETIS_COMPAT_VERSION = "2.10.3.13";
+                btnDownloadSkin.Enabled = Common.CompareVersions(ts.FromThetisVersion, THETIS_COMPAT_VERSION) <= 0;
             }
             else
             {
@@ -27984,9 +27996,9 @@ namespace Thetis
                             else
                             {
                                 if (bMeterFolderFoundInRoot)
-                                    sOutputPath = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData) + "\\OpenHPSDR";
+                                    sOutputPath = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData) + "\\ArtemisSDR";
                                 else
-                                    sOutputPath = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData) + "\\OpenHPSDR\\Meters";
+                                    sOutputPath = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData) + "\\ArtemisSDR\\Meters";
                             }
                             bExtract = true;
                             bExpandedMeterSkins = true;
@@ -27996,15 +28008,15 @@ namespace Thetis
                         {
                             if (bUsesFilesInRoot || e.BypassRootFolderCheck)
                             {
-                                sOutputPath = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData) + "\\OpenHPSDR\\Skins";
+                                sOutputPath = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData) + "\\ArtemisSDR\\Skins";
                                 bExtract = true;
                             }
                             else
                             {
                                 if (bConsoleFolderFoundInRoot || bMeterFolderFoundInRoot)
-                                    sOutputPath = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData) + "\\OpenHPSDR\\Skins\\" + sFile;
+                                    sOutputPath = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData) + "\\ArtemisSDR\\Skins\\" + sFile;
                                 else
-                                    sOutputPath = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData) + "\\OpenHPSDR";
+                                    sOutputPath = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData) + "\\ArtemisSDR";
                                 bExtract = true;
                             }
                         }
