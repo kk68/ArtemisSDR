@@ -201,6 +201,20 @@ namespace Thetis
             if (_map.TryGetValue(typeName, out mapped))
                 return mapped;
 
+            // The assembly was renamed from "Thetis" to "ArtemisSDR" during
+            // the rebrand. Any binary-serialized blob produced before the
+            // rename (the bundled 'cty' country-data resource, any user DB
+            // saved on an earlier install, etc.) references the old
+            // assembly name. Redirect to the currently-executing assembly
+            // so those legacy streams still deserialize.
+            if (assemblyName != null &&
+                (assemblyName == "Thetis" || assemblyName.StartsWith("Thetis,", StringComparison.Ordinal)))
+            {
+                Assembly self = typeof(TypeRenameBinder).Assembly;
+                Type t = self.GetType(typeName, false);
+                if (t != null) return t;
+            }
+
             return Type.GetType(typeName + ", " + assemblyName, true);
         }
 

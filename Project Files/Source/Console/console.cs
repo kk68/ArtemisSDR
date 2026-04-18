@@ -1463,6 +1463,26 @@ namespace Thetis
         static void Main(string[] args)
         {
             //if(a()){return;}
+
+            // Binary-serialized blobs bundled from before the rebrand (the
+            // 'cty' country-data resource, any user DB carried over from
+            // Thetis) reference types in the old 'Thetis' assembly. After
+            // renaming AssemblyName to ArtemisSDR that assembly no longer
+            // exists, so BinaryFormatter fails to resolve generic type
+            // arguments. Redirect any request for 'Thetis' (pre-rename) to
+            // our currently-executing assembly so those streams still
+            // deserialize. Must be wired up BEFORE anything that touches
+            // Resources.cty (e.g. SpotManager2 / CountryData static ctors).
+            AppDomain.CurrentDomain.AssemblyResolve += (sender, e) =>
+            {
+                if (e.Name != null &&
+                    (e.Name == "Thetis" || e.Name.StartsWith("Thetis,", StringComparison.Ordinal)))
+                {
+                    return typeof(Console).Assembly;
+                }
+                return null;
+            };
+
             Application.ThreadException += new ThreadExceptionEventHandler(Application_ThreadException);
             AppDomain.CurrentDomain.UnhandledException += new UnhandledExceptionEventHandler(CurrentDomain_UnhandledException);
 
