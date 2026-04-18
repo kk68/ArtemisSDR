@@ -2,7 +2,9 @@
 
 *Open source. Native protocol. Dedicated to Artemis II.*
 
-**Current version: Beta v1.0.3** — [**Download installer**](https://github.com/kk68/ArtemisSDR/releases/latest) · [What's new](https://github.com/kk68/ArtemisSDR/releases/latest) · [Discussions](https://github.com/kk68/ArtemisSDR/discussions) · [Issues](https://github.com/kk68/ArtemisSDR/issues)
+**Current version: Beta v1.0.3**
+
+⬇️ [**Download Latest Release**](https://github.com/kk68/ArtemisSDR/releases/latest)  ·  📘 [**Quick Start Guide**](START_HERE_SUNSDR2DX.md)  ·  📝 [What's new](https://github.com/kk68/ArtemisSDR/releases/latest)  ·  💬 [Discussions](https://github.com/kk68/ArtemisSDR/discussions)  ·  🐛 [Issues](https://github.com/kk68/ArtemisSDR/issues)
 
 ![ArtemisSDR running on 40m — panadapter + waterfall, SunSDR2 DX native protocol](docs/screenshot-main.png)
 
