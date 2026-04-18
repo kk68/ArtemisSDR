@@ -62,21 +62,32 @@ The Add Custom Radio dialog opens. Fill in the four fields:
 
 > **⚠️ Pick the right Via NIC.** If you have multiple network interfaces (Wi-Fi + Ethernet, dual NICs, virtual adapters from VPNs / Hyper-V / VMware / WSL2, etc.), the dropdown will list all of them. **You must choose the adapter whose IP is on the same subnet as the radio.** For example: if the radio is at `10.0.3.50`, pick the NIC with an IP like `10.0.3.x`. Picking the wrong NIC is the #1 reason connection fails after a manual Custom add. The screenshot above shows `Intel(R) Ethernet Controller (3) I225-V [Ethernet] 10.0.3.254` as the selected NIC — same `10.0.3.x` subnet as the radio's `10.0.3.50`. If your dropdown shows `0.0.0.0` for an NIC, that NIC is unconfigured and won't work.
 
-Click **`Add`**. The dialog closes and the new radio appears in the radio list as a **`Custom`** entry — that's the green-highlighted row in Step 3a's screenshot.
+Click **`Add`**. The dialog closes and the new radio appears back on the H/W Select page as a `Custom` entry in the radio list.
 
-## 4. Select The Radio
+### Step 3c — Select the radio and Apply
 
-In the radio list:
+You're now back on the main H/W Select page. The new radio is in the list but **not yet selected**. Two more clicks:
 
-- select the SunSDR radio row (the `Custom` entry you just added)
-- click `Apply` if it doesn't auto-select
+![Setup → H/W Select with the newly-added radio in the list, radio-button + Apply button highlighted](docs/setup-select-and-apply.png)
 
-When the connection succeeds, the row will refresh to show live identity details:
+1. **Click the radio button** to the left of the SunSDR row (top red arrow in the screenshot above) so the row gets highlighted/selected.
+2. **Click `Apply`** at the bottom-right of the Setup window (bottom red arrow).
 
-- firmware version (e.g. `Version 88.8`)
-- serial number (e.g. `EED06202100584`)
+At this point the radio shows in the list with `Version Unknown` — that's normal for a not-yet-powered-on connection. The version populates after Power-on in the next step.
 
-The title bar at the top of the ArtemisSDR window will also show the same live identity, e.g. `(FW 88.8 SunSDR Native SN EED06202100584)`. If the title bar still shows `FW Unknown`, the connection has not completed — re-check your **Via NIC** selection and confirm you can `ping` the radio from a command prompt.
+## 4. Click OK And Power On
+
+1. Click **`OK`** at the bottom of the Setup window to close it.
+2. Back on the main ArtemisSDR window, click the **Power** button (top-left, the round icon next to `RX2`).
+3. The connection handshake runs. On success:
+   - the panadapter starts moving and you should hear receive audio
+   - the `H/W Select` row (and the title bar at the top of the ArtemisSDR window) refreshes to show the live firmware version and serial, e.g. `(FW 88.8 SunSDR Native SN EED06202100584)`
+
+If the title bar still shows `FW Unknown` after Power-on or the radio doesn't connect:
+
+- re-open `Setup → H/W Select` and double-check your **Via NIC** is the adapter on the same subnet as the radio
+- confirm you can reach the radio from a command prompt: `ping <your-radio-IP>`
+- make sure no other ExpertSDR / Thetis / SDR client is running anywhere on the LAN — the SunSDR2 DX's control port is exclusive
 
 ## 5. Power The Radio On
 
@@ -199,8 +210,8 @@ The live values currently come from the SunSDR native control path during connec
 2. Open `Setup -> H/W Select`
 3. **Tick `Advanced`** (auto-discovery does not work for SunSDR2 DX — manual add is required)
 4. Click **`Custom`** → fill in **Via NIC** (the LAN adapter on the radio's subnet) and **Radio IP:Port** (e.g. `10.0.3.50`) → leave Protocol/Board at defaults → click `Add`
-5. Select the new `Custom` radio entry in the list and click `Apply`
-6. Power on — the radio row + title bar should refresh with live `FW` and `SN`
+5. Back on H/W Select: click the **radio button** next to the new `Custom` entry, then click `Apply`, then `OK`
+6. Click **Power** in the main ArtemisSDR window — the radio row + title bar should refresh with live `FW` and `SN`
 7. Confirm panadapter and audio
 8. Enable `xPA` via `Setup -> OC Control -> HF/VHF/SWL -> Ext PA Control (xPA)`
 9. Calibrate output with an external wattmeter
