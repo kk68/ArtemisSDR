@@ -120,7 +120,7 @@ Short version:
 
 ## Troubleshooting
 
-**ArtemisSDR doesn't see the radio.** Check that the radio's IP is reachable (`ping <your-radio-IP>` — e.g. `ping 192.168.1.50`, substituting your radio's actual address) from the host machine. Make sure no other ExpertSDR instance is running anywhere on the network — the radio's control port is exclusive.
+**ArtemisSDR doesn't see the radio.** First — auto-discovery does **not** work for the SunSDR2 DX. You must add the radio manually via `Setup → H/W Select → tick Advanced → Custom → fill in Via NIC + Radio IP`. See [START_HERE_SUNSDR2DX.md → Step 3](START_HERE_SUNSDR2DX.md#3-open-the-hardware-network-page-and-add-your-radio-manually) for screenshots and field-by-field instructions. Then verify the radio's IP is reachable (`ping <your-radio-IP>` — e.g. `ping 192.168.1.50`, substituting your radio's actual address) from the host machine. Make sure no other ExpertSDR instance is running anywhere on the network — the radio's control port is exclusive. The most common mistake after a manual add is picking the wrong **Via NIC** — it must be the adapter on the same subnet as the radio.
 
 **No TX RF output.** Confirm `Setup → General → Use watts on Drive/Tune slider` is on. Confirm the drive slider isn't at zero. Confirm you're in a transmittable mode (not SPEC or DRM).
 
