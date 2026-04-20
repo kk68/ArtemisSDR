@@ -134,25 +134,44 @@
 
   <Fragment>
     <DirectoryRef Id="DesktopFolder">
-      <Component Id="DesktopShortcut" Guid="6A395378-66D6-4986-97C6-8CF9423A066C">       
+      <Component Id="DesktopShortcut" Guid="6A395378-66D6-4986-97C6-8CF9423A066C">
         <Shortcut Id="ProgramDesktopShortcut"
                   Name="$(var.ThetisName)"
                   Description="Run ArtemisSDR"
                   Target="[INSTALLFOLDER]ArtemisSDR.exe"
-                  WorkingDirectory="INSTALLFOLDER" />
-        <RegistryValue Root="HKLM" Key="Software\ArtemisSDR\$(var.ThetisName)"
-                Name="desktopShortcut" Type="integer" Value="1" KeyPath="yes" />
+                  WorkingDirectory="INSTALLFOLDER"
+                  Advertise="no" />
+        <!-- Explicit cleanup sweep for the desktop shortcut .lnk, including
+             legacy names from v1.x releases. Covers the case where a fixed-GUID
+             component mismatch or a major-upgrade path orphans the tracked
+             shortcut record but leaves the file behind. -->
+        <RemoveFile Id="RemoveDesktopShortcut_current"
+                    Name="$(var.ThetisName).lnk"
+                    On="uninstall" />
+        <RemoveFile Id="RemoveDesktopShortcut_legacy_x64"
+                    Name="ArtemisSDR-x64.lnk"
+                    On="uninstall" />
+        <RemoveFile Id="RemoveDesktopShortcut_legacy_plain"
+                    Name="ArtemisSDR.lnk"
+                    On="uninstall" />
+        <RegistryValue Root="HKCU"
+                       Key="Software\ArtemisSDR\$(var.ThetisName)"
+                       Name="desktopShortcut"
+                       Type="integer"
+                       Value="1"
+                       KeyPath="yes" />
       </Component>
     </DirectoryRef>
 
     <DirectoryRef Id="ShortcutsDir">
-      <Component Id="StartMenuShortcut">
-              
+      <Component Id="StartMenuShortcut" Guid="C2F3E7A4-5B8D-4E9F-B1A2-7D6C3F8E4B5C">
+
         <Shortcut Id="ThetisShortcut"
                   Name="$(var.ThetisName)"
                   Description="Run ArtemisSDR"
                   Target="[INSTALLFOLDER]ArtemisSDR.exe"
                   WorkingDirectory="INSTALLFOLDER"
+                  Advertise="no"
                   />
         <RemoveFolder Id="RemoveShortcutsDir" On="uninstall" />
 
@@ -736,6 +755,20 @@
 		<Component Guid="*">
 			<File Id="NetworkSettingsPDF"
 				Source="$(var.DocumentationPath)Thetis Network Settings_0.2.pdf"
+				KeyPath="yes"
+				Checksum="yes"
+            />
+		</Component>
+
+		<!-- Bundled default skin (OE3IDE-TheBlue) — zipped.
+		     The app extracts it to %AppData%\ArtemisSDR\Skins\ on first
+		     launch if that folder is empty. One-file approach keeps the
+		     MSI simple; full skin folder (~440 PNGs) lives in the repo
+		     under Skins\OE3IDE-TheBlue\ and is zipped pre-build. -->
+		<Component Guid="*">
+			<File Id="DefaultSkinZip"
+				Source="bundled-skins\default-skin.zip"
+				Name="default-skin.zip"
 				KeyPath="yes"
 				Checksum="yes"
             />

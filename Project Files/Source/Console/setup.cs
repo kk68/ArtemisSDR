@@ -171,7 +171,9 @@ namespace Thetis
             // MW0LGE note: this will allways cause the change event to fire, as the combobox does not contain any default value
             // it is bypassed in the event by use of the initializing flag, and is then
             // forced through in ForceAllEvents. This is the default radio with a blank database.
-            if (comboRadioModel.Text == "") comboRadioModel.Text = "HERMES";
+            // Artemis: SunSDR2 DX is the only supported radio — default to it so
+            // fresh installs skip the model-selection step.
+            if (comboRadioModel.Text == "") comboRadioModel.Text = "SUNSDR2-DX";
             //
 
             labelSavingLoading.Visible = false;// MW0LGE gets shown/hidden by save/cancel/apply
@@ -1212,16 +1214,28 @@ namespace Thetis
         {
             string skin = comboAppSkin.Text;
 
+            // Fallback order if no saved skin selection:
+            // 1. OE3IDE-TheBlue  (bundled default shipped with Artemis)
+            // 2. IK3VIG Special  (legacy Thetis default)
+            // 3. OpenHPSDR-Gray  (older Thetis default)
+            // 4. first item in combo (whatever the user has)
             if (skin == "")
             {
-                if (comboAppSkin.Items.Contains("IK3VIG Special"))
+                if (comboAppSkin.Items.Contains("OE3IDE-TheBlue"))
+                    comboAppSkin.Text = "OE3IDE-TheBlue";
+                else if (comboAppSkin.Items.Contains("IK3VIG Special"))
                     comboAppSkin.Text = "IK3VIG Special";
-                else
+                else if (comboAppSkin.Items.Contains("OpenHPSDR-Gray"))
                     comboAppSkin.Text = "OpenHPSDR-Gray";
+                else if (comboAppSkin.Items.Count > 0)
+                    comboAppSkin.Text = comboAppSkin.Items[0].ToString();
             }
             else if (comboAppSkin.Items.Contains(skin))
                 comboAppSkin.Text = skin;
-            else comboAppSkin.Text = "IK3VIG Special";
+            else if (comboAppSkin.Items.Contains("OE3IDE-TheBlue"))
+                comboAppSkin.Text = "OE3IDE-TheBlue";
+            else if (comboAppSkin.Items.Contains("IK3VIG Special"))
+                comboAppSkin.Text = "IK3VIG Special";
         }
 
         private void GetHosts()
@@ -1710,7 +1724,10 @@ namespace Thetis
                 return HardwareSpecific.StringModelToEnum(a["comboRadioModel"]);
             }
             else
-                return HPSDRModel.FIRST;
+                // Artemis ships pre-configured for SunSDR2 DX — no other radios
+                // are supported. Skip the "select radio model" step on fresh
+                // installs by defaulting to SUNSDR2DX instead of HPSDRModel.FIRST.
+                return HPSDRModel.SUNSDR2DX;
         }
         private bool _gettingOptions = false;
         private void getOptions(List<string> recoveryList = null)

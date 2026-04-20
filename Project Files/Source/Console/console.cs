@@ -702,7 +702,31 @@ namespace Thetis
             if (!Directory.Exists(AppDataPath))
                 Directory.CreateDirectory(AppDataPath);
 
-            _use_additional_sas = !Common.HasArg(args, "-nospec"); // prevent the use of additional spec analysers           
+            // Bootstrap the default skin on first launch. If %AppData%\ArtemisSDR\Skins\
+            // is missing or empty, extract bundled-skins\default-skin.zip shipped next to
+            // ArtemisSDR.exe. After first launch the user may delete / replace / download
+            // more skins via Setup -> Appearance -> Skin Servers and we never touch this
+            // folder again. Non-fatal on failure — user can still download skins in-app.
+            try
+            {
+                string skinsDir = Path.Combine(AppDataPath, "Skins");
+                bool needsBootstrap = !Directory.Exists(skinsDir) ||
+                    Directory.GetDirectories(skinsDir).Length == 0;
+                if (needsBootstrap)
+                {
+                    string exeDir = Path.GetDirectoryName(
+                        System.Reflection.Assembly.GetExecutingAssembly().Location);
+                    string zipPath = Path.Combine(exeDir, "default-skin.zip");
+                    if (File.Exists(zipPath))
+                    {
+                        if (!Directory.Exists(skinsDir)) Directory.CreateDirectory(skinsDir);
+                        System.IO.Compression.ZipFile.ExtractToDirectory(zipPath, skinsDir);
+                    }
+                }
+            }
+            catch (Exception) { /* best effort; user can download skins in-app */ }
+
+            _use_additional_sas = !Common.HasArg(args, "-nospec"); // prevent the use of additional spec analysers
             _touch_support = Common.HasArg(args, "-touch"); // configure touch support for mouse down/up/move, used primarily by containers, and ucMeter
 
             string splash_screen_folder = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData) + "\\ArtemisSDR\\SplashScreens";
@@ -15345,6 +15369,13 @@ namespace Thetis
 
             cmaster.CMSetTXOutputLevelRun();
 
+            // Re-evaluate xPA button visibility after a model change. For
+            // SUNSDR2DX, RepositionExternalPAButton unconditionally shows
+            // the button (see its implementation); for other radios it
+            // falls back to the OC-pin-configuration gate.
+            if (!IsSetupFormNull)
+                RepositionExternalPAButton(SetupForm.CheckForAnyExternalPACheckBoxes());
+
             //do always, to update everything
             CurrentModelChangedHandlers?.Invoke(HardwareSpecific.OldModel, HardwareSpecific.Model); //MW0LGE_[2.9.0.7]
         }
@@ -27917,7 +27948,18 @@ namespace Thetis
                 // (cold-start race that was previously masked by log
                 // overhead; see sunsdr.c SunSDRSetRxWdspReady).
                 if (NetworkIO.CurrentRadioProtocol == RadioProtocol.SUNSDR)
+                {
                     NetworkIO.nativeSunSDRSetRxWdspReady(1);
+
+                    // Re-assert xPA state now that the radio is powered.
+                    // On app restart, chkExternalPA.Checked gets restored
+                    // from DB but any SetPA command fired before power-on
+                    // was dropped (radio not connected yet). Without this
+                    // the UI shows xPA enabled while the hardware PA is
+                    // still disabled until user toggles the button twice.
+                    if (chkExternalPA.Checked)
+                        NetworkIO.nativeSunSDRSetPA(1);
+                }
 
                 DataFlowing = true;
                 SetupForm.UpdateGeneraHardware();
@@ -46694,6 +46736,15 @@ namespace Thetis
         public void RepositionExternalPAButton(bool bShow)
         {
             bool old_in_use = _xpa_in_use;
+
+            // SunSDR2 DX: show the xPA button unconditionally so users
+            // don't have to first enable an OC Control pin before the
+            // button appears on the main window. They can then click the
+            // button to engage external PA control whenever they want.
+            // (The HPSDR path still gates visibility on OC Control pin
+            //  configuration as before.)
+            if (HardwareSpecific.Model == HPSDRModel.SUNSDR2DX)
+                bShow = true;
 
             if (bShow)
             {
