@@ -47,12 +47,12 @@ using System.Runtime.CompilerServices;
 // set of attributes. Change these attribute values to modify the information
 // associated with an assembly.
 //
-[assembly: AssemblyTitle("Thetis")]
-[assembly: AssemblyDescription("Software Defined Radio Application")]
+[assembly: AssemblyTitle("ArtemisSDR")]
+[assembly: AssemblyDescription("SDR host for the SunSDR2 DX — forked from Thetis, dedicated to the Artemis II mission")]
 [assembly: AssemblyConfiguration("")]
-[assembly: AssemblyCompany("OpenHPSDR")]
-[assembly: AssemblyProduct("Thetis")]
-[assembly: AssemblyCopyright("2025")]
+[assembly: AssemblyCompany("Kosta Kanchev, K0KOZ")]
+[assembly: AssemblyProduct("ArtemisSDR")]
+[assembly: AssemblyCopyright("© 2026 Kosta Kanchev (K0KOZ). Derived from Thetis © Richard Samphire (MW0LGE), itself derived from OpenHPSDR (Doug Wigley, W5WC) and PowerSDR (FlexRadio Systems). Licensed under GPL v2.")]
 [assembly: AssemblyTrademark("")]
 [assembly: AssemblyCulture("")]		
 
@@ -67,9 +67,9 @@ using System.Runtime.CompilerServices;
 // You can specify all the values or you can default the Revision and Build Numbers 
 // by using the '*' as shown below:
 
-[assembly: AssemblyVersion("1.0.1.0")]
-[assembly: AssemblyFileVersion("1.0.1.0")]
-[assembly: AssemblyInformationalVersion("Beta v1.0.1")]
+[assembly: AssemblyVersion("2.0.1.0")]
+[assembly: AssemblyFileVersion("2.0.1.0")]
+[assembly: AssemblyInformationalVersion("v2.0.1")]
 
 //
 // In order to sign your assembly you must specify a key to use. Refer to the 

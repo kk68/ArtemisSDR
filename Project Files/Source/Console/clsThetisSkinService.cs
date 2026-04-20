@@ -343,7 +343,7 @@ namespace Thetis
             {
                 using (HttpClient httpClient = new HttpClient())
                 {
-                    httpClient.DefaultRequestHeaders.Add("User-Agent", "Thetis v" + _version);
+                    httpClient.DefaultRequestHeaders.Add("User-Agent", "ArtemisSDR v" + _version);
 
                     using (HttpResponseMessage response = await httpClient.GetAsync(fileUrl, HttpCompletionOption.ResponseHeadersRead,_downloadCancellationTokenSource.Token))
                     using (Stream contentStream = await response.Content.ReadAsStreamAsync())

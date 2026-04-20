@@ -57,14 +57,17 @@ namespace Thetis
             if (sRevision == ".0") sRevision = "";
 
             string version = Common.GetVerNum() + sRevision;
-            string s = "Thetis";
+            string s = "ArtemisSDR";
 
             string sBits = Common.Is64Bit ? " x64" : " x86";
 
             s += " v" + version + sBits;
             s += " (" + VersionInfo.BuildDate + ")<FW>";  //[2.10.2.2]MW0LGE use the auto generated class from pre build event for the BuildDate
 
-            if (BUILD_NAME != "") s += " " + BUILD_NAME;
+            // BUILD_NAME intentionally not appended to the title bar — ArtemisSDR
+            // only supports the SunSDR2 DX, so echoing it here is redundant with
+            // the brand and the "SunSDR Native" protocol label in the <FW> block.
+            // BUILD_NAME is still used in the About dialog version line.
 
             if (!bWithFirmware) s = s.Replace("<FW>", "");
 

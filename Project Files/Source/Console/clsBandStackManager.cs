@@ -1069,13 +1069,18 @@ namespace Thetis
             {
                 foreach(BandFrequencyData bfd in bands)
                 {
-                    if(bfd.bandType == BandType.HF)
+                    // Allow TX on HF ham bands (original behaviour) and on
+                    // VHF ham bands (for radios with native VHF TX — e.g.
+                    // SunSDR2 DX on 2m). Upstream Thetis assumed VHF was
+                    // XVTR-only, but SunSDR transmits directly on 2m.
+                    // WWV and BLMF are SWL listen-only slots — still denied.
+                    if (bfd.bandType == BandType.HF || bfd.bandType == BandType.VHF)
                     {
                         if (bfd.band != Band.WWV && bfd.band != Band.BLMF)
                         {
                             bRet = true;
                             break;
-                        }                            
+                        }
                     }
                 }
             }

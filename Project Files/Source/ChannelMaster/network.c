@@ -100,9 +100,18 @@ int nativeInitMetis(char* netaddr, int port, char* localaddr, int localport, int
 	RadioProtocol = protocol;
 	HPSDRModel = model_id;
 
-	/* SunSDR native protocol — bypass HPSDR socket setup entirely */
+	/* SunSDR native protocol — bypass HPSDR socket setup entirely.
+	 *
+	 * Honour the radio's configured control port (from the Setup
+	 * `Fixed listen port` field or the discovered RadioInfo) so
+	 * operators who changed the port from the 50001 default can
+	 * still connect. Stream port is control port + 1, matching
+	 * the SunSDR2 DX 50001/50002 pairing convention.
+	 * Closes issue #15. */
 	if (protocol == SUNSDR) {
-		return SunSDRInit(netaddr, SUNSDR_CONTROL_PORT, SUNSDR_STREAM_PORT);
+		int sunsdr_ctrl = (port > 0) ? port : SUNSDR_CONTROL_PORT;
+		int sunsdr_stream = (port > 0) ? (port + 1) : SUNSDR_STREAM_PORT;
+		return SunSDRInit(netaddr, sunsdr_ctrl, sunsdr_stream);
 	}
 
 	prn->base_outbound_port = port;
@@ -1553,6 +1562,11 @@ PORT void nativeSunSDRSetRX2(int enabled)
 PORT void nativeSunSDRSetTune(int tune)
 {
 	SunSDRSetTune(tune);
+}
+
+PORT void nativeSunSDRSetPreampAtt(int state)
+{
+	SunSDRSetPreampAtt(state);
 }
 
 PORT void nativeSunSDRLogTuneState(char* label, int chk_tun, int chk_mox, int tuning, int mox,

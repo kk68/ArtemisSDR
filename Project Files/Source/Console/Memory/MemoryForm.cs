@@ -1382,7 +1382,7 @@ namespace Thetis
         } // thread SCHEDULER() 
 
      
-        private string wave_folder = Environment.GetFolderPath(Environment.SpecialFolder.MyMusic) + "\\Thetis";
+        private string wave_folder = Environment.GetFolderPath(Environment.SpecialFolder.MyMusic) + "\\ArtemisSDR";
 
         private void buttonTS1_Click(object sender, EventArgs e)
         {

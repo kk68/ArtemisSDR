@@ -49,7 +49,7 @@ namespace Thetis
 {
     public partial class frmAbout : Form
     {
-        private const string GITHUB_VERSION_JSON_RAW = @"https://raw.githubusercontent.com/ramdor/Thetis/refs/heads/master/version.json";
+        private const string GITHUB_VERSION_JSON_RAW = @"https://raw.githubusercontent.com/kk68/ArtemisSDR/refs/heads/main/version.json";
 
         private class ThetisVersionInfo
         {
@@ -152,7 +152,7 @@ namespace Thetis
 
         private void btnCopyContributors_Click(object sender, EventArgs e)
         {
-            string text = "Thetis\n";
+            string text = "ArtemisSDR\n";
             foreach(string s in lstVersions.Items)
             {
                 text += s + "\n";
@@ -177,7 +177,7 @@ namespace Thetis
 
         private void lnkLicence_LinkClicked(object sender, LinkLabelLinkClickedEventArgs e)
         {
-            lnkLicence.LinkVisited = Common.OpenUri(@"https://github.com/ramdor/Thetis/blob/master/LICENSE");
+            lnkLicence.LinkVisited = Common.OpenUri(@"https://github.com/kk68/ArtemisSDR/blob/main/LICENSE");
         }
 
         private void btnVisit_Click(object sender, EventArgs e)
@@ -190,28 +190,16 @@ namespace Thetis
 
             switch (lstLinks.SelectedIndex)
             {
-                case 0: Common.OpenUri("https://github.com/ramdor/Thetis/releases"); break;
-                case 1: Common.OpenUri("https://discord.gg/6fHCRKnDc9"); break;
-                case 2: Common.OpenUri("https://community.apache-labs.com/index.php"); break;
-                case 3: Common.OpenUri("https://apache-labs.com/"); break;
-                case 4: Common.OpenUri("https://github.com/TAPR/OpenHPSDR-Protocol1-Programmers"); break;
-                case 5: Common.OpenUri("https://github.com/TAPR/OpenHPSDR-Protocol2-Programmers"); break;
-                case 6: Common.OpenUri("https://community.apache-labs.com/viewforum.php?f=23"); break;
-                case 7: Common.OpenUri("https://community.apache-labs.com/viewtopic.php?f=27&t=3080"); break;
-                case 8: Common.OpenUri("https://community.apache-labs.com/viewtopic.php?f=32&t=4972"); break;
-                case 9: Common.OpenUri("https://github.com/laurencebarker/Saturn"); break;
-                case 10: Common.OpenUri("https://github.com/mi0bot/OpenHPSDR-Thetis/releases"); break;
-                case 11: Common.OpenUri("https://github.com/TAPR/OpenHPSDR-wdsp"); break;
-                case 12: Common.OpenUri("https://www.oe3ide.com/wp/software/"); break;
-                case 13: break; // splitter
-                case 14: Common.OpenUri($"file://{_exe_path}Thetis manual.pdf", false); break;
-                case 15: Common.OpenUri($"file://{_exe_path}Thetis-CAT-Command-Reference-Guide-V3.pdf", false); break;
-                case 16: Common.OpenUri($"file://{_exe_path}PureSignal.pdf", false); break;
-                case 17: Common.OpenUri($"file://{_exe_path}Midi2Cat_Instructions_V3.pdf", false); break;
-                case 18: Common.OpenUri($"file://{_exe_path}cmASIO Guide.pdf", false); break;
-                case 19: Common.OpenUri($"file://{_exe_path}BehringerMods_Midi2Cat_v2.pdf", false); break;
-                case 20: Common.OpenUri($"file://{_exe_path}APFtypes.pdf", false); break;
-                case 21: Common.OpenUri($"file://{_exe_path}Thetis Network Settings_0.2.pdf", false); break;
+                case 0: Common.OpenUri("https://github.com/kk68/ArtemisSDR/releases"); break;
+                case 1: Common.OpenUri("https://github.com/TAPR/OpenHPSDR-wdsp"); break;
+                case 2: Common.OpenUri("https://www.oe3ide.com/wp/software/"); break;
+                case 3: break; // splitter
+                case 4: Common.OpenUri($"file://{_exe_path}Thetis manual.pdf", false); break;
+                case 5: Common.OpenUri($"file://{_exe_path}Thetis-CAT-Command-Reference-Guide-V3.pdf", false); break;
+                case 6: Common.OpenUri($"file://{_exe_path}Midi2Cat_Instructions_V3.pdf", false); break;
+                case 7: Common.OpenUri($"file://{_exe_path}cmASIO Guide.pdf", false); break;
+                case 8: Common.OpenUri($"file://{_exe_path}BehringerMods_Midi2Cat_v2.pdf", false); break;
+                case 9: Common.OpenUri($"file://{_exe_path}APFtypes.pdf", false); break;
             }
 
             lstLinks.ClearSelected();

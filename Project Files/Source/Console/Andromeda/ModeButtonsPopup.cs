@@ -362,18 +362,29 @@ namespace Thetis
         public void RepopulateForm()
         {
             DSPMode currentMode;
+            Band currentBand;
 
             if (console.ShowRX1)
             {
                 this.Text = "set RX1 Mode";
                 currentMode = console.RX1DSPMode;
+                currentBand = console.RX1Band;
             }
 
             else
             {
                 this.Text = "set RX2 Mode";
                 currentMode = console.RX2DSPMode;
+                currentBand = console.RX2Band;
             }
+
+            double currentVFO = console.ShowRX1 ? console.VFOAFreq : console.VFOBFreq;
+            if (currentBand == Band.B2M)
+                radBtn6.Text = "NFM";
+            else if (console.IsBroadcastFMFreq(currentVFO))
+                radBtn6.Text = "WFM";
+            else
+                radBtn6.Text = "FM";
 
             switch (currentMode)
             {

@@ -140,7 +140,7 @@ namespace Thetis
         private void setTitle()
         {
             // so each meter title is 'unique'. Useful for streaming software such as OBS
-            this.Text = "Thetis Meter [" + Common.FiveDigitHash(_id).ToString("00000") + "]";
+            this.Text = "ArtemisSDR Meter [" + Common.FiveDigitHash(_id).ToString("00000") + "]";
         }
         public string ID
         {

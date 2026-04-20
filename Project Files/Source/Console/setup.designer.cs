@@ -8467,8 +8467,8 @@
             this.chkFirewallCheck.Size = new System.Drawing.Size(98, 23);
             this.chkFirewallCheck.TabIndex = 39;
             this.chkFirewallCheck.Text = "Firewall Check";
-            this.toolTip1.SetToolTip(this.chkFirewallCheck, "Use this to re-apply default firewall rules if you are having issues.\r\nThetis nee" +
-        "ds to be run as administrator for this to work.\r\n");
+            this.toolTip1.SetToolTip(this.chkFirewallCheck, "Use this to re-apply default firewall rules if you are having issues.\r\nArtemisSDR" +
+        " needs to be run as administrator for this to work.\r\n");
             this.chkFirewallCheck.UseVisualStyleBackColor = true;
             this.chkFirewallCheck.Click += new System.EventHandler(this.chkFirewallCheck_Click);
             // 
@@ -8513,19 +8513,6 @@
             this.comboRadioModel.Font = new System.Drawing.Font("Segoe UI", 9F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
             this.comboRadioModel.FormattingEnabled = true;
             this.comboRadioModel.Items.AddRange(new object[] {
-            "HERMES",
-            "ANAN-10",
-            "ANAN-10E",
-            "ANAN-100",
-            "ANAN-100B",
-            "ANAN-100D",
-            "ANAN-200D",
-            "ANAN-7000DLE",
-            "ANAN-8000DLE",
-            "ANAN-G2",
-            "ANAN-G2-1K",
-            "ANVELINA-PRO3",
-            "RED-PITAYA",
             "SUNSDR2-DX"});
             this.comboRadioModel.Location = new System.Drawing.Point(6, 19);
             this.comboRadioModel.Name = "comboRadioModel";
@@ -9024,7 +9011,7 @@
             this.comboGeneralProcessPriority.Name = "comboGeneralProcessPriority";
             this.comboGeneralProcessPriority.Size = new System.Drawing.Size(112, 21);
             this.comboGeneralProcessPriority.TabIndex = 0;
-            this.toolTip1.SetToolTip(this.comboGeneralProcessPriority, "Sets the process priority of the Thetis software.");
+            this.toolTip1.SetToolTip(this.comboGeneralProcessPriority, "Sets the process priority of the ArtemisSDR software.");
             this.comboGeneralProcessPriority.SelectedIndexChanged += new System.EventHandler(this.comboGeneralProcessPriority_SelectedIndexChanged);
             // 
             // grpGeneralOptions
@@ -11033,8 +11020,8 @@
             this.chkAutoLaunchTryToClose.Size = new System.Drawing.Size(81, 17);
             this.chkAutoLaunchTryToClose.TabIndex = 36;
             this.chkAutoLaunchTryToClose.Text = "Try to close";
-            this.toolTip1.SetToolTip(this.chkAutoLaunchTryToClose, "Thetis will try to close everything it has opened at launch. This will be done on" +
-        " shutdown.");
+            this.toolTip1.SetToolTip(this.chkAutoLaunchTryToClose, "ArtemisSDR will try to close everything it has opened at launch. This will be don" +
+        "e on shutdown.");
             this.chkAutoLaunchTryToClose.UseVisualStyleBackColor = true;
             // 
             // chkAutoLaunchNoStartIfRunning
@@ -42354,8 +42341,8 @@
             this.btnNR3_model_load.Size = new System.Drawing.Size(75, 23);
             this.btnNR3_model_load.TabIndex = 2;
             this.btnNR3_model_load.Text = "Use Model";
-            this.toolTip1.SetToolTip(this.btnNR3_model_load, "Select a model that RNnoise will use. Note: if the format is bad, Thetis will pro" +
-        "bably crash !");
+            this.toolTip1.SetToolTip(this.btnNR3_model_load, "Select a model that RNnoise will use. Note: if the format is bad, ArtemisSDR will" +
+        " probably crash !");
             this.btnNR3_model_load.UseVisualStyleBackColor = true;
             this.btnNR3_model_load.Click += new System.EventHandler(this.btnNR3_model_load_Click);
             // 
@@ -46550,9 +46537,9 @@
             this.chkHighlightTXProfileSaveItems.Size = new System.Drawing.Size(172, 17);
             this.chkHighlightTXProfileSaveItems.TabIndex = 76;
             this.chkHighlightTXProfileSaveItems.Text = "Highlight TX Profile Save Items";
-            this.toolTip1.SetToolTip(this.chkHighlightTXProfileSaveItems, "Enabling this will highlight in yellow all settings throughout Thetis that will b" +
-        "e saved\r\nwith a tx profile and consequently recovered when the tx profile is use" +
-        "d.");
+            this.toolTip1.SetToolTip(this.chkHighlightTXProfileSaveItems, "Enabling this will highlight in yellow all settings throughout ArtemisSDR that wi" +
+        "ll be saved\r\nwith a tx profile and consequently recovered when the tx profile is" +
+        " used.");
             this.chkHighlightTXProfileSaveItems.UseVisualStyleBackColor = true;
             this.chkHighlightTXProfileSaveItems.CheckedChanged += new System.EventHandler(this.chkHighlightTXProfileSaveItems_CheckedChanged);
             // 
@@ -46643,7 +46630,7 @@
             this.chkTXInhibit.Size = new System.Drawing.Size(161, 16);
             this.chkTXInhibit.TabIndex = 68;
             this.chkTXInhibit.Text = "Update with TX Inhibit state";
-            this.toolTip1.SetToolTip(this.chkTXInhibit, "Thetis will update on TX inhibit state change");
+            this.toolTip1.SetToolTip(this.chkTXInhibit, "ArtemisSDR will update on TX inhibit state change");
             this.chkTXInhibit.CheckedChanged += new System.EventHandler(this.chkTXInhibit_CheckedChanged);
             // 
             // chkTXInhibitReverse
@@ -46664,8 +46651,8 @@
             this.chkSaveTXProfileOnExit.Name = "chkSaveTXProfileOnExit";
             this.chkSaveTXProfileOnExit.Size = new System.Drawing.Size(215, 18);
             this.chkSaveTXProfileOnExit.TabIndex = 67;
-            this.chkSaveTXProfileOnExit.Text = "Auto Save TX Profile on Thetis close";
-            this.toolTip1.SetToolTip(this.chkSaveTXProfileOnExit, "Automatically saves the current TX Profile when Thetis is closed");
+            this.chkSaveTXProfileOnExit.Text = "Auto Save TX Profile on ArtemisSDR close";
+            this.toolTip1.SetToolTip(this.chkSaveTXProfileOnExit, "Automatically saves the current TX Profile when ArtemisSDR is closed");
             this.chkSaveTXProfileOnExit.CheckedChanged += new System.EventHandler(this.chkSaveTXProfileOnExit_CheckedChanged);
             // 
             // chkAutoSaveTXProfile
@@ -48049,10 +48036,10 @@
             0,
             0});
             this.nudVHF13.Minimum = new decimal(new int[] {
-            388,
             0,
             0,
-            65536});
+            0,
+            0});
             this.nudVHF13.Name = "nudVHF13";
             this.nudVHF13.Size = new System.Drawing.Size(48, 20);
             this.nudVHF13.TabIndex = 163;
@@ -48090,10 +48077,10 @@
             0,
             0});
             this.nudVHF12.Minimum = new decimal(new int[] {
-            388,
             0,
             0,
-            65536});
+            0,
+            0});
             this.nudVHF12.Name = "nudVHF12";
             this.nudVHF12.Size = new System.Drawing.Size(48, 20);
             this.nudVHF12.TabIndex = 161;
@@ -48131,10 +48118,10 @@
             0,
             0});
             this.nudVHF11.Minimum = new decimal(new int[] {
-            388,
             0,
             0,
-            65536});
+            0,
+            0});
             this.nudVHF11.Name = "nudVHF11";
             this.nudVHF11.Size = new System.Drawing.Size(48, 20);
             this.nudVHF11.TabIndex = 159;
@@ -48172,10 +48159,10 @@
             0,
             0});
             this.nudVHF10.Minimum = new decimal(new int[] {
-            388,
             0,
             0,
-            65536});
+            0,
+            0});
             this.nudVHF10.Name = "nudVHF10";
             this.nudVHF10.Size = new System.Drawing.Size(48, 20);
             this.nudVHF10.TabIndex = 157;
@@ -48213,10 +48200,10 @@
             0,
             0});
             this.nudVHF9.Minimum = new decimal(new int[] {
-            388,
             0,
             0,
-            65536});
+            0,
+            0});
             this.nudVHF9.Name = "nudVHF9";
             this.nudVHF9.Size = new System.Drawing.Size(48, 20);
             this.nudVHF9.TabIndex = 155;
@@ -48254,10 +48241,10 @@
             0,
             0});
             this.nudVHF8.Minimum = new decimal(new int[] {
-            388,
             0,
             0,
-            65536});
+            0,
+            0});
             this.nudVHF8.Name = "nudVHF8";
             this.nudVHF8.Size = new System.Drawing.Size(48, 20);
             this.nudVHF8.TabIndex = 153;
@@ -48295,10 +48282,10 @@
             0,
             0});
             this.nudVHF7.Minimum = new decimal(new int[] {
-            388,
             0,
             0,
-            65536});
+            0,
+            0});
             this.nudVHF7.Name = "nudVHF7";
             this.nudVHF7.Size = new System.Drawing.Size(48, 20);
             this.nudVHF7.TabIndex = 151;
@@ -48336,10 +48323,10 @@
             0,
             0});
             this.nudVHF6.Minimum = new decimal(new int[] {
-            388,
             0,
             0,
-            65536});
+            0,
+            0});
             this.nudVHF6.Name = "nudVHF6";
             this.nudVHF6.Size = new System.Drawing.Size(48, 20);
             this.nudVHF6.TabIndex = 149;
@@ -48377,10 +48364,10 @@
             0,
             0});
             this.nudVHF5.Minimum = new decimal(new int[] {
-            388,
             0,
             0,
-            65536});
+            0,
+            0});
             this.nudVHF5.Name = "nudVHF5";
             this.nudVHF5.Size = new System.Drawing.Size(48, 20);
             this.nudVHF5.TabIndex = 147;
@@ -48418,10 +48405,10 @@
             0,
             0});
             this.nudVHF4.Minimum = new decimal(new int[] {
-            388,
             0,
             0,
-            65536});
+            0,
+            0});
             this.nudVHF4.Name = "nudVHF4";
             this.nudVHF4.Size = new System.Drawing.Size(48, 20);
             this.nudVHF4.TabIndex = 145;
@@ -48459,10 +48446,10 @@
             0,
             0});
             this.nudVHF3.Minimum = new decimal(new int[] {
-            388,
             0,
             0,
-            65536});
+            0,
+            0});
             this.nudVHF3.Name = "nudVHF3";
             this.nudVHF3.Size = new System.Drawing.Size(48, 20);
             this.nudVHF3.TabIndex = 143;
@@ -48500,10 +48487,10 @@
             0,
             0});
             this.nudVHF2.Minimum = new decimal(new int[] {
-            388,
             0,
             0,
-            65536});
+            0,
+            0});
             this.nudVHF2.Name = "nudVHF2";
             this.nudVHF2.Size = new System.Drawing.Size(48, 20);
             this.nudVHF2.TabIndex = 141;
@@ -48541,10 +48528,10 @@
             0,
             0});
             this.nudVHF1.Minimum = new decimal(new int[] {
-            388,
             0,
             0,
-            65536});
+            0,
+            0});
             this.nudVHF1.Name = "nudVHF1";
             this.nudVHF1.Size = new System.Drawing.Size(48, 20);
             this.nudVHF1.TabIndex = 139;
@@ -48582,10 +48569,10 @@
             0,
             0});
             this.nudVHF0.Minimum = new decimal(new int[] {
-            388,
             0,
             0,
-            65536});
+            0,
+            0});
             this.nudVHF0.Name = "nudVHF0";
             this.nudVHF0.Size = new System.Drawing.Size(48, 20);
             this.nudVHF0.TabIndex = 137;
@@ -48612,10 +48599,10 @@
             0,
             0});
             this.nud6M.Minimum = new decimal(new int[] {
-            388,
             0,
             0,
-            65536});
+            0,
+            0});
             this.nud6M.Name = "nud6M";
             this.nud6M.Size = new System.Drawing.Size(48, 20);
             this.nud6M.TabIndex = 136;
@@ -48664,10 +48651,10 @@
             0,
             0});
             this.nud10M.Minimum = new decimal(new int[] {
-            388,
             0,
             0,
-            65536});
+            0,
+            0});
             this.nud10M.Name = "nud10M";
             this.nud10M.Size = new System.Drawing.Size(48, 20);
             this.nud10M.TabIndex = 133;
@@ -48705,10 +48692,10 @@
             0,
             0});
             this.nud12M.Minimum = new decimal(new int[] {
-            388,
             0,
             0,
-            65536});
+            0,
+            0});
             this.nud12M.Name = "nud12M";
             this.nud12M.Size = new System.Drawing.Size(48, 20);
             this.nud12M.TabIndex = 131;
@@ -48746,10 +48733,10 @@
             0,
             0});
             this.nud15M.Minimum = new decimal(new int[] {
-            388,
             0,
             0,
-            65536});
+            0,
+            0});
             this.nud15M.Name = "nud15M";
             this.nud15M.Size = new System.Drawing.Size(48, 20);
             this.nud15M.TabIndex = 129;
@@ -48787,10 +48774,10 @@
             0,
             0});
             this.nud17M.Minimum = new decimal(new int[] {
-            388,
             0,
             0,
-            65536});
+            0,
+            0});
             this.nud17M.Name = "nud17M";
             this.nud17M.Size = new System.Drawing.Size(48, 20);
             this.nud17M.TabIndex = 127;
@@ -48828,10 +48815,10 @@
             0,
             0});
             this.nud20M.Minimum = new decimal(new int[] {
-            388,
             0,
             0,
-            65536});
+            0,
+            0});
             this.nud20M.Name = "nud20M";
             this.nud20M.Size = new System.Drawing.Size(48, 20);
             this.nud20M.TabIndex = 125;
@@ -48869,10 +48856,10 @@
             0,
             0});
             this.nud30M.Minimum = new decimal(new int[] {
-            388,
             0,
             0,
-            65536});
+            0,
+            0});
             this.nud30M.Name = "nud30M";
             this.nud30M.Size = new System.Drawing.Size(48, 20);
             this.nud30M.TabIndex = 123;
@@ -48910,10 +48897,10 @@
             0,
             0});
             this.nud40M.Minimum = new decimal(new int[] {
-            388,
             0,
             0,
-            65536});
+            0,
+            0});
             this.nud40M.Name = "nud40M";
             this.nud40M.Size = new System.Drawing.Size(48, 20);
             this.nud40M.TabIndex = 121;
@@ -48951,10 +48938,10 @@
             0,
             0});
             this.nud60M.Minimum = new decimal(new int[] {
-            388,
             0,
             0,
-            65536});
+            0,
+            0});
             this.nud60M.Name = "nud60M";
             this.nud60M.Size = new System.Drawing.Size(48, 20);
             this.nud60M.TabIndex = 119;
@@ -48992,10 +48979,10 @@
             0,
             0});
             this.nud80M.Minimum = new decimal(new int[] {
-            388,
             0,
             0,
-            65536});
+            0,
+            0});
             this.nud80M.Name = "nud80M";
             this.nud80M.Size = new System.Drawing.Size(48, 20);
             this.nud80M.TabIndex = 117;
@@ -49033,10 +49020,10 @@
             0,
             0});
             this.nud160M.Minimum = new decimal(new int[] {
-            388,
             0,
             0,
-            65536});
+            0,
+            0});
             this.nud160M.Name = "nud160M";
             this.nud160M.Size = new System.Drawing.Size(48, 20);
             this.nud160M.TabIndex = 115;
@@ -58249,7 +58236,7 @@
             this.chkEmulateExpertSDR3Protocol.Size = new System.Drawing.Size(167, 17);
             this.chkEmulateExpertSDR3Protocol.TabIndex = 72;
             this.chkEmulateExpertSDR3Protocol.Text = "Emulate ExpertSDR3 protocol";
-            this.toolTip1.SetToolTip(this.chkEmulateExpertSDR3Protocol, "Causes the TCI protocol message to send \'ExpertSDR3\' instead of \'Thetis\'");
+            this.toolTip1.SetToolTip(this.chkEmulateExpertSDR3Protocol, "Causes the TCI protocol message to send \'ExpertSDR3\' instead of \'ArtemisSDR\'");
             this.chkEmulateExpertSDR3Protocol.UseVisualStyleBackColor = true;
             this.chkEmulateExpertSDR3Protocol.CheckedChanged += new System.EventHandler(this.chkEmulateExpertSDR3Protocol_CheckedChanged);
             // 
@@ -58451,7 +58438,7 @@
             this.chkUseRX1vfoaForRX2vfoa.Size = new System.Drawing.Size(206, 17);
             this.chkUseRX1vfoaForRX2vfoa.TabIndex = 19;
             this.chkUseRX1vfoaForRX2vfoa.Text = "Use RX1 VFOa for RX2 VFOa (in+out)";
-            this.toolTip1.SetToolTip(this.chkUseRX1vfoaForRX2vfoa, "Thetis does not have VFOa for RX2. Use RX1 VFOa for RX2 VFOa");
+            this.toolTip1.SetToolTip(this.chkUseRX1vfoaForRX2vfoa, "ArtemisSDR does not have VFOa for RX2. Use RX1 VFOa for RX2 VFOa");
             this.chkUseRX1vfoaForRX2vfoa.UseVisualStyleBackColor = true;
             this.chkUseRX1vfoaForRX2vfoa.CheckedChanged += new System.EventHandler(this.chkUseRX1vfoaForRX2vfoa_CheckedChanged);
             // 
@@ -58464,7 +58451,7 @@
             this.chkCopyRX2VFObToVFOa.Size = new System.Drawing.Size(215, 17);
             this.chkCopyRX2VFObToVFOa.TabIndex = 18;
             this.chkCopyRX2VFObToVFOa.Text = "Duplicate RX2 VFOb to RX2 VFOa (out)";
-            this.toolTip1.SetToolTip(this.chkCopyRX2VFObToVFOa, "Thetis does not have VFOa for RX2. This option will duplicate vfob to vfoa");
+            this.toolTip1.SetToolTip(this.chkCopyRX2VFObToVFOa, "ArtemisSDR does not have VFOa for RX2. This option will duplicate vfob to vfoa");
             this.chkCopyRX2VFObToVFOa.UseVisualStyleBackColor = true;
             this.chkCopyRX2VFObToVFOa.CheckedChanged += new System.EventHandler(this.chkCopyRX2VFObToVFOa_CheckedChanged);
             // 
@@ -58711,7 +58698,7 @@
             this.txtN1MM_ID_RX_2.Name = "txtN1MM_ID_RX_2";
             this.txtN1MM_ID_RX_2.Size = new System.Drawing.Size(110, 20);
             this.txtN1MM_ID_RX_2.TabIndex = 73;
-            this.txtN1MM_ID_RX_2.Text = "Thetis_2";
+            this.txtN1MM_ID_RX_2.Text = "ArtemisSDR_2";
             this.toolTip1.SetToolTip(this.txtN1MM_ID_RX_2, "The unique ID for RX2 data");
             this.txtN1MM_ID_RX_2.TextChanged += new System.EventHandler(this.txtN1MM_RXn_ID_TextChanged);
             // 
@@ -58722,7 +58709,7 @@
             this.txtN1MM_ID_RX_1.Name = "txtN1MM_ID_RX_1";
             this.txtN1MM_ID_RX_1.Size = new System.Drawing.Size(110, 20);
             this.txtN1MM_ID_RX_1.TabIndex = 72;
-            this.txtN1MM_ID_RX_1.Text = "Thetis_1";
+            this.txtN1MM_ID_RX_1.Text = "ArtemisSDR_1";
             this.toolTip1.SetToolTip(this.txtN1MM_ID_RX_1, "The unique ID for RX1 data");
             this.txtN1MM_ID_RX_1.TextChanged += new System.EventHandler(this.txtN1MM_RXn_ID_TextChanged);
             // 
@@ -59584,8 +59571,8 @@
             this.chkBoxIND.Size = new System.Drawing.Size(111, 31);
             this.chkBoxIND.TabIndex = 7;
             this.chkBoxIND.Text = "Independent";
-            this.toolTip1.SetToolTip(this.chkBoxIND, "Check to use the PowerMate Tune Step \r\n\r\nUncheck to use the main Thetis Tune Step" +
-        "");
+            this.toolTip1.SetToolTip(this.chkBoxIND, "Check to use the PowerMate Tune Step \r\n\r\nUncheck to use the main ArtemisSDR Tune " +
+        "Step");
             // 
             // labelTS469
             // 

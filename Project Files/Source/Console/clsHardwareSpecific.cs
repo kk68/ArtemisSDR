@@ -653,6 +653,13 @@ namespace Thetis
                     gains[(int)Band.B12M] = 35.3f;
                     gains[(int)Band.B10M] = 35.3f;
                     gains[(int)Band.B6M] = 35.3f;
+                    // Native 2m TX PA-gain starting baseline. Previously
+                    // left at the default 100 dB (uninitialized) which
+                    // drove RadioVolume to near-zero (log showed rawDrive=1
+                    // reqW=0.4W even at UI-slider 100). 35.3 dB matches
+                    // the 6m entry as a first cut; user will fine-tune via
+                    // Setup -> Transmit -> PA Settings once TX is audible.
+                    gains[(int)Band.B2M] = 35.3f;
 
                     gains[(int)Band.VHF0] = 56.2f;
                     gains[(int)Band.VHF1] = 56.2f;

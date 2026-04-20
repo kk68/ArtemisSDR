@@ -181,7 +181,7 @@ namespace Thetis
             else
             {
                 //msgbox need to be admin !
-                MessageBox.Show("You need to be an Administrator. Please run Thetis 'As Administrator'.",
+                MessageBox.Show("You need to be an Administrator. Please run ArtemisSDR 'As Administrator'.",
                     "No Administrator Rights",
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Error, MessageBoxDefaultButton.Button1, Common.MB_TOPMOST);

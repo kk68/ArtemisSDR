@@ -46,8 +46,7 @@ namespace Thetis
 {
     static class SingleInstance
     {
-        private const string MUTEX_NAME = @"Global\Thetis_7F1F9E7F-6C3E-4F3E-9E4C-8E0A3C6E8C11"; // some random ID specifc to THETIS
-                                                                                                 // this could be changed for a HL2 version for example
+        private const string MUTEX_NAME = @"Global\ArtemisSDR_5B9F3E27-1C8A-4D6F-9E02-7A4C8B1D3F5E"; // ArtemisSDR-specific — must differ from any Thetis variant
         private static Mutex _mutex;
         private static bool _owns_mutex;
 
@@ -82,13 +81,13 @@ namespace Thetis
                     return true;
                 }
 
-                DialogResult dr = MessageBox.Show("There is another Thetis instance running.\nAre you sure you want to continue?", "Continue?", MessageBoxButtons.YesNo, MessageBoxIcon.Question, MessageBoxDefaultButton.Button1, Common.MB_TOPMOST);
+                DialogResult dr = MessageBox.Show("There is another ArtemisSDR instance running.\nAre you sure you want to continue?", "Continue?", MessageBoxButtons.YesNo, MessageBoxIcon.Question, MessageBoxDefaultButton.Button1, Common.MB_TOPMOST);
                 if (dr == DialogResult.No) return false;
                 return true;
             }
             catch (Exception ex)
             {
-                DialogResult dr = MessageBox.Show("There was an issue trying to determine if another Thetis instance is running.\nAre you sure you want to continue?\n\n" + ex.GetType().Name + ": " + ex.Message, "Continue?", MessageBoxButtons.YesNo, MessageBoxIcon.Question, MessageBoxDefaultButton.Button1, Common.MB_TOPMOST);
+                DialogResult dr = MessageBox.Show("There was an issue trying to determine if another ArtemisSDR instance is running.\nAre you sure you want to continue?\n\n" + ex.GetType().Name + ": " + ex.Message, "Continue?", MessageBoxButtons.YesNo, MessageBoxIcon.Question, MessageBoxDefaultButton.Button1, Common.MB_TOPMOST);
                 if (dr == DialogResult.No) return false;
                 return true;
             }

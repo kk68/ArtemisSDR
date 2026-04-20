@@ -75,11 +75,12 @@ namespace Thetis
 
     public partial class Setup : Form
     {
-        // for these callsigns always show cmasio tab, as a perk to the testers from discord
-        private readonly List<string> CMASIO_ALWAYS_SHOW = new List<string>() {  "dl5tt", "dh1klm", "ea8djr", "ei7bmb", "kc1lko", "k1lsb", "k1sr", "k2gx", "k2tc", "kb2uka",
-                                                                                 "ki4tga", "ko6dlv", "kw4ex", "m0cke", "mw0lge", "n6mud", "nc3z", "nj2us",
-                                                                                 "nr0v", "ny8t", "oe3ide", "oz1ct", "sa3atf", "ve2jn", "ve9iou", "vk6ia",
-                                                                                 "w1aex", "w1izz", "wr1s", "w2pa", "w3ub", "w9ac", "w9ez" };
+        // Upstream Thetis showed the cmASIO tab unconditionally only for a
+        // hardcoded list of tester callsigns. Those individuals consented to
+        // being listed in upstream Thetis — not here. For ArtemisSDR the list
+        // is empty; the cmASIO tab visibility rule falls through to the normal
+        // "per-radio-model" logic in updateCmASIO_Visibility().
+        private readonly List<string> CMASIO_ALWAYS_SHOW = new List<string>();
         #region Variable Declaration
 
         private Console console;
@@ -270,8 +271,8 @@ namespace Thetis
 
             sTip =
             "In/Out pairs can be chosen when the device is NOT active." + System.Environment.NewLine +
-            "If active, disable the device, restart Thetis, then make your choice and" + System.Environment.NewLine +
-            "restart Thetis for it to take effect." + System.Environment.NewLine +
+            "If active, disable the device, restart ArtemisSDR, then make your choice and" + System.Environment.NewLine +
+            "restart ArtemisSDR for it to take effect." + System.Environment.NewLine +
             "Default is normally ch1+2 for In/Out";
             toolTip1.SetToolTip(pbCMasio_InOut_Info, sTip);
 
@@ -1169,14 +1170,17 @@ namespace Thetis
                 path = ".\\Skins\\";
             else
                 path = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData) +
-                    "\\OpenHPSDR\\Skins";
+                    "\\ArtemisSDR\\Skins";
             _skinPath = path;
 
             if (!Directory.Exists(path))
             {
-                MessageBox.Show("The console presentation files (skins) were not found.\n" +
-                    "Appearance will suffer until this is rectified.\n",
-                    "Skins files not found",
+                MessageBox.Show("No skins are installed yet.\n\n" +
+                    "To install one, go to Setup -> Appearance -> Skin Servers,\n" +
+                    "pick a server (default: \"Thetis default skins\"), select a skin,\n" +
+                    "and click Download. ArtemisSDR will install it automatically.\n\n" +
+                    "Appearance will look plain until a skin is applied.",
+                    "No skins installed",
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Error, MessageBoxDefaultButton.Button1, Common.MB_TOPMOST); //MW0LGE_[2.9.0.7]);
                 return;
@@ -1193,9 +1197,12 @@ namespace Thetis
 
             if (comboAppSkin.Items.Count == 0)
             {
-                MessageBox.Show("The console presentation files (skins) were not found.\n" +
-                    "Appearance will suffer until this is rectified.\n",
-                    "Skins files not found",
+                MessageBox.Show("No skins are installed yet.\n\n" +
+                    "To install one, go to Setup -> Appearance -> Skin Servers,\n" +
+                    "pick a server (default: \"Thetis default skins\"), select a skin,\n" +
+                    "and click Download. ArtemisSDR will install it automatically.\n\n" +
+                    "Appearance will look plain until a skin is applied.",
+                    "No skins installed",
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Error, MessageBoxDefaultButton.Button1, Common.MB_TOPMOST); //MW0LGE_[2.9.0.7]);
                 return;
@@ -1788,7 +1795,7 @@ namespace Thetis
                 string val = a["comboRadioModel"];
                 if (!comboRadioModel.Items.Contains(val))
                 {
-                    DialogResult dr = MessageBox.Show($"The radio model stored in the database is not known by this version of Thetis [{val}]. \n\nAre you using the correct version ? It will be reset back to HERMES.",
+                    DialogResult dr = MessageBox.Show($"The radio model stored in the database is not known by this version of ArtemisSDR [{val}]. \n\nAre you using the correct version ? It will be reset back to HERMES.",
                     "Model version issue",
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Information, MessageBoxDefaultButton.Button1, Common.MB_TOPMOST);
@@ -2013,7 +2020,7 @@ namespace Thetis
 
                 if (!MeterManager.RestoreSettings(ref a)) // pass this dictionary of settings to the meter manager to restore from
                 {
-                    MessageBox.Show("There was an issue restoring the settings for MultiMeter. Please remove all meters, re-add, and restart Thetis.", "MultiMeter RestoreSettings",
+                    MessageBox.Show("There was an issue restoring the settings for MultiMeter. Please remove all meters, re-add, and restart ArtemisSDR.", "MultiMeter RestoreSettings",
                         MessageBoxButtons.OK, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button1, Common.MB_TOPMOST);
                 }
             }
@@ -12535,7 +12542,7 @@ namespace Thetis
             string path = ".\\Skins\\";
             if (!Directory.Exists(path + comboAppSkin.Text))
                 path = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData) +
-                        "\\OpenHPSDR\\Skins";
+                        "\\ArtemisSDR\\Skins";
 
             if (_skinPath == "") _skinPath = path;
 
@@ -12564,7 +12571,7 @@ namespace Thetis
         {
 
             string path = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData) +
-                    "\\OpenHPSDR\\Skins\\";
+                    "\\ArtemisSDR\\Skins\\";
 
             if (Directory.Exists(path + comboAppSkin.Text))
                 Skin.Save(comboAppSkin.Text, path, console);
@@ -24691,6 +24698,8 @@ namespace Thetis
             {
                 MeterType mt = (MeterType)n;
 
+                if (mt == MeterType.DISCORD_BUTTONS) continue;
+
                 if (m.HasMeterType(mt))
                 {
                     List<int> orders = m.GetOrderForMeterType(mt); // can be muliple orders
@@ -27798,7 +27807,7 @@ namespace Thetis
                 picSkinThumbnail.Image = null;
 
             lblSkinVersion.Text = "Version: " + validateVersion(ts.SkinVersion);
-            lblSkinThetisVersion.Text = "Min Thetis Version: " + validateVersion(ts.FromThetisVersion);
+            lblSkinThetisVersion.Text = "Min ArtemisSDR Version: " + validateVersion(ts.FromThetisVersion);
             lblSkinDateReleased.Text = "Release Date: " + validateDate(ts.DateReleased).Left(14);
             lblSkinOverview.Text = ts.SkinName + Environment.NewLine + ts.Overview.Left(1024);
             lblSkinMeters.Text = "Type: " + (ts.IsMeterSkin ? "MultiMeter Skin" : "Console Skin");
@@ -27816,7 +27825,13 @@ namespace Thetis
             if (ts.SkinUrl != "" && Common.IsValidUri(ts.SkinUrl))
             {
                 btnDownloadSkin.Tag = ts.SkinUrl.Left(1024);
-                btnDownloadSkin.Enabled = Common.CompareVersions(ts.FromThetisVersion, Common.GetFileVersion()) <= 0;
+                // Skin servers are authored against Thetis version numbering (2.x.y.z).
+                // ArtemisSDR uses an independent 1.x numbering that is "lower" by literal
+                // comparison, so a naive check against GetFileVersion would disable every
+                // skin. This fork is functionally based on Thetis 2.10.3.13; report that
+                // as our compat version so skins targeting that or earlier are enabled.
+                const string THETIS_COMPAT_VERSION = "2.10.3.13";
+                btnDownloadSkin.Enabled = Common.CompareVersions(ts.FromThetisVersion, THETIS_COMPAT_VERSION) <= 0;
             }
             else
             {
@@ -27981,9 +27996,9 @@ namespace Thetis
                             else
                             {
                                 if (bMeterFolderFoundInRoot)
-                                    sOutputPath = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData) + "\\OpenHPSDR";
+                                    sOutputPath = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData) + "\\ArtemisSDR";
                                 else
-                                    sOutputPath = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData) + "\\OpenHPSDR\\Meters";
+                                    sOutputPath = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData) + "\\ArtemisSDR\\Meters";
                             }
                             bExtract = true;
                             bExpandedMeterSkins = true;
@@ -27993,15 +28008,15 @@ namespace Thetis
                         {
                             if (bUsesFilesInRoot || e.BypassRootFolderCheck)
                             {
-                                sOutputPath = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData) + "\\OpenHPSDR\\Skins";
+                                sOutputPath = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData) + "\\ArtemisSDR\\Skins";
                                 bExtract = true;
                             }
                             else
                             {
                                 if (bConsoleFolderFoundInRoot || bMeterFolderFoundInRoot)
-                                    sOutputPath = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData) + "\\OpenHPSDR\\Skins\\" + sFile;
+                                    sOutputPath = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData) + "\\ArtemisSDR\\Skins\\" + sFile;
                                 else
-                                    sOutputPath = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData) + "\\OpenHPSDR";
+                                    sOutputPath = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData) + "\\ArtemisSDR";
                                 bExtract = true;
                             }
                         }
@@ -34097,7 +34112,7 @@ namespace Thetis
                 return;
             }
             // ask user
-            DialogResult dr = MessageBox.Show("This test will change lots of settings, modes, band, resolution, sample rates, etc etc, to maintain consistancy between tests.\n\nPlease use a FRESH database using the DB manager for this test, with just radio model, region and connection details changed. You should be able to connect and power on/off using Thetis. Failure to do so may result in unexpected changes to configuration. No transmissions will be made.\n\nDo you want to perform this test?",
+            DialogResult dr = MessageBox.Show("This test will change lots of settings, modes, band, resolution, sample rates, etc etc, to maintain consistancy between tests.\n\nPlease use a FRESH database using the DB manager for this test, with just radio model, region and connection details changed. You should be able to connect and power on/off using ArtemisSDR. Failure to do so may result in unexpected changes to configuration. No transmissions will be made.\n\nDo you want to perform this test?",
                 "FPS Profile Test",
                 MessageBoxButtons.OKCancel,
                 MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2, Common.MB_TOPMOST);
@@ -35973,6 +35988,31 @@ namespace Thetis
                     discovered = new List<NicRadioScanResult>();
                     if (result != null) discovered.Add(result);
                 }
+
+                /* SunSDR native-protocol probe: the HPSDR scan above will not
+                 * see a SunSDR2 DX (different discovery packet on port 50001).
+                 * Run the SunSDR probe only when the selected Radio Model is
+                 * SunSDR, and merge replies into the per-NIC Radios list.
+                 *
+                 * Broadcast target is the SunSDR2 DX default control port
+                 * (50001). Operators who changed the radio's control port
+                 * from 50001 cannot use Discover on that setup; they can
+                 * still add the radio via the Custom dialog by typing
+                 * IP:port (e.g. 10.0.3.50:40001) — the parser honours the
+                 * port and network.c passes it through to SunSDRInit
+                 * (fix for issue #15). */
+                if (HardwareSpecific.Model == HPSDRModel.SUNSDR2DX)
+                {
+                    SunSDRDiscoveryService sunsdrSvc = new SunSDRDiscoveryService();
+                    foreach (NicRadioScanResult nic in discovered)
+                    {
+                        if (nic == null || nic.LocalIPv4 == null) continue;
+                        List<RadioInfo> sunsdrRadios = sunsdrSvc.Probe(nic.LocalIPv4, 800);
+                        if (sunsdrRadios == null || sunsdrRadios.Count < 1) continue;
+                        if (nic.Radios == null) nic.Radios = new List<RadioInfo>();
+                        nic.Radios.AddRange(sunsdrRadios);
+                    }
+                }
             }
             finally
             {
@@ -36223,6 +36263,14 @@ namespace Thetis
 
             f.Board = HardwareSpecific.Hardware.ToString();
 
+            /* Pre-populate the IP field with the currently selected radio's
+             * IP (if any). Port is intentionally stripped — the field
+             * accepts IP only; discovery port defaults to 1024 in
+             * tryParseIpPort's fallback path. */
+            string priorIp = ucRadioList_Radios.SelectedRadioIp;
+            if (!string.IsNullOrWhiteSpace(priorIp))
+                f.RadioIPPort = priorIp;
+
             DialogResult dr = f.ShowDialog(this);
             if (dr == DialogResult.Cancel) return;
 
@@ -36392,7 +36440,7 @@ namespace Thetis
             if (string.IsNullOrEmpty(txtRecording_customFolder.Text))
             {
                 txtRecording_customFolder.TextChanged -= txtRecording_customFolder_TextChanged;
-                txtRecording_customFolder.Text = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyMusic), "Thetis");
+                txtRecording_customFolder.Text = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyMusic), "ArtemisSDR");
                 txtRecording_customFolder.TextChanged += txtRecording_customFolder_TextChanged;
             }
 

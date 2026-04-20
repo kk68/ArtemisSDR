@@ -79,7 +79,7 @@ namespace Thetis
         static readonly Dictionary<string, Entry> _entries = new Dictionary<string, Entry>();
         static DateTime _total_start_utc;
         static int _seq = 1;
-        static readonly string _reg_subkey = @"Software\OpenHPSDR\Thetis-x64";
+        static readonly string _reg_subkey = @"Software\ArtemisSDR";
 
         [DllImport("user32.dll")]
         static extern bool ShowScrollBar(IntPtr hWnd, int wBar, bool bShow);
@@ -463,7 +463,7 @@ namespace Thetis
 
             public LogForm()
             {
-                Text = "Thetis Startup Log";
+                Text = "ArtemisSDR Startup Log";
                 StartPosition = FormStartPosition.Manual;
                 Size = new Size(400, 680);
                 FormBorderStyle = FormBorderStyle.FixedToolWindow;

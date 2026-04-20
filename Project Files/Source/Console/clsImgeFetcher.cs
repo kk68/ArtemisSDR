@@ -242,7 +242,7 @@ namespace Thetis
                             }
 
                             HttpWebRequest request = (HttpWebRequest)WebRequest.Create(unique_url);
-                            request.UserAgent = "Thetis v" + _version;                            
+                            request.UserAgent = "ArtemisSDR v" + _version;
 
                             request.Timeout = 2000;
                             request.CachePolicy = new HttpRequestCachePolicy(HttpRequestCacheLevel.NoCacheNoStore);

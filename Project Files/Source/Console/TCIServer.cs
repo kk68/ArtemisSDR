@@ -2516,6 +2516,11 @@ namespace Thetis
 				sProtocol = "ExpertSDR3";
             else
 				sProtocol = "Thetis";
+			// NOTE: wire protocol identifier intentionally kept as "Thetis".
+			// TCI clients (DX cluster apps, loggers, WSJT-X, etc.) match on
+			// this string to decide what features to send. Using "ArtemisSDR"
+			// breaks rich-spot JSON with flag data, etc. Users never see this
+			// string; it is only exchanged between server and client.
 
 			sendTextFrame("protocol:" + sProtocol + ",2.0;");
 
@@ -3057,7 +3062,7 @@ namespace Thetis
 			}
 			else if(opcode == EOpcodeType.Ping)
             {
-				sendPongFrame("Thetis");
+				sendPongFrame("Thetis"); // wire identifier — keep as Thetis for TCI client compatibility
             }
 			else if(opcode == EOpcodeType.Binary)
             {
@@ -6000,7 +6005,7 @@ namespace Thetis
 
 		private void PingFrameTimer(object o)
 		{
-			sendPingFrame("Thetis");
+			sendPingFrame("Thetis"); // wire identifier — keep as Thetis for TCI client compatibility
 		}
 
         private void VFOcallback(Object o)

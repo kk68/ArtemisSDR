@@ -1,3 +1,25 @@
+//=================================================================
+// NetworkIO.cs
+//=================================================================
+// OpenHPSDR / Thetis network I/O layer — HPSDR Ethernet discovery,
+// protocol selection, and IQ/control socket management. Heritage from
+// PowerSDR (FlexRadio Systems) and upstream Thetis (Richard Samphire MW0LGE
+// and prior OpenHPSDR contributors).
+//
+// Modified for ArtemisSDR by Kosta Kanchev (K0KOZ) — added SunSDR2 DX
+// native-protocol branch, SunSDR firmware/serial/protocol version plumbing,
+// and related routing-order fixes. See MODIFICATIONS.md for scope.
+//
+// Copyright (C) 2004-2009 FlexRadio Systems
+// Copyright (C) 2010-2019 Doug Wigley (W5WC)
+// Copyright (C) 2019-2026 Richard Samphire (MW0LGE)
+// Copyright (C) 2026      Kosta Kanchev (K0KOZ)
+//
+// This program is free software; you can redistribute it and/or modify it
+// under the terms of the GNU General Public License version 2 as published
+// by the Free Software Foundation. Distributed WITHOUT ANY WARRANTY.
+//=================================================================
+
 using System;
 using System.Collections.Generic;
 using System.Net;

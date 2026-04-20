@@ -1,11 +1,11 @@
-# Thetis-SunSDR — Technical Reference
+# ArtemisSDR — Technical Reference
 
 Engineering-level notes for contributors. User-facing documentation lives in [ReadMe.md](ReadMe.md).
 
 ## Architecture
 
 ```
-SunSDR2 DX                              Thetis (this fork)
+SunSDR2 DX                              ArtemisSDR (this fork)
 +-----------+     UDP 50001              +------------------+
 |  Control  |<-------------------------->| sunsdr.c         |
 |  Port     |  power-on macro, freq,     | (protocol impl)  |
@@ -50,7 +50,7 @@ Mode is carried inside the 0x20 config-block payload, not in a dedicated mode op
 
 ## Identity / version readback
 
-Thetis surfaces the radio's firmware version (and serial, if decodable) in the title bar and in `Setup → HW Select`.
+ArtemisSDR surfaces the radio's firmware version (and serial, if decodable) in the title bar and in `Setup → HW Select`.
 
 - **Firmware** comes from a 0x1A query/reply pair:
   - Request: `32 ff 1a 00 00 00 00 00 00 00 01 00 00 00 00 00 00 00`
@@ -65,8 +65,8 @@ Thetis surfaces the radio's firmware version (and serial, if decodable) in the t
 The TX path matches the EESDR topology exactly:
 
 1. **Wire IQ amplitude is constant.** `sunsdr_tx_outbound` multiplies the WDSP TX output by `iq_gain = 1.0 / 0.857 ≈ 1.167`, so the wire IQ peaks clip at ~1.0 on every drive setting (WDSP TUNE output peaks around 0.857). This matches EESDR captures at every slider value.
-2. **The drive byte (0x17) is the power dial.** `sunsdr_drive_raw_to_wire_byte` is a pass-through — it forwards the integer value that Thetis has already computed through its standard `target_dbm → GainByBand → target_volts → raw` chain to the wire.
-3. **Per-band calibration lives in Thetis.** `Console/setup.cs` `GetSunSDRDefaultAdjust` holds a SunSDR-specific dB offset table used when a band's `PA Gain By Band` value is left at the uninitialized default (100). Operators override by entering real PA Gain dB and using the per-drive `Offset for <band>` UI fields (±6 dB range per drive level).
+2. **The drive byte (0x17) is the power dial.** `sunsdr_drive_raw_to_wire_byte` is a pass-through — it forwards the integer value that ArtemisSDR has already computed through its standard `target_dbm → GainByBand → target_volts → raw` chain to the wire.
+3. **Per-band calibration lives in ArtemisSDR.** `Console/setup.cs` `GetSunSDRDefaultAdjust` holds a SunSDR-specific dB offset table used when a band's `PA Gain By Band` value is left at the uninitialized default (100). Operators override by entering real PA Gain dB and using the per-drive `Offset for <band>` UI fields (±6 dB range per drive level).
 
 ### 40 m measured curve (locked)
 
@@ -89,7 +89,7 @@ The TX path matches the EESDR topology exactly:
 
 ## TUNE-at-dial in SSB
 
-Thetis's standard SSB TUNE emits a PostGen tone `cw_pitch` Hz offset from baseband (`-cw_pitch` for LSB/DIGL, `+cw_pitch` for USB/DIGU). Upconverted by the radio, this puts RF `cw_pitch` below (LSB) or above (USB) the dial.
+ArtemisSDR's standard SSB TUNE emits a PostGen tone `cw_pitch` Hz offset from baseband (`-cw_pitch` for LSB/DIGL, `+cw_pitch` for USB/DIGU). Upconverted by the radio, this puts RF `cw_pitch` below (LSB) or above (USB) the dial.
 
 For the operator-expected "TUNE tone on the dial" behavior, `NetworkIO.VFOfreq` pre-shifts every SunSDR TX freq write by the inverse of the baseband tone offset whenever TUNE is engaged in SSB mode. The shift state lives in `NetworkIO.SunSDRTuneFreqOffsetHz` and is set/cleared from `HdwMOXChanged`.
 
@@ -99,7 +99,7 @@ AM/FM TUNE uses a different strategy: PostGen is suppressed so the modulator emi
 
 **Problem**: during MOX/TUNE, the VAC output (`TO VAC`) accumulated thousands of underflows per second, degrading audio and TX reliability.
 
-**Root cause**: the SunSDR2 DX reduces its RX IQ packet rate from ~1562/sec to ~195/sec while transmitting. Thetis's WDSP RX channels run with `bfo=1` (block-for-output), so `fexchange0` blocks indefinitely on `WaitForSingleObject(Sem_OutReady, INFINITE)` waiting for output WDSP can't produce at the reduced input rate. That blocks the `cm_main` thread, starves the VAC mixer Input 0, starves `rmatchOUT`, and the PortAudio output callback underflows.
+**Root cause**: the SunSDR2 DX reduces its RX IQ packet rate from ~1562/sec to ~195/sec while transmitting. ArtemisSDR's WDSP RX channels run with `bfo=1` (block-for-output), so `fexchange0` blocks indefinitely on `WaitForSingleObject(Sem_OutReady, INFINITE)` waiting for output WDSP can't produce at the reduced input rate. That blocks the `cm_main` thread, starves the VAC mixer Input 0, starves `rmatchOUT`, and the PortAudio output callback underflows.
 
 **Fix**: `SunSDRReadThread` injects silence buffers into `xrouter` during TX whenever a real RX packet hasn't arrived for >2 ms, capped at 32 buffers per gap to prevent runaway. This keeps the WDSP RX input rate at the expected 384 k sample/sec, so `fexchange0` doesn't block, `cm_main` keeps running, and the VAC mixer keeps producing output.
 
@@ -107,19 +107,19 @@ Implementation: `ChannelMaster/sunsdr.c` — `last_rx_pkt_tick` tracking + silen
 
 ## Cold-start race + band-switch over-init (2026-04-16 investigation)
 
-Two related bugs diagnosed through wire-capture diffs against EESDR3 and fixed by shortening Thetis's SunSDR startup and band-switch paths.
+Two related bugs diagnosed through wire-capture diffs against EESDR3 and fixed by shortening ArtemisSDR's SunSDR startup and band-switch paths.
 
 ### Symptoms
 
-- Cold-start (Thetis launch + Power on): ~10-20 % of launches came up with RX showing "wide / AM-shape signals" and robotic audio. Survived Thetis Power off/on cycles. Only full process restart recovered. Masked throughout development by `sdr_logf` overhead; surfaced when logging was disabled for production.
+- Cold-start (ArtemisSDR launch + Power on): ~10-20 % of launches came up with RX showing "wide / AM-shape signals" and robotic audio. Survived ArtemisSDR Power off/on cycles. Only full process restart recovered. Masked throughout development by `sdr_logf` overhead; surfaced when logging was disabled for production.
 - Band switch: 3-4 s delay, extra relay clicks, 17m specifically left RX saturated (fluorescent-magenta waterfall, ADC overload look).
-- Overall Thetis-SunSDR startup: 4-5 s, versus ~1 s for EESDR3-SunSDR and ~1 s for Thetis-Anan on the same hardware.
+- Overall ArtemisSDR-SunSDR startup: 4-5 s, versus ~1 s for EESDR3-SunSDR and ~1 s for ArtemisSDR-Anan on the same hardware.
 
 ### Ground truth (wire captures)
 
-Side-by-side diff of EESDR3 vs Thetis control-channel traffic on port 50001:
+Side-by-side diff of EESDR3 vs ArtemisSDR control-channel traffic on port 50001:
 
-| Scenario | EESDR3 | Thetis (before fix) |
+| Scenario | EESDR3 | ArtemisSDR (before fix) |
 |---|---:|---:|
 | Power-on, main init | 32 cmds in 251 ms | 32 cmds in 505 ms |
 | Power-on, delayed refresh burst | none | 9 cmds at t ≈ 3 s (redundant antenna/PA/freq) |
@@ -194,7 +194,7 @@ Most of this lives in `ChannelMaster/sunsdr.c`. `SUNSDR_DEBUG_LOG_ENABLED 0` at 
 Tracked in the main README's "Current limitations" section. Summary:
 
 - Per-band TX calibration for bands other than 40 m
-- `0x1F` forward-power telemetry → Thetis `Fwd Pwr` meter wiring
+- `0x1F` forward-power telemetry → ArtemisSDR `Fwd Pwr` meter wiring
 - Replace the RX band-switch auto power-recycle with an ExpertSDR3-style clean reconfigure
 - MON / DUP audio routing cleanup
 - Pin the mode byte offset inside the 0x20 config block payload
@@ -202,7 +202,7 @@ Tracked in the main README's "Current limitations" section. Summary:
 
 ## Building
 
-1. Open `Project Files/Source/Thetis_VS2026.sln` in Visual Studio 2022.
+1. Open `Project Files/Source/ArtemisSDR.sln` in Visual Studio 2022.
 2. Select **Debug | x64**.
 3. Rebuild Solution.
 

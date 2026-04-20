@@ -5915,13 +5915,15 @@
             this.btnHidden.Selectable = true;
             // 
             // radBand2
-            // 
+            //
             resources.ApplyResources(this.radBand2, "radBand2");
             this.radBand2.FlatAppearance.BorderSize = 0;
             this.radBand2.ForeColor = System.Drawing.SystemColors.ControlLightLight;
             this.radBand2.Name = "radBand2";
             this.radBand2.TabStop = true;
             this.radBand2.UseVisualStyleBackColor = true;
+            this.radBand2.CheckedChanged += new System.EventHandler(this.radBand_CheckedChanged);
+            this.radBand2.Click += new System.EventHandler(this.radBand2_Click);
             // 
             // panelModeSpecificPhone
             // 

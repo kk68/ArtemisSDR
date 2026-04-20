@@ -55,6 +55,8 @@
             this.lstContributors.FormattingEnabled = true;
             this.lstContributors.ItemHeight = 16;
             this.lstContributors.Items.AddRange(new object[] {
+            "K0KOZ, Kosta (ArtemisSDR fork — SunSDR2 DX native protocol & integration)",
+            "",
             "NR0V, Warren (WDSP & too many other contributions to list)",
             "G8NJJ, Laurence (G2, Andromeda & protocols)",
             "N1GP, Rick (Firmware related changes)",
@@ -129,28 +131,16 @@
             this.lstLinks.FormattingEnabled = true;
             this.lstLinks.ItemHeight = 16;
             this.lstLinks.Items.AddRange(new object[] {
-            "Thetis Releases on GitHub",
-            "Join Thetis Discord Server",
-            "Apache Labs Community Forums",
-            "Apache Labs Home Page",
-            "Protocol1 Programmers on GitHub",
-            "Protocol2 Programmers on GitHub",
-            "Firmware Discussions (all)",
-            "Protocol1 Firmware (7000/8000)",
-            "Protocol2 Firmware (7000/8000) RF fix",
-            "G2 Firmware & Software \"p2app\"",
-            "Thetis for Hermes Lite 2 on GitHub",
+            "ArtemisSDR Releases on GitHub",
             "WDSP Documentation on GitHub",
             "OE3IDE\'s (Ernst) Connectors & Tools",
             "---MANUALS---",
-            "Thetis",
+            "Thetis (inherited manual)",
             "Cat Command Reference",
-            "PureSignal",
             "Midi",
             "cmASIO",
             "Behringer",
-            "APF Types",
-            "Network Settings"});
+            "APF Types"});
             this.lstLinks.Location = new System.Drawing.Point(345, 108);
             this.lstLinks.Name = "lstLinks";
             this.lstLinks.Size = new System.Drawing.Size(267, 130);
@@ -198,7 +188,7 @@
             this.btnVisit.Size = new System.Drawing.Size(88, 23);
             this.btnVisit.TabIndex = 10;
             this.btnVisit.Text = "View";
-            this.toolTip1.SetToolTip(this.btnVisit, "Visit he selected link");
+            this.toolTip1.SetToolTip(this.btnVisit, "Visit the selected link");
             this.btnVisit.UseVisualStyleBackColor = false;
             this.btnVisit.Click += new System.EventHandler(this.btnVisit_Click);
             // 
@@ -303,7 +293,7 @@
             this.labelTS1.Name = "labelTS1";
             this.labelTS1.Size = new System.Drawing.Size(126, 42);
             this.labelTS1.TabIndex = 1;
-            this.labelTS1.Text = "Thetis";
+            this.labelTS1.Text = "ArtemisSDR";
             // 
             // frmAbout
             // 
@@ -331,7 +321,7 @@
             this.MinimizeBox = false;
             this.Name = "frmAbout";
             this.StartPosition = System.Windows.Forms.FormStartPosition.CenterParent;
-            this.Text = "About Thetis";
+            this.Text = "About ArtemisSDR";
             this.ResumeLayout(false);
             this.PerformLayout();
 
