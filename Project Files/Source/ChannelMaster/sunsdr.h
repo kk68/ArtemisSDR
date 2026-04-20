@@ -157,6 +157,16 @@ typedef struct _sunsdr_state
      * and consumed by the band-change prelude. */
     int currentIsNfm;
     int currentDriveRaw;
+    /* Mic source sent via OP 0x21. Decoded enum from EESDR3 captures
+     * (2026-04-20): 0 = Mic1, 1 = Mic2. VAC + XLR enum values still TBD
+     * (need future capture). Default = 1 (Mic2) matches the legacy
+     * init-macro hardcoded value so existing users see no behavior change
+     * until they explicitly pick a different source in the UI. */
+    int currentMicSource;
+    /* Hardware PTT mirror: latest ptt_bit value from 0x1F/01 telemetry.
+     * 0 = released, 1 = pressed. Updated on every telemetry packet by
+     * the read thread; polled by C# via nativeSunSDRGetHwPttState(). */
+    volatile LONG hwPttState;
     int lastTxWasTune;
     int pendingTuneReleaseConfig;
     int powered;
@@ -200,6 +210,8 @@ void SunSDRSetTune(int tune);
 /* Preamp/attenuator 4-state cycle. state: 0=-20 dB, 1=-10 dB,
  * 2=0 dB (bypass), 3=+10 dB preamp. No-op if out of range. */
 void SunSDRSetPreampAtt(int state);
+void SunSDRSetMicSource(int state);
+int  SunSDRGetHwPttState(void);
 void SunSDRLogTuneState(const char* label, int chk_tun, int chk_mox, int tuning, int mox,
     int tx_dsp_mode, int current_dsp_mode, int postgen_run, int postgen_mode,
     double tone_freq, double tone_mag, int pulse_enabled, int pulse_on,

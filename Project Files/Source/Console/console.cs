@@ -6585,6 +6585,12 @@ namespace Thetis
                 chkRX2SR.Checked = false;
             chkRX2SR.Enabled = false;
 
+            // Hide Anan-only Hardware Options (Mic Tip/Ring, Bias, XLR/3.5mm,
+            // Alex matrix, Apollo). PTT Off/On stays visible — reserved for
+            // upcoming SunSDR hardware-PTT support.
+            if (!IsSetupFormNull)
+                SetupForm.SetAnanHardwareOptionsVisible(false);
+
             radBand2.Text = "2";
             radBand2.Enabled = true;
             // MaxFreq is the hard VFO ceiling — it limits how high you can
@@ -21352,6 +21358,83 @@ namespace Thetis
             set { enable_vu_power_curve = value; }
         }
 
+        // SunSDR2 DX front-panel mic source. Opcode 0x21 enum decoded
+        // from EESDR3 captures (2026-04-20): 0=Mic1, 1=Mic2.
+        // Default 1 (Mic2) matches the legacy hardcoded init-macro value;
+        // existing users see no change until they explicitly pick a
+        // different source.
+        private int _sunsdr_mic_source = 1;
+        public int SunSDRMicSource
+        {
+            get { return _sunsdr_mic_source; }
+            set
+            {
+                if (value < 0 || value > 3) return;
+                _sunsdr_mic_source = value;
+                if (NetworkIO.CurrentRadioProtocol == RadioProtocol.SUNSDR)
+                    NetworkIO.nativeSunSDRSetMicSource(value);
+            }
+        }
+
+        /* SunSDR hardware PTT driver.
+         *
+         * The radio emits a 0x1F/01 telemetry status word every second
+         * or so. Bit 7 is the physical PTT state (jack / footswitch /
+         * mic PTT button — all wired to the same input). sunsdr.c
+         * mirrors that bit into sdr.hwPttState and we poll it here at
+         * ~10 Hz, driving chkMOX when it changes.
+         *
+         * Gate: only fires when radio is powered AND the user has
+         * enabled mic PTT (UI: Setup -> H/W Select -> PTT = On, which
+         * maps to MicPTTDisabled = false).
+         *
+         * Edge-trigger guarantees software-initiated MOX (via the UI
+         * button) is idempotent — telemetry always mirrors the set
+         * state, so polling sees no edge for our own changes.
+         *
+         * Hold-on-startup safety: _hwPttLastState is initialised from
+         * the current native state on first tick so we don't auto-key
+         * if the user happened to be pressing PTT at app launch. */
+        private System.Windows.Forms.Timer _hwPttPollTimer;
+        private int _hwPttLastState = -1;   // -1 = uninitialised
+
+        private void EnsureHwPttTimerStarted()
+        {
+            if (_hwPttPollTimer != null) return;
+            _hwPttPollTimer = new System.Windows.Forms.Timer();
+            _hwPttPollTimer.Interval = 100;  // 10 Hz poll — ample for human PTT
+            _hwPttPollTimer.Tick += hwPttPollTimer_Tick;
+            _hwPttPollTimer.Start();
+        }
+
+        private void hwPttPollTimer_Tick(object sender, EventArgs e)
+        {
+            // Only act on SunSDR with radio powered + hw PTT enabled.
+            if (NetworkIO.CurrentRadioProtocol != RadioProtocol.SUNSDR) return;
+            if (!chkPower.Checked) return;
+            if (mic_ptt_disabled) return;
+
+            int cur;
+            try { cur = NetworkIO.nativeSunSDRGetHwPttState(); }
+            catch { return; }
+
+            if (_hwPttLastState < 0)
+            {
+                _hwPttLastState = cur;  // prime; don't react to initial state
+                return;
+            }
+
+            if (cur == _hwPttLastState) return;  // no edge
+            _hwPttLastState = cur;
+
+            // Edge fired. 0->1 = press (MOX on), 1->0 = release (MOX off).
+            // chkMOX.Checked = already-same value is a no-op, so software
+            // MOX users see no double-trigger.
+            bool wantMox = (cur == 1);
+            if (chkMOX.Checked != wantMox)
+                chkMOX.Checked = wantMox;
+        }
+
         private string current_skin = "Default";
         public string CurrentSkin
         {
@@ -27959,6 +28042,19 @@ namespace Thetis
                     // still disabled until user toggles the button twice.
                     if (chkExternalPA.Checked)
                         NetworkIO.nativeSunSDRSetPA(1);
+
+                    // Re-assert mic source. The init macro already fires
+                    // OP 0x21 with sdr.currentMicSource baked in, so this
+                    // is redundant on the first power-on — but it's cheap
+                    // and guards against any session where currentMicSource
+                    // was changed at runtime and the radio missed it.
+                    NetworkIO.nativeSunSDRSetMicSource(_sunsdr_mic_source);
+
+                    // Start the hardware PTT poll timer. It gates internally
+                    // on power + mic_ptt_disabled, so it's safe to leave
+                    // running for the rest of the session.
+                    _hwPttLastState = -1;   // re-prime from current state
+                    EnsureHwPttTimerStarted();
                 }
 
                 DataFlowing = true;

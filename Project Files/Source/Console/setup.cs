@@ -139,6 +139,8 @@ namespace Thetis
             btnResetP1ADC_Click(this, EventArgs.Empty);
             //
 
+            //
+
             ThetisSkinService.Version = console.ProductVersion;
 
             updateDiscordState();
@@ -21827,6 +21829,28 @@ namespace Thetis
                     console.PennyExtCtrlEnabled = chkPennyExtCtrl.Checked;  // need side effect of this to push change to native code 
                 }
             }
+        }
+
+        /// <summary>
+        /// Hide / show the Anan-only sub-controls in the "Hardware Options"
+        /// block on H/W Select. Specifically hides:
+        ///   - Mic wiring Tip/Ring (Anan mic jack polarity)
+        ///   - Bias Off/On (Anan electret mic bias)
+        ///   - Input XLR/3.5mm (Saturn mic input selector)
+        ///   - Alex + Apollo presence checkboxes
+        /// PTT Off/On STAYS VISIBLE — it is reserved for upcoming SunSDR
+        /// hardware PTT support. Called from console.cs
+        /// ApplySunSDRSpecificUI() when the selected radio model is
+        /// SUNSDR2DX.
+        /// </summary>
+        public void SetAnanHardwareOptionsVisible(bool visible)
+        {
+            if (panelOrionMic != null)       panelOrionMic.Visible = visible;
+            if (panelOrionBias != null)      panelOrionBias.Visible = visible;
+            if (panelSaturnMicInput != null) panelSaturnMicInput.Visible = visible;
+            if (pnlAlexApollo != null)       pnlAlexApollo.Visible = visible;
+            // panelOrionPTT intentionally NOT hidden — reserved for SunSDR
+            // hardware PTT support coming in a future release.
         }
 
         public bool CheckForAnyExternalPACheckBoxes()

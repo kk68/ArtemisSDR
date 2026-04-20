@@ -2428,6 +2428,17 @@ static int sunsdr_run_macro(void)
             pkt[j] = (unsigned char)byte;
         }
 
+        /* Patch the mic-source packet (OP 0x21) at byte 18 to carry the
+         * user's saved mic source, instead of the hardcoded 1 (Mic2) that
+         * the baked macro string contains. This keeps the init macro's
+         * exact structure while honouring the saved user preference. */
+        if (len >= 22 && pkt[0] == 0x32 && pkt[1] == 0xff && pkt[2] == 0x21) {
+            pkt[18] = (unsigned char)(sdr.currentMicSource & 0xFF);
+            pkt[19] = 0;
+            pkt[20] = 0;
+            pkt[21] = 0;
+        }
+
         sunsdr_send_ctrl_and_recv(pkt, len, reply, sizeof(reply));
 
         if (power_on_macro[i].delay_us > 0) {
@@ -2788,6 +2799,12 @@ int SunSDRPowerOn(void)
     sdr.currentTune = 0;
     sdr.currentMode = -1;
     sdr.currentDriveRaw = -1;
+    /* Default mic source = 1 (Mic2) — matches the legacy hardcoded
+     * init-macro value. If C# hasn't called SunSDRSetMicSource before
+     * SunSDRInit runs (e.g. first-ever power-on on a pristine DB), the
+     * macro emits 0x21=1 which is what Artemis has always done. */
+    if (sdr.currentMicSource < 0 || sdr.currentMicSource > 3)
+        sdr.currentMicSource = 1;
     sdr.lastTxWasTune = 0;
     sdr.pendingTuneReleaseConfig = 0;
     sdr.txSeq = 0;
@@ -3148,6 +3165,34 @@ void SunSDRSetPreampAtt(int state)
     sdr_logf("SunSDRSetPreampAtt(state=%d wire=0x%02X)\n", state, wire);
     if (sdr.powered) {
         sunsdr_send_u32_cmd(SUNSDR_OP_PREAMP_ATT, wire);
+    }
+}
+
+/* Current hardware PTT state from the radio's 0x1F/01 telemetry.
+ * Returns 0 = released, 1 = pressed. Polled by C# timer when the
+ * "Enable hardware PTT" option is on, so the physical PTT jack /
+ * footswitch / mic button can drive Artemis's MOX state. */
+int SunSDRGetHwPttState(void)
+{
+    return (int)InterlockedCompareExchange(&sdr.hwPttState, 0, 0);
+}
+
+/* Mic-source setter (OP 0x21 u32 payload).
+ * Decoded from EESDR3 captures (2026-04-20):
+ *   0 = Mic1, 1 = Mic2. (VAC / XLR enum values still TBD.)
+ * The u32 is the enum value directly — no bitmask / flag required.
+ * Caches to sdr.currentMicSource so the init macro can re-assert the
+ * last-known state on power-on (see sunsdr_run_macro's 0x21 step). */
+void SunSDRSetMicSource(int state)
+{
+    if (state < 0 || state > 3) {
+        sdr_logf("SunSDRSetMicSource: bad state=%d (range 0..3) — ignoring\n", state);
+        return;
+    }
+    sdr.currentMicSource = state;
+    sdr_logf("SunSDRSetMicSource(state=%d)\n", state);
+    if (sdr.powered) {
+        sunsdr_send_u32_cmd(0x21, (unsigned int)state);
     }
 }
 
@@ -3974,8 +4019,20 @@ DWORD WINAPI SunSDRReadThread(LPVOID param)
             continue;
         }
 
-        /* --- 0x1F telemetry family (34 or 42 bytes, byte[3]==0x1F) --- */
-        if (pktbuf[3] == 0x1F && (n == 34 || n == 42)) {
+        /* --- 0x1F telemetry family ---
+         * Subtype 0x00: recurring power/SWR telemetry (n==34 or 42).
+         * Subtype 0x01: edge-event status packet (n==22). Emitted by the
+         *   radio on hardware-PTT press/release and on TX state change.
+         *   MUST be accepted at 22 bytes — the original guard rejected these.
+         * Wire-decoded across 3 hw_ptt captures on 2026-04-09:
+         *   u32 LE at offset 18:
+         *     bit  3 (byte 18 bit 3) = HW-PTT line asserted (mic button / rear
+         *                              PTT pin physically held). Toggles cleanly
+         *                              on press and release, independent of TX.
+         *     bit 11 (byte 19 bit 3) = ATU flag (stable during test sessions).
+         *     bit 24 (byte 21 bit 0) = TX active state (after host's 0x06=1 ack).
+         */
+        if (pktbuf[3] == 0x1F && (n == 22 || n == 34 || n == 42)) {
             unsigned char subtype = pktbuf[2];
             telemetry_count++;
 
@@ -4081,16 +4138,20 @@ DWORD WINAPI SunSDRReadThread(LPVOID param)
                     PeakRevPower((float)swr_raw);
                 }
             }
-            else if (subtype == 0x01) {
-                /* One-shot operational status: PTT/TxPTT/ATU flags */
-                unsigned int status_word = 0;
-                if (n >= 22)
-                    status_word = pktbuf[18] | (pktbuf[19]<<8) | (pktbuf[20]<<16) | (pktbuf[21]<<24);
-                int ptt_bit = (status_word >> 7) & 1;
-                int tx_ptt_bit = (status_word >> 8) & 1;
-                int atu_flag = (status_word >> 11) & 1;
-                sdr_logf("TELEM 0x1F/01 status: word=0x%08X ptt=%d tx_ptt=%d atu=%d\n",
-                    status_word, ptt_bit, tx_ptt_bit, atu_flag);
+            else if (subtype == 0x01 && n >= 22) {
+                /* Edge-event status packet. Bit layout decoded from wire
+                 * captures (2026-04-09 hw_ptt_on/off + mox_on). */
+                unsigned int status_word =
+                    pktbuf[18] | (pktbuf[19]<<8) | (pktbuf[20]<<16) | (pktbuf[21]<<24);
+                int hw_ptt_line = (status_word >> 3)  & 1;   /* mic button / pedal held */
+                int atu_flag    = (status_word >> 11) & 1;
+                int tx_active   = (status_word >> 24) & 1;   /* radio in TX state */
+                /* Mirror hw_ptt_line to sdr.hwPttState so C# can poll it via
+                 * nativeSunSDRGetHwPttState() and drive MOX from the
+                 * hardware PTT jack / footswitch / mic button. */
+                InterlockedExchange(&sdr.hwPttState, (LONG)hw_ptt_line);
+                sdr_logf("TELEM 0x1F/01 status: word=0x%08X hwPtt=%d tx=%d atu=%d\n",
+                    status_word, hw_ptt_line, tx_active, atu_flag);
             }
             else {
                 sdr_logf("TELEM 0x1F/%02X len=%d (unknown subtype)\n", subtype, n);

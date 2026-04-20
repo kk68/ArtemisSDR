@@ -487,6 +487,8 @@ extern __declspec(dllexport) void nativeSunSDRSetPTT(int ptt);
 extern __declspec(dllexport) void nativeSunSDRSetRX2(int enabled);
 extern __declspec(dllexport) void nativeSunSDRSetTune(int tune);
 extern __declspec(dllexport) void nativeSunSDRSetPreampAtt(int state);
+extern __declspec(dllexport) void nativeSunSDRSetMicSource(int state);
+extern __declspec(dllexport) int nativeSunSDRGetHwPttState(void);
 extern __declspec(dllexport) void nativeSunSDRLogTuneState(char* label, int chk_tun, int chk_mox, int tuning, int mox,
 	int tx_dsp_mode, int current_dsp_mode, int postgen_run, int postgen_mode,
 	double tone_freq, double tone_mag, int pulse_enabled, int pulse_on,
