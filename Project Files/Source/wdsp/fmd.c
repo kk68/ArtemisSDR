@@ -246,10 +246,24 @@ PORT
 void SetRXAFMDeviation (int channel, double deviation)
 {
 	FMD a;
+	double pll_span;
 	EnterCriticalSection (&ch[channel].csDSP);
 	a = rxa[channel].fmd.p;
 	a->deviation = deviation;
 	a->again = a->rate / (a->deviation * TWOPI);
+	// The PLL lock range (fmin/fmax) was fixed at +/- 8 kHz at demod
+	// creation, which clips any signal whose instantaneous frequency
+	// swings wider than that. Narrow FM (2.5-5 kHz deviation) fits
+	// fine, but broadcast WFM at +/- 75 kHz deviation clips severely
+	// on every audio peak. Scale the lock range with the requested
+	// deviation so the PLL can actually track wide signals. Minimum
+	// of +/- 8 kHz preserves the existing NFM default exactly.
+	pll_span = 1.5 * deviation;
+	if (pll_span < 8000.0) pll_span = 8000.0;
+	a->fmin = -pll_span;
+	a->fmax = +pll_span;
+	a->omega_min = TWOPI * a->fmin / a->rate;
+	a->omega_max = TWOPI * a->fmax / a->rate;
 	LeaveCriticalSection (&ch[channel].csDSP);
 }
 

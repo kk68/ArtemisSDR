@@ -30,7 +30,21 @@ of the License, or (at your option) any later version.
 /* Opcodes (control, port 50001) */
 #define SUNSDR_OP_STATE_SYNC    0x01
 #define SUNSDR_OP_POWER_OFF     0x02
-#define SUNSDR_OP_START_IQ      0x05
+/* 0x05 carries the preamp / attenuator state as a single u32. Earlier
+ * code called this SUNSDR_OP_START_IQ because the init sequence pokes
+ * it once; that name is misleading. EESDR3 cycles through 4 states via
+ * this opcode: bit 7 = enable, low 2 bits = state index.
+ *   0x80 -> -20 dB attenuator
+ *   0x81 -> -10 dB attenuator
+ *   0x82 ->   0 dB (bypass)
+ *   0x83 -> +10 dB preamp
+ * (captures 20260418_2041xx, see docs/protocol/att-wfm-findings.md). */
+#define SUNSDR_OP_PREAMP_ATT    0x05
+#define SUNSDR_OP_START_IQ      SUNSDR_OP_PREAMP_ATT  /* legacy alias */
+#define SUNSDR_PREAMP_ATT_M20   0x80
+#define SUNSDR_PREAMP_ATT_M10   0x81
+#define SUNSDR_PREAMP_ATT_0     0x82
+#define SUNSDR_PREAMP_ATT_P10   0x83
 #define SUNSDR_OP_MOX_PTT       0x06
 #define SUNSDR_OP_INFO_QUERY    0x07
 #define SUNSDR_OP_FREQ_COMP     0x08
@@ -130,6 +144,18 @@ typedef struct _sunsdr_state
      * latches a default bad state from the first IQ packets. */
     volatile LONG rxWdspReady;
     int currentTune;
+    /* Band-class tracker for the RX front-end. 0 = HF direct-sample
+     * path (up to 61.44 MHz ADC Nyquist), 1 = VHF down-converter path
+     * (144-148 MHz 2m band). Flipped by SunSDRSetFreq when the target
+     * frequency crosses the band-class boundary; the change triggers
+     * the 0x1E / 0x15 / 0x22 / 0x20 band-switch prelude on the wire
+     * (see vhf-findings.md). */
+    int currentBandIsVhf;
+    /* 1 when the current Thetis demod mode is FM (narrow-FM on SunSDR).
+     * The CONFIG_BLOCK payload bytes 4-7 must be 0 for NFM and 1 for
+     * wideband modes on 2m (vhf-findings.md). Tracked in SunSDRSetMode
+     * and consumed by the band-change prelude. */
+    int currentIsNfm;
     int currentDriveRaw;
     int lastTxWasTune;
     int pendingTuneReleaseConfig;
@@ -171,6 +197,9 @@ void SunSDRSetMode(int mode);
 void SunSDRSetPTT(int ptt);
 void SunSDRSetRX2(int enabled);
 void SunSDRSetTune(int tune);
+/* Preamp/attenuator 4-state cycle. state: 0=-20 dB, 1=-10 dB,
+ * 2=0 dB (bypass), 3=+10 dB preamp. No-op if out of range. */
+void SunSDRSetPreampAtt(int state);
 void SunSDRLogTuneState(const char* label, int chk_tun, int chk_mox, int tuning, int mox,
     int tx_dsp_mode, int current_dsp_mode, int postgen_run, int postgen_mode,
     double tone_freq, double tone_mag, int pulse_enabled, int pulse_on,

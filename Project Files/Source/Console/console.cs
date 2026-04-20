@@ -2191,6 +2191,12 @@ namespace Thetis
             RX2AttenuatorData = getRX2stepAttenuatorForBand(rx2_band);
             initializing = true;
 
+            // SetupForHPSDRModel only fires when the user changes the radio
+            // in Setup. On a normal startup where SunSDR was already the
+            // saved radio, our SunSDR-specific UI overrides (MaxFreq=146,
+            // 2m button enable, PS-A lockouts) would otherwise never run.
+            ApplySunSDRSpecificUI();
+
             ptbDisplayZoom_Scroll(this, EventArgs.Empty);
             ptbRX0Gain_Scroll(this, EventArgs.Empty);
             ptbRX1Gain_Scroll(this, EventArgs.Empty);
@@ -5545,6 +5551,54 @@ namespace Thetis
                             }
                             preset[m].LastFilter = Filter.F5;
                             break;
+                        case (int)DSPMode.FM:
+                            // Upstream Thetis never defined FM filter presets,
+                            // leaving the 10 preset slots blank for this mode.
+                            // Typical ham 2m/10m NFM deviation is 2.5-5 kHz so
+                            // the IF needs roughly 2*dev + audio BW: ~11-25 kHz.
+                            // Ladder from wide (for broadcast-adjacent reception)
+                            // down to tight (for weak-signal NBFM).
+                            switch (f)
+                            {
+                                case Filter.F1:
+                                    preset[m].SetFilter(f, -12500, 12500, "25k");
+                                    break;
+                                case Filter.F2:
+                                    preset[m].SetFilter(f, -10000, 10000, "20k");
+                                    break;
+                                case Filter.F3:
+                                    preset[m].SetFilter(f, -8000, 8000, "16k");
+                                    break;
+                                case Filter.F4:
+                                    preset[m].SetFilter(f, -6000, 6000, "12k");
+                                    break;
+                                case Filter.F5:
+                                    preset[m].SetFilter(f, -5000, 5000, "10k");
+                                    break;
+                                case Filter.F6:
+                                    preset[m].SetFilter(f, -4000, 4000, "8k");
+                                    break;
+                                case Filter.F7:
+                                    preset[m].SetFilter(f, -3000, 3000, "6k");
+                                    break;
+                                case Filter.F8:
+                                    preset[m].SetFilter(f, -2500, 2500, "5k");
+                                    break;
+                                case Filter.F9:
+                                    preset[m].SetFilter(f, -2000, 2000, "4k");
+                                    break;
+                                case Filter.F10:
+                                    preset[m].SetFilter(f, -1500, 1500, "3k");
+                                    break;
+                                case Filter.VAR1:
+                                    preset[m].SetFilter(f, -7500, 7500, "Var 1");
+                                    break;
+                                case Filter.VAR2:
+                                    preset[m].SetFilter(f, -7500, 7500, "Var 2");
+                                    break;
+                            }
+                            preset[m].LastFilter = Filter.F3;
+                            break;
                         case (int)DSPMode.DSB:
                             switch (f)
                             {
@@ -5758,11 +5812,16 @@ namespace Thetis
 
         private void EnableAllBands()
         {
+            bool sunsdr = HardwareSpecific.Model == HPSDRModel.SUNSDR2DX;
             foreach (Control c in panelBandHF.Controls)
             {
                 if (c is RadioButtonTS b)
                 {
-                    b.Enabled = c != radBand2 || XVTRPresent;
+                    // Upstream gated radBand2 on XVTRPresent (legacy 2m was
+                    // only reachable via external transverter). SunSDR2 DX
+                    // has native 2m, so keep the 2 button enabled for it
+                    // regardless of XVTR state.
+                    b.Enabled = c != radBand2 || XVTRPresent || sunsdr;
 
                     if (b.BackColor == vfo_text_dark_color)
                         b.BackColor = button_selected_color;
@@ -6473,6 +6532,346 @@ namespace Thetis
             return bfd.band;
         }
 
+        // PureSignal, 2-Tone and DUP are not supported on SunSDR2 DX — the
+        // protocol has no PS feedback loop, 2-Tone is part of the PS-A IMD
+        // cal, and MOX on SunSDR shuts down the RX LO so duplex receive is
+        // structurally impossible. Also: SunSDR2 DX supports 2m natively so
+        // we enable radBand2 (upstream Thetis gated it on XVTR presence),
+        // give it a visible label, and lift MaxFreq to cover 2m.
+        //
+        // Runs both on model-change (from Setup combo) AND during console
+        // startup so a saved SunSDR model takes effect even though
+        // SetupForHPSDRModel is not called on plain startup.
+        private void ApplySunSDRSpecificUI()
+        {
+            if (HardwareSpecific.Model != HPSDRModel.SUNSDR2DX) return;
+
+            if (chkFWCATUBypass.Checked)
+                chkFWCATUBypass.Checked = false;
+            chkFWCATUBypass.Enabled = false;
+            if (psform != null)
+            {
+                psform.AutoCalEnabled = false;
+                psform.PSEnabled = false;
+            }
+            if (chk2TONE.Checked)
+                chk2TONE.Checked = false;
+            chk2TONE.Enabled = false;
+            if (chkRX2SR.Checked)
+                chkRX2SR.Checked = false;
+            chkRX2SR.Enabled = false;
+
+            radBand2.Text = "2";
+            radBand2.Enabled = true;
+            // MaxFreq is the hard VFO ceiling — it limits how high you can
+            // tune the receiver, NOT what you can transmit on. TX is gated
+            // separately by ham-band / region logic. SunSDR2 DX is spec'd
+            // for RX on antenna A1 up to 420 MHz (covers FM broadcast, 2m,
+            // airband, 220, 70cm). Open the ceiling to the hardware max.
+            if (MaxFreq < SUNSDR_MAX_RX_FREQ_MHZ)
+                MaxFreq = SUNSDR_MAX_RX_FREQ_MHZ;
+
+            // InitFilterPresets now seeds FM filter presets, but a saved
+            // database from a pre-fix build has blank FM entries that
+            // the DB-load path will have copied back over our defaults.
+            // Restore the FM presets if they came back blank.
+            EnsureFMFilterPresets(rx1_filters);
+            EnsureFMFilterPresets(rx2_filters);
+
+            // SetRX1Mode was already called earlier in startup with the
+            // stale DB-restored names, so the filter button captions are
+            // pinned to whatever the DB had. Force a refresh so labels
+            // match the re-seeded preset table.
+            if (_rx1_dsp_mode == DSPMode.FM)
+                RefreshFMFilterButtonLabels(true);
+            if (_rx2_dsp_mode == DSPMode.FM)
+                RefreshFMFilterButtonLabels(false);
+        }
+
+        private void RefreshFMFilterButtonLabels(bool rx1)
+        {
+            FilterPreset[] preset = rx1 ? rx1_filters : rx2_filters;
+            int fm = (int)DSPMode.FM;
+            if (preset[fm] == null) return;
+
+            if (rx1)
+            {
+                radFilter1.Text  = preset[fm].GetName(Filter.F1);
+                radFilter2.Text  = preset[fm].GetName(Filter.F2);
+                radFilter3.Text  = preset[fm].GetName(Filter.F3);
+                radFilter4.Text  = preset[fm].GetName(Filter.F4);
+                radFilter5.Text  = preset[fm].GetName(Filter.F5);
+                radFilter6.Text  = preset[fm].GetName(Filter.F6);
+                radFilter7.Text  = preset[fm].GetName(Filter.F7);
+                radFilter8.Text  = preset[fm].GetName(Filter.F8);
+                radFilter9.Text  = preset[fm].GetName(Filter.F9);
+                radFilter10.Text = preset[fm].GetName(Filter.F10);
+                radFilterVar1.Text = preset[fm].GetName(Filter.VAR1);
+                radFilterVar2.Text = preset[fm].GetName(Filter.VAR2);
+            }
+            else
+            {
+                // RX2 filter panel only exposes F1-F7 plus Var1/Var2.
+                radRX2Filter1.Text  = preset[fm].GetName(Filter.F1);
+                radRX2Filter2.Text  = preset[fm].GetName(Filter.F2);
+                radRX2Filter3.Text  = preset[fm].GetName(Filter.F3);
+                radRX2Filter4.Text  = preset[fm].GetName(Filter.F4);
+                radRX2Filter5.Text  = preset[fm].GetName(Filter.F5);
+                radRX2Filter6.Text  = preset[fm].GetName(Filter.F6);
+                radRX2Filter7.Text  = preset[fm].GetName(Filter.F7);
+                radRX2FilterVar1.Text = preset[fm].GetName(Filter.VAR1);
+                radRX2FilterVar2.Text = preset[fm].GetName(Filter.VAR2);
+            }
+        }
+
+        private void EnsureFMFilterPresets(FilterPreset[] preset)
+        {
+            // Pick the preset table that matches the current RX frequency
+            // so startup-finalisation doesn't clobber a WFM swap that
+            // already happened earlier in the init sequence. Which RX's
+            // VFO we check depends on which filter preset array we are
+            // seeding (rx1 vs rx2). Default to the HF path (NFM) if
+            // VFOAFreq/VFOBFreq haven't settled yet.
+            bool wfm = false;
+            if (preset == rx1_filters)
+                wfm = IsBroadcastFMFreq(VFOAFreq);
+            else if (preset == rx2_filters)
+                wfm = IsBroadcastFMFreq(VFOBFreq);
+
+            if (wfm)
+                SeedWFMFilterPresets(preset);
+            else
+                SeedNFMFilterPresets(preset);
+        }
+
+        // Narrow/ham FM preset table (2m NFM, 10m repeater FM). Widths
+        // step from 25 kHz down to 3 kHz — enough to cover normal
+        // hamband deviations with choice of adjacent-channel rejection.
+        private static void SeedNFMFilterPresets(FilterPreset[] preset)
+        {
+            int fm = (int)DSPMode.FM;
+            if (preset[fm] == null) return;
+
+            preset[fm].SetFilter(Filter.F1,   -12500, 12500, "25k");
+            preset[fm].SetFilter(Filter.F2,   -10000, 10000, "20k");
+            preset[fm].SetFilter(Filter.F3,    -8000,  8000, "16k");
+            preset[fm].SetFilter(Filter.F4,    -6000,  6000, "12k");
+            preset[fm].SetFilter(Filter.F5,    -5000,  5000, "10k");
+            preset[fm].SetFilter(Filter.F6,    -4000,  4000, "8k");
+            preset[fm].SetFilter(Filter.F7,    -3000,  3000, "6k");
+            preset[fm].SetFilter(Filter.F8,    -2500,  2500, "5k");
+            preset[fm].SetFilter(Filter.F9,    -2000,  2000, "4k");
+            preset[fm].SetFilter(Filter.F10,   -1500,  1500, "3k");
+            preset[fm].SetFilter(Filter.VAR1,  -7500,  7500, "Var 1");
+            preset[fm].SetFilter(Filter.VAR2,  -7500,  7500, "Var 2");
+            preset[fm].LastFilter = Filter.F3;
+        }
+
+        // Broadcast WFM preset table. Extended upward at 300/310/320k
+        // for HD Radio / IBOC reception where digital sidebands reach
+        // beyond the analog ±100 kHz envelope. EESDR's core 160/180/
+        // 200/220k widths stay in the middle; narrower end trims at
+        // 100k (below that, NFM is the better choice anyway).
+        //
+        // F7 = 160k is the default (matches EESDR's default WFM width).
+        private static void SeedWFMFilterPresets(FilterPreset[] preset)
+        {
+            int fm = (int)DSPMode.FM;
+            if (preset[fm] == null) return;
+
+            preset[fm].SetFilter(Filter.F1,   -190000, 190000, "380k");
+            preset[fm].SetFilter(Filter.F2,   -155000, 155000, "310k");
+            preset[fm].SetFilter(Filter.F3,   -150000, 150000, "300k");
+            preset[fm].SetFilter(Filter.F4,   -110000, 110000, "220k");
+            preset[fm].SetFilter(Filter.F5,   -100000, 100000, "200k");
+            preset[fm].SetFilter(Filter.F6,    -90000,  90000, "180k");
+            preset[fm].SetFilter(Filter.F7,    -80000,  80000, "160k");
+            preset[fm].SetFilter(Filter.F8,    -70000,  70000, "140k");
+            preset[fm].SetFilter(Filter.F9,    -60000,  60000, "120k");
+            preset[fm].SetFilter(Filter.F10,   -50000,  50000, "100k");
+            preset[fm].SetFilter(Filter.VAR1,  -80000,  80000, "Var 1");
+            preset[fm].SetFilter(Filter.VAR2, -100000, 100000, "Var 2");
+            preset[fm].LastFilter = Filter.F7;  // 160k default
+        }
+
+        // SunSDR2 DX RX capability ceiling on antenna A1 (per hardware
+        // spec). Anything above 61.44 MHz (ADC Nyquist for the HF direct-
+        // sample path) routes through the internal VHF/UHF down-converter.
+        private const double SUNSDR_MAX_RX_FREQ_MHZ = 419.999;
+
+        // Broadcast FM band ranges per region.
+        //   Most of world (ITU R1 & R2):   87.5 – 108.0 MHz
+        //   Japan:                          76.0 –  95.0 MHz
+        //   OIRT (legacy Eastern Europe):   65.8 –  74.0 MHz (being phased out)
+        //   Brazil:                         76.0 – 108.0 MHz (combined)
+        // Returns true if freqMHz falls inside the user's region's
+        // broadcast-FM allocation. Instance method so it reads the
+        // current CurrentRegion.
+        public bool IsBroadcastFMFreq(double freqMHz)
+        {
+            switch (CurrentRegion)
+            {
+                case FRSRegion.Japan:
+                    return freqMHz >= 76.0 && freqMHz <= 95.0;
+                case FRSRegion.Russia:
+                    // OIRT (legacy) plus the modern ITU R1 band — overlap
+                    // is fine for detection purposes.
+                    return (freqMHz >= 65.8 && freqMHz <= 74.0) ||
+                           (freqMHz >= 87.5 && freqMHz <= 108.0);
+                case FRSRegion.Extended:
+                    // Extended mode — cover every plausible broadcast FM
+                    // range so enthusiasts can DX any of them.
+                    return (freqMHz >= 65.8 && freqMHz <= 74.0) ||
+                           (freqMHz >= 76.0 && freqMHz <= 108.0);
+                default:
+                    // ITU Regions 1 & 2 (Europe, Americas, Africa, Oceania).
+                    return freqMHz >= 87.5 && freqMHz <= 108.0;
+            }
+        }
+
+        // Reconfigure WDSP's FM demod AND the FM filter preset table when
+        // the current frequency crosses the broadcast-FM band boundary.
+        // No-op when mode is not FM.
+        //   Broadcast FM: deviation 75 kHz, audio cutoff 15 kHz,
+        //                 preset grid = 220/200/180/160/140/120/100/80/60/40k
+        //   Narrow  FM  : deviation 2.5 kHz, audio up to 5 kHz,
+        //                 preset grid = 25/20/16/12/10/8/6/5/4/3k
+        // The preset table swap also refreshes the on-screen button
+        // labels so clicking them applies the right IF bandpass.
+        private bool _fm_dsp_is_wide = false;
+        private void ApplyFMDSPForCurrentBand()
+        {
+            // Called from VFOAUpdate — no parent SetRX1Mode is running,
+            // so WE own the channel-off/rate/channel-on sequence.
+            ApplyFMDSPForCurrentBand(_rx1_dsp_mode, true);
+        }
+        private void ApplyFMDSPForCurrentBand(DSPMode activeMode)
+        {
+            // Called from SetRX1Mode's FM-case. SetRX1Mode has already
+            // toggled the channel off and set the DSP rate, and will
+            // toggle it back on at the end. We must NOT toggle here or
+            // we'll turn the channel back on mid-sequence and glitch
+            // the audio pipeline.
+            ApplyFMDSPForCurrentBand(activeMode, false);
+        }
+        // Core impl. handleChannelToggle = true means this call is the
+        // sole DSP-rate-change authority and must bookend with channel
+        // off/on. false means the caller (SetRX1Mode) already does that.
+        private void ApplyFMDSPForCurrentBand(DSPMode activeMode, bool handleChannelToggle)
+        {
+            LogTool.AddLogEntry(
+                $"ApplyFMDSPForCurrentBand: activeMode={activeMode} VFOA={VFOAFreq:F3} wasWide={_fm_dsp_is_wide}",
+                "WFM");
+            if (activeMode != DSPMode.FM)
+            {
+                LogTool.AddLogEntry("  -> bail, not FM mode", "WFM");
+                return;
+            }
+
+            bool wide = IsBroadcastFMFreq(VFOAFreq);
+            LogTool.AddLogEntry($"  wide={wide}", "WFM");
+            if (wide == _fm_dsp_is_wide && rx1_filters[(int)DSPMode.FM] != null)
+            {
+                // Still on the same side of the boundary — no swap needed,
+                // but re-apply in case startup didn't settle the demod yet.
+                if (wide)
+                {
+                    LogTool.AddLogEntry("  same-side wide: re-asserting deviation=75000", "WFM");
+                    radio.GetDSPRX(0, 0).RXFMDeviation = 75000.0;
+                    radio.GetDSPRX(0, 1).RXFMDeviation = 75000.0;
+                }
+                return;
+            }
+            LogTool.AddLogEntry($"  TRANSITION narrow<->wide, swapping: deviation, presets, DSPrate", "WFM");
+
+            // DSP samplerate matters: at 192 kHz (Thetis's FM default)
+            // anything above ±96 kHz aliases, which garbles broadcast
+            // FM audio since the signal is ±100 kHz wide. Bump to
+            // 384 kHz (Nyquist 192 kHz) for WFM, drop back to 192 kHz
+            // for NFM.
+            //
+            // Only do the full off/rate/on sequence when the caller
+            // is NOT SetRX1Mode — SetRX1Mode already owns the channel
+            // toggle around the switch statement, and turning the
+            // channel on here mid-flow glitches the audio pipeline
+            // (WFM came back as noise rather than demodulated signal).
+            int new_rate = wide ? 384000 : 192000;
+            if (handleChannelToggle)
+            {
+                WDSP.SetChannelState(WDSP.id(0, 0), 0, 1);
+                WDSP.SetChannelState(WDSP.id(0, 1), 0, 0);
+                WDSP.SetDSPSamplerate(WDSP.id(0, 0), new_rate);
+                WDSP.SetDSPSamplerate(WDSP.id(0, 1), new_rate);
+                WDSP.SetChannelState(WDSP.id(0, 0), 1, 0);
+                if (radio.GetDSPRX(0, 1).Active) WDSP.SetChannelState(WDSP.id(0, 1), 1, 0);
+            }
+            // If SetRX1Mode called us, it already set the rate (see the
+            // FM block around line 34538) and will turn the channel
+            // back on at the end of SetRX1Mode. Nothing to do here for
+            // rate/toggle.
+
+            if (wide)
+            {
+                SeedWFMFilterPresets(rx1_filters);
+                SeedWFMFilterPresets(rx2_filters);
+                RefreshFMFilterButtonLabels(true);
+                RefreshFMFilterButtonLabels(false);
+
+                radio.GetDSPRX(0, 0).RXFMDeviation = 75000.0;
+                radio.GetDSPRX(0, 1).RXFMDeviation = 75000.0;
+                radio.GetDSPRX(0, 0).RXFMHighCut = 15000.0;
+                radio.GetDSPRX(0, 1).RXFMHighCut = 15000.0;
+
+                double readback_dev = radio.GetDSPRX(0, 0).RXFMDeviation;
+                double readback_hc = radio.GetDSPRX(0, 0).RXFMHighCut;
+                LogTool.AddLogEntry(
+                    $"  WFM applied: rate={new_rate} dev_readback={readback_dev} hc_readback={readback_hc}",
+                    "WFM");
+
+                // Land on the 160k preset (EESDR's default WFM width).
+                // F7 in the new ladder that extends up to 320k for HD
+                // Radio / IBOC at the top of the grid.
+                RX1Filter = Filter.F7;
+            }
+            else
+            {
+                SeedNFMFilterPresets(rx1_filters);
+                SeedNFMFilterPresets(rx2_filters);
+                RefreshFMFilterButtonLabels(true);
+                RefreshFMFilterButtonLabels(false);
+
+                radio.GetDSPRX(0, 0).RXFMDeviation = 2500.0;
+                radio.GetDSPRX(0, 1).RXFMDeviation = 2500.0;
+                // Coming back from WFM — 16 kHz (F3) is the NFM default
+                // so the user isn't stuck at a WFM-scale bandpass on a
+                // hamband FM repeater.
+                RX1Filter = Filter.F3;
+            }
+            _fm_dsp_is_wide = wide;
+        }
+
+        // WDSP only has a single DSPMode.FM, so we relabel the same button
+        // based on the active RX band / frequency to match ham+broadcast
+        // nomenclature: "FM" on HF repeaters, "NFM" on 2m, "WFM" on the
+        // 87.5-108 MHz broadcast band.
+        private void UpdateFMButtonLabels()
+        {
+            string rx1Label = "FM";
+            if (rx1_band == Band.B2M) rx1Label = "NFM";
+            else if (IsBroadcastFMFreq(VFOAFreq)) rx1Label = "WFM";
+            if (radModeFMN != null && radModeFMN.Text != rx1Label)
+                radModeFMN.Text = rx1Label;
+
+            string rx2Label = "FM";
+            if (rx2_band == Band.B2M) rx2Label = "NFM";
+            else if (IsBroadcastFMFreq(VFOBFreq)) rx2Label = "WFM";
+            if (radRX2ModeFMN != null && radRX2ModeFMN.Text != rx2Label)
+                radRX2ModeFMN.Text = rx2Label;
+
+            if (modePopupForm != null && !modePopupForm.IsDisposed)
+                modePopupForm.RepopulateForm();
+        }
+
         private void SetRX1Band(Band b)
         {
             //[2.10.3.6]MW0LGE no band change on TX fix
@@ -6496,6 +6895,7 @@ namespace Thetis
                 UpdateWaterfallLevelValues();
                 updateDisplayGridLevelValues();
                 UpdateDiversityValues();
+                UpdateFMButtonLabels();
             }
 
             if (rx1_xvtr_index >= 0)
@@ -6517,6 +6917,7 @@ namespace Thetis
                 UpdateBandButtonColors();
                 UpdateWaterfallLevelValues();
                 updateDisplayGridLevelValues();
+                UpdateFMButtonLabels();
             }
         }
 
@@ -7578,11 +7979,35 @@ namespace Thetis
                     }
                     break;
                 case DSPMode.FM:
-                    int halfBw = (int)(radio.GetDSPRX(0, 0).RXFMDeviation + radio.GetDSPRX(0, 0).RXFMHighCut);  //[2.10.3.4]MW0LGE
-                    int bw = ((halfBw * 2) / 1000);
-                    low = -halfBw;
-                    high = halfBw;
-                    lblFilterLabel.Text = bw.ToString() + "k";
+                    // FM has TWO filters that both matter for audible width:
+                    //  1) The IF bandpass (set below via SetRXFilter) — what
+                    //     the demod sees.
+                    //  2) The post-demod audio filter (RXFMHighCut, WDSP's
+                    //     SetRXAFMAFFilter) — clamps audible high-frequency
+                    //     content. Upstream left audio cut fixed at 3 kHz, so
+                    //     any IF wider than ~6 kHz produced identical audio.
+                    // Scale audio highcut from the preset width so every
+                    // preset makes an audible difference, floored at 1 kHz
+                    // for tight presets and capped at 5 kHz for wide ones.
+                    if (low == high)
+                    {
+                        int halfBw = (int)(radio.GetDSPRX(0, 0).RXFMDeviation + radio.GetDSPRX(0, 0).RXFMHighCut);
+                        low = -halfBw;
+                        high = halfBw;
+                    }
+                    else
+                    {
+                        int halfBw = Math.Max(-low, high);
+                        // Audio highcut caps: broadcast-FM-territory IF
+                        // widths (>= 50 kHz) use a 15 kHz cap to pass the
+                        // full broadcast audio spectrum; narrow/ham FM
+                        // keeps the 5 kHz voice cap.
+                        int audioCap = (halfBw >= 50000) ? 15000 : 5000;
+                        int audioHigh = Math.Max(1000, Math.Min(audioCap, halfBw / 2));
+                        radio.GetDSPRX(0, 0).RXFMHighCut = audioHigh;
+                        radio.GetDSPRX(0, 1).RXFMHighCut = audioHigh;
+                    }
+                    lblFilterLabel.Text = ((high - low) / 1000).ToString() + "k";
                     break;
             }
 
@@ -7700,9 +8125,23 @@ namespace Thetis
                     }
                     break;
                 case DSPMode.FM:
-                    int halfBw = (int)(radio.GetDSPRX(1, 0).RXFMDeviation + radio.GetDSPRX(1, 0).RXFMHighCut);  //[2.10.3.4]MW0LGE
-                    low = -halfBw;
-                    high = halfBw;
+                    // Same rationale as UpdateRX1Filters FM case — drive
+                    // both the IF bandpass AND the post-demod audio filter
+                    // so each preset is audibly distinct.
+                    if (low == high)
+                    {
+                        int halfBw = (int)(radio.GetDSPRX(1, 0).RXFMDeviation + radio.GetDSPRX(1, 0).RXFMHighCut);
+                        low = -halfBw;
+                        high = halfBw;
+                    }
+                    else
+                    {
+                        int halfBw = Math.Max(-low, high);
+                        int audioCap = (halfBw >= 50000) ? 15000 : 5000;
+                        int audioHigh = Math.Max(1000, Math.Min(audioCap, halfBw / 2));
+                        radio.GetDSPRX(1, 0).RXFMHighCut = audioHigh;
+                        radio.GetDSPRX(1, 1).RXFMHighCut = audioHigh;
+                    }
                     break;
             }
 
@@ -14902,23 +15341,7 @@ namespace Thetis
             // MOX path shuts down the RX LO during TX, so duplex receive
             // cannot be supported structurally. See memory
             // project_dup_behavior_sunsdr.md for the analysis.
-            if (HardwareSpecific.Model == HPSDRModel.SUNSDR2DX)
-            {
-                if (chkFWCATUBypass.Checked)
-                    chkFWCATUBypass.Checked = false;
-                chkFWCATUBypass.Enabled = false;
-                if (psform != null)
-                {
-                    psform.AutoCalEnabled = false;
-                    psform.PSEnabled = false;
-                }
-                if (chk2TONE.Checked)
-                    chk2TONE.Checked = false;
-                chk2TONE.Enabled = false;
-                if (chkRX2SR.Checked)
-                    chkRX2SR.Checked = false;
-                chkRX2SR.Enabled = false;
-            }
+            ApplySunSDRSpecificUI();
 
             cmaster.CMSetTXOutputLevelRun();
 
@@ -18369,12 +18792,22 @@ namespace Thetis
             m_dVFOAFreq = Math.Round(freq, 6); // MW0LGE_21d rounded to 6
             txtVFOAFreq.Text = freq.ToString("f6");
             txtVFOAFreq_LostFocus(this, EventArgs.Empty);
+            // FM button label is frequency-sensitive: "WFM" inside the
+            // broadcast band, "NFM" on 2m, "FM" elsewhere. Refresh on
+            // every VFO change so the label flips when the user tunes
+            // into or out of the broadcast FM range without triggering
+            // a hard band change.
+            UpdateFMButtonLabels();
+            // Same trigger also flips WDSP's FM demod between narrow and
+            // wide config when crossing the broadcast-band boundary.
+            ApplyFMDSPForCurrentBand();
         }
         private void VFOBUpdate(double freq)
         {
             m_dVFOBFreq = Math.Round(freq, 6); // MW0LGE_21d rounded to 6
             txtVFOBFreq.Text = freq.ToString("f6");
             txtVFOBFreq_LostFocus(this, EventArgs.Empty);
+            UpdateFMButtonLabels();
         }
         private void VFOASubUpdate(double freq)
         {
@@ -20649,10 +21082,13 @@ namespace Thetis
             set
             {
                 xvtr_present = value;
-                radBand2.Enabled = value;
+                bool sunsdr = HardwareSpecific.Model == HPSDRModel.SUNSDR2DX;
+                radBand2.Enabled = value || sunsdr;
                 //   Hdw.XVTRPresent = value;
-                if (value)
-                    MaxFreq = 146.0;
+                if (sunsdr)
+                    MaxFreq = SUNSDR_MAX_RX_FREQ_MHZ;
+                else if (value)
+                    MaxFreq = 146.0;      // legacy XVTR path, unchanged
                 else
                     MaxFreq = 65.0;
 
@@ -28445,6 +28881,28 @@ namespace Thetis
         }
         private void comboPreamp_SelectedIndexChanged(object sender, System.EventArgs e)
         {
+            // SunSDR2 DX has its own 4-state front-end (cycle button in
+            // EESDR3). Short-circuit the HPSDR step-atten / Alex preamp
+            // paths and just push the state to the radio via OP 0x05.
+            // state index maps to wire byte: 0 -> 0x80 (-20 dB atten),
+            // 1 -> 0x81 (-10 dB), 2 -> 0x82 (bypass), 3 -> 0x83 (+10 dB preamp).
+            if (HardwareSpecific.Model == HPSDRModel.SUNSDR2DX)
+            {
+                int sunsdrState = -1;
+                switch (comboPreamp.Text)
+                {
+                    case "+10dB": sunsdrState = 3; break;
+                    case "0dB":   sunsdrState = 2; break;
+                    case "-10dB": sunsdrState = 1; break;
+                    case "-20dB": sunsdrState = 0; break;
+                }
+                if (sunsdrState >= 0)
+                    NetworkIO.nativeSunSDRSetPreampAtt(sunsdrState);
+                if (comboPreamp.Focused)
+                    btnHidden.Focus();
+                return;
+            }
+
             PreampMode mode = PreampMode.FIRST;
             bool exit = false;
 
@@ -34183,8 +34641,14 @@ namespace Thetis
 
             if (new_mode == DSPMode.FM)                             // set DSP samplerate
             {
-                WDSP.SetDSPSamplerate(WDSP.id(0, 0), 192000);
-                WDSP.SetDSPSamplerate(WDSP.id(0, 1), 192000);
+                // Broadcast FM is 200 kHz wide — 192 kHz DSP rate has
+                // Nyquist at 96 kHz so the upper sidebands alias and
+                // the audio sounds like garbled noise with intermittent
+                // breakthroughs. Bump to 384 kHz (Nyquist 192 kHz) when
+                // on a broadcast-FM frequency; keep 192 kHz for NFM.
+                int fm_rate = IsBroadcastFMFreq(VFOAFreq) ? 384000 : 192000;
+                WDSP.SetDSPSamplerate(WDSP.id(0, 0), fm_rate);
+                WDSP.SetDSPSamplerate(WDSP.id(0, 1), fm_rate);
             }
             else
             {
@@ -34562,7 +35026,12 @@ namespace Thetis
                     break;
                 case DSPMode.FM:
                     radModeFMN.BackColor = button_selected_color;
-                    DisableAllFilters();
+                    // Upstream Thetis disabled all filter presets on FM
+                    // because the preset table had no FM entries — the
+                    // buttons would be blank and do nothing. With real
+                    // FM presets now populated (see InitFilterPresets),
+                    // keep them active so users can pick width.
+                    EnableAllFilters();
 
                     if (_nr_selected[0] > 0)
                     {
@@ -34583,6 +35052,12 @@ namespace Thetis
 
                         ptbFMMic_Scroll(this, EventArgs.Empty);
                     }
+
+                    // Pass FM explicitly — _rx1_dsp_mode isn't assigned
+                    // to `new_mode` until later in SetRX1Mode, so calling
+                    // without the argument would see the OLD mode and
+                    // the guard would bail.
+                    ApplyFMDSPForCurrentBand(DSPMode.FM);
 
                     break;
                 case DSPMode.AM:
@@ -34718,19 +35193,18 @@ namespace Thetis
 
             SelectModeDependentPanel(); //MW0LGE_21k9d
 
-            if (_rx1_dsp_mode != DSPMode.SPEC && _rx1_dsp_mode != DSPMode.FM && _rx1_dsp_mode != DSPMode.DRM)
+            // FM was grouped with SPEC/DRM here to force Filter.NONE
+            // because the FM preset table was blank. With real FM presets
+            // populated, use the preset's LastFilter like every other
+            // voice/CW mode so switching to FM auto-selects a sensible
+            // filter width (F3 = 15k by default).
+            if (_rx1_dsp_mode != DSPMode.SPEC && _rx1_dsp_mode != DSPMode.DRM)
             {
                 RX1Filter = rx1_filters[(int)new_mode].LastFilter;
             }
             else
             {
                 RX1Filter = Filter.NONE;
-
-                if (_rx1_dsp_mode == DSPMode.FM)
-                {
-                    int halfBw = (int)(radio.GetDSPRX(0, 0).RXFMDeviation + radio.GetDSPRX(0, 0).RXFMHighCut); //[2.10.3.4]MW0LGE
-                    UpdateRX1Filters(-halfBw, halfBw);
-                }
             }
             BINToolStripMenuItem.Enabled = chkBIN.Enabled;
 
@@ -34850,6 +35324,8 @@ namespace Thetis
                     mode = DSPMode.CWU;
                     break;
                 case "FM":
+                case "NFM":
+                case "WFM":
                     mode = DSPMode.FM;
                     break;
                 case "AM":
@@ -35346,7 +35822,12 @@ namespace Thetis
         private int _oldFilterShiftCentre = -1;
         private void ptbFilterShift_Scroll(object sender, System.EventArgs e)
         {
-            if (_rx1_dsp_mode == DSPMode.DRM || _rx1_dsp_mode == DSPMode.SPEC || _rx1_dsp_mode == DSPMode.FM) return; // unable to shift in these modes
+            // Upstream blocked shift for FM because there was no user-facing
+            // filter on FM (no presets, width locked to FMDeviation). With
+            // real FM presets populated the shift is meaningful again — it
+            // offsets the IF bandpass which helps when an adjacent signal
+            // leaks into the passband. Only SPEC and DRM remain locked.
+            if (_rx1_dsp_mode == DSPMode.DRM || _rx1_dsp_mode == DSPMode.SPEC) return;
 
             _ignore_filter_shift_update = true;
             SelectRX1VarFilter();
@@ -35539,7 +36020,9 @@ namespace Thetis
 
         private void ptbFilterWidth_Scroll(object sender, System.EventArgs e)
         {
-            if (_rx1_dsp_mode == DSPMode.DRM || _rx1_dsp_mode == DSPMode.SPEC || _rx1_dsp_mode == DSPMode.FM) return; // unable to shift in these modes
+            // Same reasoning as ptbFilterShift_Scroll — FM now has user-
+            // selectable filter widths so unlock the width slider for it.
+            if (_rx1_dsp_mode == DSPMode.DRM || _rx1_dsp_mode == DSPMode.SPEC) return;
 
             MouseEventArgs mouseEvent = e as MouseEventArgs;
             bool bScrollUp = mouseEvent != null ? mouseEvent.Delta >= 0 : false;
@@ -37883,7 +38366,10 @@ namespace Thetis
             WDSP.SetChannelState(WDSP.id(2, 0), 0, 1);              // turn OFF the DSP channel
 
             if (new_mode == DSPMode.FM)                             // set DSP samplerate
-                WDSP.SetDSPSamplerate(WDSP.id(2, 0), 192000);
+            {
+                int fm_rate = IsBroadcastFMFreq(VFOBFreq) ? 384000 : 192000;
+                WDSP.SetDSPSamplerate(WDSP.id(2, 0), fm_rate);
+            }
             else
                 WDSP.SetDSPSamplerate(WDSP.id(2, 0), 48000);
 
@@ -38312,22 +38798,10 @@ namespace Thetis
             _rx2_dsp_mode = new_mode;
             vfob_dsp_mode = new_mode;
 
-            if (_rx2_dsp_mode != DSPMode.FM && _rx2_dsp_mode != DSPMode.DRM)
-            {
-                RX2Filter = rx2_filters[(int)new_mode].LastFilter;
-            }
-            else
-            {
-                RX2Filter = Filter.NONE;
-
-                if (_rx2_dsp_mode == DSPMode.FM)
-                {
-                    int halfBw = (int)(radio.GetDSPRX(1, 0).RXFMDeviation + radio.GetDSPRX(1, 0).RXFMHighCut); //[2.10.3.4]MW0LGE
-                    UpdateRX2Filters(-halfBw, halfBw);
-                }
-            }
-
-            if (_rx2_dsp_mode != DSPMode.FM && _rx2_dsp_mode != DSPMode.DRM)
+            // With FM filter presets now populated (see InitFilterPresets),
+            // FM takes the preset LastFilter path like every other voice
+            // mode — only SPEC/DRM still need Filter.NONE.
+            if (_rx2_dsp_mode != DSPMode.DRM)
             {
                 RX2Filter = rx2_filters[(int)new_mode].LastFilter;
             }
@@ -38386,6 +38860,8 @@ namespace Thetis
                     SetRX2Mode(DSPMode.CWU);
                     break;
                 case "FM":
+                case "NFM":
+                case "WFM":
                     SetRX2Mode(DSPMode.FM);
                     break;
                 case "AM":
@@ -41041,6 +41517,13 @@ namespace Thetis
         private String[] on_off_preamp_settings = { "0dB", "-20dB" };
         private String[] anan100d_preamp_settings = { "0dB", "-10dB", "-20dB", "-30dB" };
         private String[] alex_preamp_settings = { "-10db", "-20db", "-30db", "-40db", "-50db" };
+        // SunSDR2 DX exposes 4 front-end states through a single cycle
+        // button in EESDR3: +10 dB preamp / 0 dB bypass / -10 dB atten /
+        // -20 dB atten. Listed high→low so a linear dropdown pick also
+        // tracks descending gain. Wire protocol: OP 0x05 with payload
+        // 0x83 / 0x82 / 0x81 / 0x80 respectively (confirmed by capture
+        // session 20260418_2041xx, see att-wfm-findings.md).
+        private String[] sunsdr_preamp_settings = { "+10dB", "0dB", "-10dB", "-20dB" };
 
         public void SetComboPreampForHPSDR()
         {
@@ -41094,6 +41577,13 @@ namespace Thetis
                 case HPSDRModel.ANVELINAPRO3:
                     // case HPSDRModel.REDPITAYA: // DH1KLM: removed for compatibility reasons
                     comboPreamp.Items.AddRange(anan100d_preamp_settings);
+                    break;
+                case HPSDRModel.SUNSDR2DX:
+                    // Four-state cycle: +10 dB preamp / 0 / -10 / -20. Wire
+                    // delivery is handled in comboPreamp_SelectedIndexChanged
+                    // via nativeSunSDRSetPreampAtt (OP 0x05). See
+                    // docs/protocol/att-wfm-findings.md.
+                    comboPreamp.Items.AddRange(sunsdr_preamp_settings);
                     break;
             }
 
@@ -43008,6 +43498,8 @@ namespace Thetis
                     radModeCWU.Checked = true;
                     break;
                 case "FM":
+                case "NFM":
+                case "WFM":
                     radModeFMN.Checked = true;
                     break;
                 case "AM":
@@ -43055,6 +43547,8 @@ namespace Thetis
                     radRX2ModeCWU.Checked = true;
                     break;
                 case "FM":
+                case "NFM":
+                case "WFM":
                     radRX2ModeFMN.Checked = true;
                     break;
                 case "AM":
@@ -46032,6 +46526,16 @@ namespace Thetis
             {
                 // set the panel rx1 only
                 BandType bt = BandStackManager.GetBandTypeForFrequency(VFOAFreq);
+
+                // On SunSDR2 DX the 2m button lives on the HF band panel
+                // (enabled for this model only — see ApplySunSDRSpecificUI).
+                // B2M is globally classified as BandType.VHF which would
+                // swap the panel to the legacy XVTR VHF slots and hide
+                // our 2 button. Keep the HF panel visible instead.
+                if (HardwareSpecific.Model == HPSDRModel.SUNSDR2DX &&
+                    newBand == Band.B2M)
+                    bt = BandType.HF;
+
                 switch (bt)
                 {
                     case BandType.GEN:

@@ -60,7 +60,7 @@ static void sunsdr_dbg_note_tx_packet(unsigned int seq);
 /* sunsdr_debug.log writer (sdr_logf path) and per-attempt IQ dumps.
  * Both disabled in production. Flip to 1 only when actively
  * diagnosing the TX/RX path. */
-#define SUNSDR_DEBUG_LOG_ENABLED 0
+#define SUNSDR_DEBUG_LOG_ENABLED 1
 #define SUNSDR_IQ_DUMP_ENABLED 0
 
 /* Global SunSDR session state — moved above the iq_dump / tx_pace
@@ -1204,8 +1204,23 @@ static double sunsdr_dbg_tx_cb_rms_sum = 0.0;
 static double sunsdr_dbg_tx_cb_rms_min = 0.0;
 static double sunsdr_dbg_tx_cb_rms_max = 0.0;
 static double sunsdr_dbg_tx_cb_peak_max = 0.0;
+static volatile LONG sunsdr_dbg_tx_cb_vhf_clamp = 0;
 static ULONGLONG sunsdr_dbg_tx_cb_last_tick = 0;
 static ULONGLONG sunsdr_dbg_tx_cb_max_gap_ms = 0;
+
+/* VHF TX wire-IQ gain: parity capture 2026-04-20 vs EESDR3 on 2m NFM TUNE
+ * at max drive showed both clients send identical 0x17 drive=0xff, but
+ * EESDR's wire |IQ| peak is 1.000 (full 24-bit scale) while Artemis peaks
+ * at 0.739 — a 26% amplitude deficit that directly costs PA output
+ * (u16[3] telem = 765 vs EESDR 869; meter reads 4.4 W vs 5.7 W).
+ *
+ * Cause: the HF gain of 1/0.857 = 1.167 assumes WDSP TUNE peak = 0.857.
+ * On 2m NFM, WDSP TUNE peak is 0.634 (observed pre_peak in TX audio-cb
+ * logs). Need 1/0.634 = 1.577 to land wire peak at 1.000.
+ * HF calibration is locked (see AM cal 2026-04-15) — VHF boost applies
+ * only when sdr.currentBandIsVhf. */
+#define SUNSDR_WDSP_TX_PEAK_EST_VHF  0.634
+#define SUNSDR_VHF_TX_IQ_GAIN        (1.0 / SUNSDR_WDSP_TX_PEAK_EST_VHF)  /* ~1.577 */
 
 /* TX callback QPC gap tracking + histogram. The TX callback runs on the
  * WDSP TX channel worker thread (spawned by cm_main/SendpOutboundTx), which
@@ -1250,6 +1265,7 @@ static void sunsdr_dbg_reset_tx_attempt_locked(int attempt_id)
     sunsdr_dbg_tx_cb_rms_min = 0.0;
     sunsdr_dbg_tx_cb_rms_max = 0.0;
     sunsdr_dbg_tx_cb_peak_max = 0.0;
+    InterlockedExchange(&sunsdr_dbg_tx_cb_vhf_clamp, 0);
     sunsdr_dbg_tx_cb_last_tick = 0;
     sunsdr_dbg_tx_cb_max_gap_ms = 0;
 }
@@ -1618,6 +1634,12 @@ static void sunsdr_tx_outbound(int id, int nsamples, double* buff)
     requested_watts = sunsdr_requested_watts_from_raw(raw_drive);
     iq_gain = sunsdr_tx_iq_gain_for_watts(requested_watts);
 
+    /* VHF uses a higher gain to land wire peak at 1.0 (matches EESDR3
+     * 2m TUNE capture). See SUNSDR_VHF_TX_IQ_GAIN definition for rationale.
+     * HF cal is locked; do not disturb. */
+    if (sdr.currentBandIsVhf)
+        iq_gain = SUNSDR_VHF_TX_IQ_GAIN;
+
     /* The previous AM-specific "am_boost = 1.48" wire-IQ multiplier
      * was compensating for a misrouted drive command (we were sending
      * mode code as drive via 0x17, giving AM only ~2.5W equivalent
@@ -1649,6 +1671,21 @@ static void sunsdr_tx_outbound(int id, int nsamples, double* buff)
         cur_Q = in_Q * iq_gain;
         double in_mag = sqrt(in_I * in_I + in_Q * in_Q);
         double out_mag = sqrt(cur_I * cur_I + cur_Q * cur_Q);
+
+        /* VHF wire-IQ clamp: the 2m PA and its forward-power detector
+         * misbehave when wire |IQ| exceeds 1.0 (on-air splatter +
+         * u16[3] forward-power telemetry collapses to 0). Observed
+         * 2026-04-20: mid-session WDSP TUNE amplitude drifted so that
+         * post-gain peak hit 1.046. Clamp envelope to 1.0 on VHF only
+         * (HF stays wide open — its amplitude calibration is locked).
+         * Phase-preserving magnitude scale. */
+        if (sdr.currentBandIsVhf && out_mag > 1.0) {
+            double scale = 1.0 / out_mag;
+            cur_I *= scale;
+            cur_Q *= scale;
+            out_mag = 1.0;
+            InterlockedIncrement(&sunsdr_dbg_tx_cb_vhf_clamp);
+        }
 
         if (in_mag > pre_peak) pre_peak = in_mag;
         if (out_mag > post_peak) post_peak = out_mag;
@@ -2044,23 +2081,25 @@ static void sunsdr_reassert_tx_state(void)
     if (!sdr.powered)
         return;
 
-    if (sdr.currentTxFreqHz > 0) {
-        sdr_logf("Reassert TX freq: %d Hz\n", sdr.currentTxFreqHz);
+    /* On HF TX entry EESDR sends 0x09 = VFO (unshifted); on 2m TX entry
+     * the -1 kHz shifted 0x09 is sent AFTER 0x06 by the caller (see
+     * SunSDRSetPTT ptt=1 block). Skip the unshifted send here on VHF
+     * so the 2m wire sequence matches EESDR's minimal order exactly. */
+    if (sdr.currentTxFreqHz > 0 && !sunsdr_freq_is_vhf(sdr.currentTxFreqHz)) {
+        sdr_logf("Reassert TX freq (HF): %d Hz\n", sdr.currentTxFreqHz);
         sunsdr_send_freq_pkt(SUNSDR_OP_FREQ_PRIMARY, 0, sdr.currentTxFreqHz);
     }
 
-    /*
-     * 0x17 is DRIVE (not mode). EESDR TUNE-entry order is
-     * 0x20 -> 0x17 -> 0x06 -> 0x09; voice-MOX-entry is
-     * 0x18 -> 0x20 -> 0x18 -> 0x06 (no 0x17 since drive was set earlier
-     * by the slider). We assert drive inside SunSDRSetPTT between the
-     * config block and 0x06 (see below) rather than here. Mode is set
-     * by the 0x20 config block, not by any dedicated opcode.
-     */
-
-    if (sdr.currentTxAntenna == 1 || sdr.currentTxAntenna == 2) {
+    /* Antenna re-assert is HF-only. On 2m the RX-time antenna config
+     * (0x1E=0, 0x15=1 for A1 path) is already correct for TX and
+     * EESDR does NOT re-emit antenna packets on 2m TX entry. Sending
+     * 0x1E+0x15 during TX may cause the radio to switch TX output
+     * routing away from the VHF PA path — suspect cause of "TX
+     * activates but no RF reaches the air" on 2m. */
+    if (!sunsdr_freq_is_vhf(sdr.currentTxFreqHz) &&
+        (sdr.currentTxAntenna == 1 || sdr.currentTxAntenna == 2)) {
         int selector = sunsdr_map_tx_ant_selector(sdr.currentTxAntenna);
-        sdr_logf("Reassert TX antenna: %d selector=0x%02X\n", sdr.currentTxAntenna, selector);
+        sdr_logf("Reassert TX antenna (HF): %d selector=0x%02X\n", sdr.currentTxAntenna, selector);
         sunsdr_send_u32_cmd(SUNSDR_OP_ANT_PREAMBLE, 0);
         sunsdr_send_u32_cmd(SUNSDR_OP_RX_ANT, (unsigned int)selector);
         sunsdr_send_u32_cmd(SUNSDR_OP_KEEPALIVE, 0);
@@ -2080,8 +2119,13 @@ static void sunsdr_reassert_rx_state(void)
         return;
 
     if (sdr.currentRx1FreqHz > 0) {
-        int primary = sdr.currentRx1FreqHz - SUNSDR_DDC0_OFFSET_HZ;
-        sdr_logf("Reassert RX1 freq: rx=%d primary=%d\n", sdr.currentRx1FreqHz, primary);
+        int offset = (sdr.currentRx1FreqHz >= 80000000 &&
+                      sdr.currentRx1FreqHz <= 108000000)
+            ? 0
+            : SUNSDR_DDC0_OFFSET_HZ;
+        int primary = sdr.currentRx1FreqHz - offset;
+        sdr_logf("Reassert RX1 freq: rx=%d primary=%d offset=%d\n",
+            sdr.currentRx1FreqHz, primary, offset);
         sunsdr_send_freq_pkt(SUNSDR_OP_FREQ_PRIMARY, 0, primary);
         sunsdr_send_freq_pkt(SUNSDR_OP_FREQ_COMP, 0, sdr.currentRx1FreqHz);
     }
@@ -2123,6 +2167,94 @@ static const char* SUNSDR_STATE_SYNC_TEMPLATE_HEX =
 static const char* SUNSDR_CONFIG_BLOCK_TEMPLATE_HEX =
     "32ff20003400000000000100000000000000010000000100000000000000000000006400000000000000000000001e000000bc02000007000000640000002c01000064000000";
 
+/* Same 52-byte CONFIG_BLOCK payload as the wideband template, with
+ * the per-mode flag at payload bytes 4-7 zeroed. EESDR sends this
+ * variant for narrow-FM reception on 2m; wideband modes (USB/AM/CW)
+ * keep the `01 00 00 00` at 4-7. See vhf-findings.md, OP 0x20 table. */
+static const char* SUNSDR_CONFIG_BLOCK_NFM_HEX =
+    "32ff20003400000000000100000000000000010000000000000000000000000000006400000000000000000000001e000000bc02000007000000640000002c01000064000000";
+
+/* Broadcast-FM (WFM) variant of the CONFIG_BLOCK. Payload differs
+ * from the ham wideband template ONLY in bytes 0-3: WFM sets the
+ * "mode family" field to 0x00 (broadcast), ham modes use 0x01.
+ * Bytes 4-7 stay at 0x01 (wideband flag on). Everything else
+ * identical. See att-wfm-findings.md for byte-level diff. */
+static const char* SUNSDR_CONFIG_BLOCK_WFM_HEX =
+    "32ff20003400000000000100000000000000000000000100000000000000000000006400000000000000000000001e000000bc02000007000000640000002c01000064000000";
+
+/* OP 0x22 STREAM_XPORT payloads captured from EESDR3 during band changes.
+ * The opcode is a 12-byte payload; bytes 4-7 encode the target band's
+ * front-end LO parameter (see docs/protocol/vhf-findings.md). Two values
+ * are confirmed from capture 20260418_152633 (20m -> 2m) and its mirror.
+ *
+ * TODO: fit a closed-form formula once we capture a 2nd HF band and a
+ * 2nd VHF sub-band. For now the lookup table is sufficient for
+ * RX-only 2m. */
+static const char* SUNSDR_STREAM_XPORT_HF_HEX =
+    "32ff22000c00000000000100000000000000000000000084d71700000000";
+static const char* SUNSDR_STREAM_XPORT_VHF_2M_HEX =
+    "32ff22000c0000000000010000000000000000000000008c864700000000";
+
+/* Band-class classifier. The SunSDR2 DX direct-sample ADC runs at
+ * 122.88 MHz; the first Nyquist zone tops out at 61.44 MHz. 160m-6m
+ * (bottom of 50 MHz band) are all within that zone and use the HF
+ * direct-sample path. Anything above ~62 MHz must route through the
+ * internal VHF/UHF down-converter, which is engaged via 0x22
+ * STREAM_XPORT. The radio's spec'd antenna-A1 RX range covers the
+ * full 80-420 MHz span, but we only have one wire-confirmed 0x22
+ * payload (the 2m one); frequencies outside 144-148 MHz will reach
+ * this code path and reuse that payload. Whether the radio tunes
+ * cleanly there depends on the down-converter's internal behavior —
+ * more 0x22 captures at other sub-bands are needed to calibrate. */
+static int sunsdr_freq_is_vhf(int freqHz)
+{
+    return (freqHz >= 62000000) ? 1 : 0;
+}
+
+/* Pick the CONFIG_BLOCK template that matches the current band + mode
+ * combination. Three variants:
+ *   - WFM (broadcast FM):  bytes 0-3 = 0x00 (mode family = broadcast)
+ *   - NFM (2m narrow FM):  bytes 0-3 = 0x01, bytes 4-7 = 0x00 (narrow IF)
+ *   - Wideband (default):  bytes 0-3 = 0x01, bytes 4-7 = 0x01 (ham SSB/CW/AM)
+ * All three share the same 8..51 tail. See att-wfm-findings.md. */
+static const char* sunsdr_pick_config_block_template(void)
+{
+    if (sdr.currentRx1FreqHz >= 80000000 &&
+        sdr.currentRx1FreqHz <= 108000000)
+        return SUNSDR_CONFIG_BLOCK_WFM_HEX;
+    if (sdr.currentBandIsVhf && sdr.currentIsNfm)
+        return SUNSDR_CONFIG_BLOCK_NFM_HEX;
+    return SUNSDR_CONFIG_BLOCK_TEMPLATE_HEX;
+}
+
+/* Emit the EESDR-observed band-change prelude on the wire. This is the
+ * 6-command sequence that reconfigures the radio's RX front-end path
+ * between HF direct-sample and the VHF down-converter. Send order
+ * mirrors the capture from docs/protocol/vhf-findings.md step 2-7.
+ * Caller must send the usual 0x09 + 0x08 frequency pair afterward,
+ * and must have set sdr.currentBandIsVhf BEFORE calling so the mode
+ * flag in the CONFIG_BLOCK is picked correctly. */
+static void sunsdr_send_band_change_prelude(int toVhf)
+{
+    sdr_logf("Band-change prelude: toVhf=%d nfm=%d\n", toVhf, sdr.currentIsNfm);
+
+    sunsdr_send_u32_cmd(SUNSDR_OP_ANT_PREAMBLE, 0);
+    Sleep(1);
+    sunsdr_send_u32_cmd(SUNSDR_OP_RX_ANT, 1);
+    Sleep(1);
+    sunsdr_send_hex_pkt(
+        toVhf ? SUNSDR_STREAM_XPORT_VHF_2M_HEX : SUNSDR_STREAM_XPORT_HF_HEX,
+        30);
+    Sleep(1);
+    sunsdr_send_u32_cmd(SUNSDR_OP_KEEPALIVE, 0);
+    Sleep(1);
+    /* Caller has already flipped sdr.currentBandIsVhf before we reach
+     * the template picker, so toVhf=1 + NFM picks the narrow template. */
+    sunsdr_send_hex_pkt(sunsdr_pick_config_block_template(), 70);
+    Sleep(1);
+    sunsdr_send_u32_cmd(SUNSDR_OP_KEEPALIVE, 0);
+}
+
 static void sunsdr_send_state_sync_count(int rx_count)
 {
     sunsdr_send_hex_pkt_u8(SUNSDR_STATE_SYNC_TEMPLATE_HEX, 0x36, (unsigned char)rx_count);
@@ -2130,7 +2262,19 @@ static void sunsdr_send_state_sync_count(int rx_count)
 
 static void sunsdr_send_config_block_state(int rx_state)
 {
-    sunsdr_send_hex_pkt_u8(SUNSDR_CONFIG_BLOCK_TEMPLATE_HEX, 0x12, (unsigned char)(rx_state ? 1 : 0));
+    /* RX: mode/band-appropriate template (ham/SSB -> wideband, 2m NFM
+     * -> narrow, broadcast FM -> WFM). TX: ALWAYS use the wideband
+     * template with byte 4-7 = 01 (wide-filter / modulator path),
+     * regardless of mode. 2m-tx-findings.md captures show EESDR sends
+     * byte 0..3 = 00, byte 4..7 = 01 on every TX entry (HF and 2m,
+     * TUNE and voice MOX alike). Byte 0..3 = 00 is the "TX indicator";
+     * we still overwrite byte 0x12 below. Using the narrow NFM
+     * template on 2m TX would route WDSP-generated FM IQ through the
+     * radio's narrow RX IF chain and kill the 2m output. */
+    const char* tmpl = rx_state
+        ? sunsdr_pick_config_block_template()
+        : SUNSDR_CONFIG_BLOCK_TEMPLATE_HEX;
+    sunsdr_send_hex_pkt_u8(tmpl, 0x12, (unsigned char)(rx_state ? 1 : 0));
 }
 
 static unsigned int sunsdr_current_pa_wire_state(void)
@@ -2201,9 +2345,14 @@ static void sunsdr_reconfigure_rx_paths(int rx2_enabled)
     Sleep(10);
     sunsdr_send_state_sync_count(rx_count);
     Sleep(1);
-    sunsdr_send_freq_pkt(SUNSDR_OP_FREQ_PRIMARY, 0, rx1_freq - SUNSDR_DDC0_OFFSET_HZ);
-    Sleep(1);
-    sunsdr_send_freq_pkt(SUNSDR_OP_FREQ_COMP, 0, rx1_freq);
+    {
+        int rx1_offset = (rx1_freq >= 80000000 && rx1_freq <= 108000000)
+            ? 0
+            : SUNSDR_DDC0_OFFSET_HZ;
+        sunsdr_send_freq_pkt(SUNSDR_OP_FREQ_PRIMARY, 0, rx1_freq - rx1_offset);
+        Sleep(1);
+        sunsdr_send_freq_pkt(SUNSDR_OP_FREQ_COMP, 0, rx1_freq);
+    }
     Sleep(1);
     sunsdr_send_freq_pkt(SUNSDR_OP_FREQ_COMP, 1, rx2_freq);
     Sleep(100);
@@ -2829,16 +2978,53 @@ void SunSDRSetFreq(int receiver, int freqHz, int isTx)
              * Primary drives the analog LO and COMP[0] tracks the displayed RX1 center.
              * Do not overwrite COMP[1] here; RX2 owns that tuning context.
              */
+
+            /*
+             * Band-class transition: if the target frequency crosses the
+             * HF/VHF boundary we must first reconfigure the RX front-end
+             * path via the 0x1E/0x15/0x22/0x20 prelude. Skip this during
+             * TX/TUNE — user cannot be band-switching while keyed down,
+             * and we do not want to perturb the TX LO context.
+             */
+            if (!sdr.currentPTT && !sdr.currentTune) {
+                int targetIsVhf = sunsdr_freq_is_vhf(freqHz);
+                if (targetIsVhf != sdr.currentBandIsVhf) {
+                    sdr_logf("RX1 band-class transition: cur=%d target=%d freq=%d nfm=%d\n",
+                        sdr.currentBandIsVhf, targetIsVhf, freqHz, sdr.currentIsNfm);
+                    sdr.currentBandIsVhf = targetIsVhf;
+                    // Pre-set target freq so the CONFIG_BLOCK template picker
+                    // inside the prelude sees the NEW frequency (picks WFM
+                    // vs ham wideband correctly). Otherwise the picker reads
+                    // the stale currentRx1FreqHz (still HF at this point)
+                    // and sends the ham template on a broadcast-FM tune.
+                    sdr.currentRx1FreqHz = freqHz;
+                    sunsdr_send_band_change_prelude(targetIsVhf);
+                }
+            }
+
+            /*
+             * DDC0 offset: on HF and 2m NFM, PRIMARY is tuned 92.5 kHz
+             * BELOW the displayed COMP frequency so the RX spur band
+             * sits outside the narrow IF. Broadcast FM (~88-108 MHz)
+             * uses zero offset — PRIMARY == COMP — because the 200 kHz
+             * wide signal can tolerate DC and EESDR3 drops the bias
+             * there (confirmed in capture 20260418_204956, see
+             * att-wfm-findings.md). Apply matching behaviour.
+             */
+            int ddc0_offset = (freqHz >= 80000000 && freqHz <= 108000000)
+                ? 0
+                : SUNSDR_DDC0_OFFSET_HZ;
+
             if (sdr.currentPTT || sdr.currentTune) {
                 /*
                  * During TX/TUNE the primary 0x09 context is the TX LO. Sending
                  * the RX center offset here retunes the RF output by -92.5 kHz.
                  * Keep COMP[0] current, but leave primary under TX ownership until RX.
                  */
-                sdr_logf("Suppress RX primary during TX/TUNE: rx=%d primary=%d ptt=%d tune=%d\n",
-                    freqHz, freqHz - SUNSDR_DDC0_OFFSET_HZ, sdr.currentPTT, sdr.currentTune);
+                sdr_logf("Suppress RX primary during TX/TUNE: rx=%d primary=%d ptt=%d tune=%d offset=%d\n",
+                    freqHz, freqHz - ddc0_offset, sdr.currentPTT, sdr.currentTune, ddc0_offset);
             } else {
-                sunsdr_send_freq_pkt(SUNSDR_OP_FREQ_PRIMARY, 0, freqHz - SUNSDR_DDC0_OFFSET_HZ);
+                sunsdr_send_freq_pkt(SUNSDR_OP_FREQ_PRIMARY, 0, freqHz - ddc0_offset);
             }
             sunsdr_send_freq_pkt(SUNSDR_OP_FREQ_COMP, 0, freqHz);
             sdr.currentRx1FreqHz = freqHz;
@@ -2865,8 +3051,53 @@ void SunSDRSetMode(int mode)
      * for our own gating (AM-specific wire IQ handling) but do not
      * transmit a wire mode command here. */
     int sunsdr_mode = sunsdr_map_mode_code(mode);
-    sdr_logf("SunSDRSetMode(thetis=%d -> sunsdr=0x%02X) [no wire send; 0x17 is drive]\n", mode, sunsdr_mode);
+    int new_is_nfm = (mode == 5) ? 1 : 0;  /* Thetis DSPMode.FM = 5 */
+    int was_nfm = sdr.currentIsNfm;
+
+    sdr_logf("SunSDRSetMode(thetis=%d -> sunsdr=0x%02X, nfm=%d) [no wire send; 0x17 is drive]\n",
+        mode, sunsdr_mode, new_is_nfm);
+
     sdr.currentMode = sunsdr_mode;
+    sdr.currentIsNfm = new_is_nfm;
+
+    /* If we're already on 2m and the NFM flag flipped, the radio needs
+     * a fresh CONFIG_BLOCK so its internal IF filter matches the new
+     * demod. EESDR's captured sequence on 2m mode-flip is:
+     *   0x18 KEEPALIVE -> 0x20 CONFIG_BLOCK -> 0x18 KEEPALIVE
+     *   -> 0x17 (0x00 for NFM, 0xff for wideband) -> 0x18 KEEPALIVE
+     * The 0x17 byte in this context is a wideband/narrow filter hint,
+     * NOT drive — during RX the radio reinterprets the opcode. Drive
+     * gets re-asserted by SunSDRSetPTT on the next TX/TUNE entry so
+     * overwriting it here is safe. Skip entirely if unpowered or
+     * mid-TX. (See vhf-findings.md OP 0x17 section.) */
+    if (sdr.powered && sdr.currentBandIsVhf && (new_is_nfm != was_nfm) &&
+        !sdr.currentPTT && !sdr.currentTune) {
+        /* On broadcast FM frequencies the "NFM" flag is really "WFM"
+         * in WDSP — a completely different IF regime from 2m NFM.
+         * EESDR3 emits ZERO control packets on WFM↔NFM flips at the
+         * same freq (confirmed in captures mode_wfm_to_nfm_on_wfm /
+         * mode_nfm_to_wfm_on_wfm). Skip the 0x17 narrow-filter hint
+         * on broadcast freqs — it would tell the radio "use narrow
+         * IF", the exact opposite of what WFM needs. The CONFIG_BLOCK
+         * re-emit is also unnecessary per EESDR but harmless since
+         * the picker returns the correct template for the freq. */
+        int on_broadcast = (sdr.currentRx1FreqHz >= 80000000 &&
+                            sdr.currentRx1FreqHz <= 108000000);
+        unsigned int filter_hint = new_is_nfm ? 0x00 : 0xff;
+        sdr_logf("Mode-on-VHF flip: re-emit CONFIG_BLOCK nfm=%d broadcast=%d hint=%02X\n",
+            new_is_nfm, on_broadcast, filter_hint);
+        sunsdr_send_u32_cmd(SUNSDR_OP_KEEPALIVE, 0);
+        Sleep(1);
+        sunsdr_send_hex_pkt(sunsdr_pick_config_block_template(), 70);
+        Sleep(1);
+        sunsdr_send_u32_cmd(SUNSDR_OP_KEEPALIVE, 0);
+        Sleep(1);
+        if (!on_broadcast) {
+            sunsdr_send_u32_cmd(SUNSDR_OP_DRIVE, filter_hint);
+            Sleep(1);
+            sunsdr_send_u32_cmd(SUNSDR_OP_KEEPALIVE, 0);
+        }
+    }
 }
 
 void SunSDRSetRX2(int enabled)
@@ -2899,6 +3130,25 @@ void SunSDRSetTune(int tune)
         sdr.txSeq,
         sdr.txAudioPackets,
         sdr.txPhase);
+}
+
+/* Cycle-state setter for the SunSDR2 DX preamp/attenuator front-end.
+ * state: 0=-20 dB, 1=-10 dB, 2=0 dB (bypass), 3=+10 dB preamp.
+ * Wire packet is a single 0x05 opcode with a u32 payload whose low
+ * byte is (0x80 | state). Captures 20260418_2041xx confirm EESDR3
+ * sends exactly this on every click of the ATT button. */
+void SunSDRSetPreampAtt(int state)
+{
+    unsigned int wire;
+    if (state < 0 || state > 3) {
+        sdr_logf("SunSDRSetPreampAtt: bad state=%d (range 0..3) — ignoring\n", state);
+        return;
+    }
+    wire = 0x80u | (unsigned int)state;
+    sdr_logf("SunSDRSetPreampAtt(state=%d wire=0x%02X)\n", state, wire);
+    if (sdr.powered) {
+        sunsdr_send_u32_cmd(SUNSDR_OP_PREAMP_ATT, wire);
+    }
 }
 
 /* Simple passthrough so managed-side code (console.cs) can write one-liner
@@ -3068,6 +3318,7 @@ void SunSDRSetPTT(int ptt)
     int raw_drive = sdr.currentDriveRaw;
     double requested_watts = sunsdr_requested_watts_from_raw(raw_drive);
     double iq_gain = sunsdr_tx_iq_gain_for_watts(requested_watts);
+    if (sdr.currentBandIsVhf) iq_gain = SUNSDR_VHF_TX_IQ_GAIN;
 
     if (!sdr.powered)
     {
@@ -3202,13 +3453,28 @@ void SunSDRSetPTT(int ptt)
          */
         sdr.lastTxWasTune = sdr.currentTune ? 1 : 0;
         sdr.currentPTT = new_ptt;
+        /* Non-split operation: Thetis may never call SunSDRSetFreq(isTx=1)
+         * because TX freq == RX freq. In that case sdr.currentTxFreqHz
+         * can still be 0 or stale (last HF TX freq). Our VHF gates
+         * (antenna suppression, -1 kHz shift) depend on currentTxFreqHz
+         * being the intended TX freq. Fall back to the RX freq when TX
+         * freq is unset or clearly stale (cross-band from RX). */
+        if (sdr.currentTxFreqHz <= 0 ||
+            sunsdr_freq_is_vhf(sdr.currentRx1FreqHz) != sunsdr_freq_is_vhf(sdr.currentTxFreqHz)) {
+            sdr_logf("TX freq fallback: tx=%d -> rx=%d (cross-band or uninit)\n",
+                sdr.currentTxFreqHz, sdr.currentRx1FreqHz);
+            sdr.currentTxFreqHz = sdr.currentRx1FreqHz;
+        }
         sunsdr_reassert_tx_state();
         sunsdr_send_config_block_state(0);
         /* Assert drive (0x17) after the 0x20 config block and before 0x06,
-         * matching EESDR TUNE-entry order. Using the cached slider value;
-         * if raw_drive < 0 the user hasn't moved the slider since boot,
-         * skip the send and let the prior radio state stand. */
-        if (sdr.currentDriveRaw >= 0) {
+         * matching EESDR TUNE-entry order. On 2m EESDR sends NO 0x17
+         * during TX entry (see 2m-tx-findings.md) — drive state is
+         * inherited from SunSDRSetDrive slider pushes. Re-sending on
+         * 2m TX entry MAY put the radio into an overdrive-protect
+         * state that gates RF output. Gate by band. */
+        if (sdr.currentDriveRaw >= 0 &&
+            !sunsdr_freq_is_vhf(sdr.currentTxFreqHz)) {
             int wire_byte = sunsdr_drive_raw_to_wire_byte(sdr.currentDriveRaw);
             sdr_logf("TX_DRIVE_ASSERT raw=%d wire_byte=0x%02X\n",
                 sdr.currentDriveRaw, wire_byte);
@@ -3238,6 +3504,19 @@ void SunSDRSetPTT(int ptt)
         if (sunsdr_current_pa_wire_state() != 0) {
             sunsdr_send_u32_cmd(SUNSDR_OP_PA_ENABLE, 1);
         }
+        /* 2m TX freq-offset shift. Per 2m-tx-findings.md, EESDR always
+         * sends 0x09 = VFO - 1000 Hz on 2m TX entry (both TUNE and
+         * voice MOX) and reverts to VFO on TX exit. Without this shift
+         * the 2m carrier comes out 1 kHz low of the dial. HF voice MOX
+         * doesn't need this (VFO tracks through WDSP), and HF TUNE
+         * behavior is left alone in this change to avoid regression.
+         * Restrict to VHF. */
+        if (sunsdr_freq_is_vhf(sdr.currentTxFreqHz) && sdr.currentTxFreqHz > 0) {
+            int tx_entry_hz = sdr.currentTxFreqHz - 1000;
+            sdr_logf("2m TX entry freq shift: VFO=%d -> 0x09=%d\n",
+                sdr.currentTxFreqHz, tx_entry_hz);
+            sunsdr_send_freq_pkt(SUNSDR_OP_FREQ_PRIMARY, 0, tx_entry_hz);
+        }
     } else {
         double avg_fd_gap = sunsdr_dbg_fd_gap_count > 0 ? sunsdr_dbg_fd_gap_sum_ms / (double)sunsdr_dbg_fd_gap_count : 0.0;
         double avg_cb_rms = sunsdr_dbg_tx_cb_count > 0 ? sunsdr_dbg_tx_cb_rms_sum / (double)sunsdr_dbg_tx_cb_count : 0.0;
@@ -3245,7 +3524,7 @@ void SunSDRSetPTT(int ptt)
             (unsigned long long)(sunsdr_dbg_first_fd_tick - sunsdr_dbg_mox_cmd_tick) : 0;
         int first_fd_before_cmd = (int)sunsdr_dbg_first_fd_before_cmd;
         InterlockedExchange(&sunsdr_tx_iq_enabled, 0);
-        sdr_logf("TX_ATTEMPT_END #%ld mode=%s result=user_clean_or_raspy ptt=%d tune=%d seq=%u txPackets=%u activeFD=%ld seqGaps=%ld feDuringTx=%ld keepaliveRaces=%ld iqGateSkips=%ld firstFdDelayMs=%llu firstFdBefore0x06=%d fdGapMin=%.3f fdGapAvg=%.3f fdGapMax=%.3f fdGapCount=%u txPhase=%.4f txAccum=%d txCb=%ld txCbSilent=%ld txCbNonfinite=%ld txCbRmsMin=%.6f txCbRmsAvg=%.6f txCbRmsMax=%.6f txCbPostPeakMax=%.6f txCbMaxGapMs=%llu\n",
+        sdr_logf("TX_ATTEMPT_END #%ld mode=%s result=user_clean_or_raspy ptt=%d tune=%d seq=%u txPackets=%u activeFD=%ld seqGaps=%ld feDuringTx=%ld keepaliveRaces=%ld iqGateSkips=%ld firstFdDelayMs=%llu firstFdBefore0x06=%d fdGapMin=%.3f fdGapAvg=%.3f fdGapMax=%.3f fdGapCount=%u txPhase=%.4f txAccum=%d txCb=%ld txCbSilent=%ld txCbNonfinite=%ld txCbRmsMin=%.6f txCbRmsAvg=%.6f txCbRmsMax=%.6f txCbPostPeakMax=%.6f txCbMaxGapMs=%llu vhfClamp=%ld\n",
             sunsdr_dbg_tx_attempt_id,
             sunsdr_tx_mode_label(sdr.lastTxWasTune),
             new_ptt,
@@ -3272,7 +3551,8 @@ void SunSDRSetPTT(int ptt)
             avg_cb_rms,
             sunsdr_dbg_tx_cb_rms_max,
             sunsdr_dbg_tx_cb_peak_max,
-            (unsigned long long)sunsdr_dbg_tx_cb_max_gap_ms);
+            (unsigned long long)sunsdr_dbg_tx_cb_max_gap_ms,
+            sunsdr_dbg_tx_cb_vhf_clamp);
         sunsdr_dbg_log_audio_diags("END");
         /*
          * On MOX-off, only write 0x24 PA_ENABLE=0 if we had written a 1
@@ -3283,6 +3563,13 @@ void SunSDRSetPTT(int ptt)
             sunsdr_send_u32_cmd(SUNSDR_OP_PA_ENABLE, 0);
         }
         sunsdr_send_u32_cmd(SUNSDR_OP_MOX_PTT, 0);
+        /* Mirror of the TX-entry -1 kHz shift: on 2m TX exit, restore
+         * 0x09 to the unshifted VFO so RX tunes back on-dial. EESDR
+         * sends this right after 0x06=0 on every 2m TX exit. */
+        if (sunsdr_freq_is_vhf(sdr.currentTxFreqHz) && sdr.currentTxFreqHz > 0) {
+            sdr_logf("2m TX exit freq restore: 0x09=%d\n", sdr.currentTxFreqHz);
+            sunsdr_send_freq_pkt(SUNSDR_OP_FREQ_PRIMARY, 0, sdr.currentTxFreqHz);
+        }
         sunsdr_send_config_block_state(1);
         sunsdr_reassert_rx_state();
         sdr.currentPTT = new_ptt;
@@ -3745,15 +4032,51 @@ DWORD WINAPI SunSDRReadThread(LPVOID param)
                 }
 
                 /* Feed power telemetry to Thetis metering.
-                 * Bytes 14-15 (u16 LE) carry forward power ADC value.
-                 * Confirmed 2026-04-09: u16=48 → 11.2W, u16=186 → ~96W.
-                 * Linear model: watts = max(0, (value - 30) * 0.614)
-                 * Conversion to watts happens in C# computeAlexFwdPower().
-                 * Bytes 16-17 may carry SWR (134 RX, 125 at 96W TX).
+                 *
+                 * HF: bytes 14-15 (u16 LE) carry forward-power ADC.
+                 *     C# computeAlexFwdPower (console.cs:25510) applies
+                 *     a quadratic: watts = 0.00412 * (adc - 33)^2.
+                 *     Calibrated 2026-04-09 against external wattmeter:
+                 *       u16=85 → 11 W, u16=142 → 50 W, u16=186 → 96 W.
+                 *
+                 * 2m (VHF): bytes 14-15 read near-zero. Forward power
+                 *     ADC is at bytes 6-7 (u16[3]) — confirmed by the
+                 *     20260420 power-cal capture session. Calibrated
+                 *     against EESDR's Fwd Pwr meter at 50/75/max drive:
+                 *       u16=746 → 4.2 W
+                 *       u16=829 → 5.3 W
+                 *       u16=869 → 5.7 W
+                 *     Fit: watts = max(0, (u16 - 400) / 82).
+                 *
+                 * To keep the downstream C# meter unchanged, re-encode
+                 * the 2m-computed watts into the HF raw scale that the
+                 * quadratic formula inverts to. HF quadratic inverted:
+                 *     raw_hf_equiv = sqrt(watts / 0.00412) + 33
+                 *
+                 * Bytes 16-17 may carry SWR (134 RX, 125 at 96W TX) on HF.
+                 * Skipping SWR on VHF until we have a cal run for it.
                  */
                 {
-                    unsigned short fwd_raw = (n >= 16) ? (pktbuf[14] | (pktbuf[15] << 8)) : 0;
+                    unsigned short fwd_raw = 0;
                     unsigned short swr_raw = (n >= 18) ? (pktbuf[16] | (pktbuf[17] << 8)) : 0;
+
+                    if (sdr.currentBandIsVhf) {
+                        unsigned short vhf_raw = (n >= 8) ? (pktbuf[6] | (pktbuf[7] << 8)) : 0;
+                        float watts_2m = (vhf_raw > 400)
+                            ? ((float)(vhf_raw - 400) / 82.0f)
+                            : 0.0f;
+                        /* Re-encode into HF raw scale so the C#
+                         * quadratic formula reproduces the same watts. */
+                        float raw_equiv = (watts_2m > 0.0f)
+                            ? (sqrtf(watts_2m / 0.00412f) + 33.0f)
+                            : 0.0f;
+                        if (raw_equiv < 0.0f) raw_equiv = 0.0f;
+                        fwd_raw = (unsigned short)raw_equiv;
+                        swr_raw = 0;  /* no 2m SWR cal yet */
+                    } else {
+                        fwd_raw = (n >= 16) ? (pktbuf[14] | (pktbuf[15] << 8)) : 0;
+                    }
+
                     PeakFwdPower((float)fwd_raw);
                     PeakRevPower((float)swr_raw);
                 }
