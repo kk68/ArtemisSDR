@@ -60,7 +60,7 @@ static void sunsdr_dbg_note_tx_packet(unsigned int seq);
 /* sunsdr_debug.log writer (sdr_logf path) and per-attempt IQ dumps.
  * Both disabled in production. Flip to 1 only when actively
  * diagnosing the TX/RX path. */
-#define SUNSDR_DEBUG_LOG_ENABLED 1
+#define SUNSDR_DEBUG_LOG_ENABLED 0
 #define SUNSDR_IQ_DUMP_ENABLED 0
 
 /* Global SunSDR session state — moved above the iq_dump / tx_pace

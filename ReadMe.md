@@ -2,7 +2,7 @@
 
 *Open source. Native protocol. Dedicated to Artemis II.*
 
-**Current version: Beta v1.0.4**
+**Current version: v2.0.0**
 
 ⬇️ [**Download Latest Release**](https://github.com/kk68/ArtemisSDR/releases/latest)  ·  📘 [**Quick Start Guide**](START_HERE_SUNSDR2DX.md)  ·  📝 [What's new](https://github.com/kk68/ArtemisSDR/releases/latest)  ·  💬 [Discussions](https://github.com/kk68/ArtemisSDR/discussions)  ·  🐛 [Issues](https://github.com/kk68/ArtemisSDR/issues)
 
@@ -59,6 +59,7 @@ If you're brand new to SDR or to your radio, work through your radio's official 
 - RX2 as an independent second receiver with its own VFO B and audio path
 - RX antenna selection (primary / auxiliary inputs)
 - Live firmware-version and serial-number display in the title bar and `Setup → H/W Select`
+- **2m (VHF) RX** on the SunSDR2 DX VHF path — NFM, SSB, AM
 
 **Transmit**
 
@@ -67,13 +68,21 @@ If you're brand new to SDR or to your radio, work through your radio's official 
 - Voice SSB, AM, CW, and digital modes transmit on the correct sideband/carrier
 - External PA (`xPA`) control during MOX and TUNE
 - TX power **calibrated linearly on 40 m**: drive slider in watts maps to actual RF within ~1 W across 10–90 W
+- **2m (VHF) TX** on NFM — on-dial, clean carrier, ~6 W at max drive matching the SunSDR2 DX 2m hardware spec. VHF wire-IQ amplitude is tuned to match EESDR3 byte-for-byte at drive max.
+- **2m forward-power meter** — calibrated against the radio's 2m PA ADC (u16[3] at `0x1F/00`)
 - TX antenna selection (primary / auxiliary outputs)
 - AM Carrier Level setting wired through to the WDSP AM modulator
+
+**Network & setup**
+
+- **Native SunSDR2 DX auto-discovery** — `Setup → H/W Select → Discover` now finds the radio automatically. The manual `Custom` fallback remains for unusual network topologies (VPN, multi-NIC, routers that block UDP broadcast).
+- Simplified Custom Radio dialog — field is `Radio IP` (no port), pre-fills with the previously configured IP.
 
 **General**
 
 - Power-on to RX in ~1-1.5 seconds, comparable to ExpertSDR3
 - Sub-second band switching — native protocol, no session teardown
+- Deterministic cold-start — explicit WDSP-ready gate closes the prior intermittent "AM-wide filter latch" race
 - The full WDSP-based DSP stack inherited from Thetis: NR, NR4, ANF, NB/NB2, EQ, CESSB, CFC, notch, compander — everything works
 - VAC audio routing (CABLE, VoiceMeeter, etc.) works on both RX and TX
 - Clean Power off / Power on cycling from the ArtemisSDR UI
@@ -85,8 +94,8 @@ Honest list of what's partially done or missing. None of these prevent normal op
 
 | Area | Status |
 | --- | --- |
-| **TX power calibration** | 40 m is locked. Other bands fall back to the 40 m curve — expect a few dB deviation until separately calibrated. |
-| **`Fwd Pwr` meter** | Not yet wired to the SunSDR telemetry stream. Use an external wattmeter for now. |
+| **TX power calibration** | 40 m is locked. 2m is calibrated against the radio's own 2m PA ADC. Other HF bands fall back to the 40 m curve — expect a few dB deviation until separately calibrated. |
+| **`Fwd Pwr` meter** | Live and calibrated on HF and 2m. Reads from the radio's 0x1F telemetry. Other bands' absolute watt readings inherit the HF calibration curve. |
 | **PS-A, 2-TONE, DUP** | Grayed out on SunSDR. These depend on a feedback-loop path the radio doesn't expose; not a bug, a hardware-architecture constraint. |
 | **Diversity mode** | Unsupported. RX2 follows RX1's antenna selection; no independent per-receiver antenna path has been found. |
 | **MON / DUP audio routing** | Not fully settled during TX. If you need to monitor your own transmission, a second receiver is the reliable path. |

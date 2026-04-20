@@ -31,38 +31,69 @@ In ArtemisSDR, set the hardware model to:
 
 If ArtemisSDR was previously configured for another radio, close and reopen it after changing the model.
 
-## 3. Open The Hardware Network Page And Add Your Radio Manually
+## 3. Open The Hardware Network Page And Find Your Radio
 
-> **Important:** the SunSDR2 DX does **not** respond to ArtemisSDR's broadcast discovery (`Discover` is intentionally disabled in this fork — you'll see the greyed-out *"Discover Disabled / Radio is On"* badge in the screenshot below). You must add the radio **manually** by IP address. This is the single most common point of confusion for new users — please follow these steps in order.
+Starting with **v2.0.0**, ArtemisSDR speaks the **SunSDR2 DX native discovery protocol** and will find your radio automatically — the same way ExpertSDR3 does. The old manual `Custom` path still works as a fallback for tricky network setups.
 
 Go to: `Setup -> H/W Select`
 
-### Step 3a — Enable Advanced and open Add Custom Radio
+### Step 3a — Click Discover (recommended)
 
 1. Confirm `Radio Model` is `SUNSDR2-DX` (top-left).
-2. Tick the **`Advanced`** checkbox (red circle in the screenshot).
-3. Click the **`Custom`** button on the right (red arrow).
+2. Under **Network Settings**, leave `Via all NICs` selected (or pick `Via specific NIC` and choose the adapter on your radio's subnet).
+3. Click the **`Discover`** button.
+
+![Setup → H/W Select with Discover button highlighted](docs/setup-discover-click.jpg)
+
+*Setup → H/W Select with `SUNSDR2-DX` selected as Radio Model and the `Discover` button ready to click. The NIC shown here is `Intel(R) Ethernet Controller (3) I225-V [Ethernet] 10.0.3.254` — on the same `10.0.3.x` subnet as the radio at `10.0.3.50`.*
+
+Within ~1 second a `Discovered radios` dialog appears listing every SunSDR2 DX on the LAN:
+
+![Discovered radios dialog showing SunSDR at 10.0.3.50:50001](docs/setup-discovered-radios-dialog.jpg)
+
+*`Discovered radios` dialog. The yellow highlight shows which NIC saw the radio (here `10.0.3.254 / 255.255.255.0`). Tick the checkbox next to the radio row, then click **`Add`**.*
+
+Back on the H/W Select page, the radio now appears in the list as a `SunSDR 10.0.3.50:50001` entry:
+
+![Setup → H/W Select with the newly-discovered radio selected and the OK button highlighted](docs/setup-discovered-select-apply.jpg)
+
+*Discovered radio in the list. Click the **radio button** to the left of the row (top arrow) to select it, then click **`OK`** (bottom arrow) to close Setup.*
+
+Skip to **Step 4** below to Power On.
+
+> **If `Discover` says "No Radio(s) found":** check that
+> - The radio is powered on and on the same LAN as your PC.
+> - No other ExpertSDR / Thetis / SDR client is currently connected to the radio (SunSDR2 DX allows only one client at a time).
+> - Windows Firewall is not blocking ArtemisSDR's outbound UDP broadcast to port `50001`.
+> - If you have multiple NICs (Wi-Fi + Ethernet, VPN / Hyper-V / VMware / WSL2 virtual adapters), switch from `Via all NICs` to `Via specific NIC` and pick the adapter on the radio's subnet.
+>
+> Still nothing? Use the manual `Custom` path in Step 3b.
+
+### Step 3b — Manual add via Custom (fallback)
+
+If auto-discovery cannot reach the radio (unusual network topology, VPN on the same subnet, router that blocks UDP broadcast, etc.), add it by IP manually.
+
+1. Tick the **`Advanced`** checkbox.
+2. Click the **`Custom`** button.
 
 ![Setup → H/W Select with Advanced checkbox ticked, Fixed listen port highlighted, and Custom button](docs/setup-hw-select.png)
 
 *Setup → H/W Select on a fresh install (radio list still empty). The three red arrows mark, in order: tick `Advanced`, confirm `Fixed listen port` matches your radio's port, then click `Custom` to open the Add Custom Radio dialog.*
 
-> **🔌 Critical: the `Fixed listen port` MUST match your radio's actual port.** In the screenshot above the field reads `50001` — that is the default the SunSDR2 DX uses. **If you changed your radio's listen port from the default in ExpertSDR or via the radio's hardware config, you MUST set the same number here.** A mismatched port will cause every connect attempt to silently time out — the radio simply never hears ArtemisSDR. The radio's port is the same one shown in your old ExpertSDR setup (commonly `50001`) and the same `1024` you'll add to the `Radio IP:Port` field in Step 3b is the **discovery / data port**, not the control port. The two ports are different things and both have to match what your radio is actually using.
+> **🔌 `Fixed listen port` must match your radio's actual control port.** The SunSDR2 DX default is `50001`. If you changed your radio's listen port via ExpertSDR or the radio's hardware config, set the same number here.
 
-### Step 3b — Fill in the Add Custom Radio dialog
+The Add Custom Radio dialog opens. Fill in the fields:
 
-The Add Custom Radio dialog opens. Fill in the four fields:
-
-![Add Custom Radio dialog with NIC, Radio IP:Port, Protocol, and Board fields](docs/setup-add-custom-radio.png)
+![Add Custom Radio dialog with NIC, Radio IP, Protocol, and Board fields](docs/setup-add-custom-radio.png)
 
 | Field | Value | Notes |
 |---|---|---|
 | **Via NIC** | **The LAN adapter that is on the same subnet as your radio** | This is critical — see the call-out below. |
-| **Radio IP:Port** | `<your radio's IP>` (e.g. `10.0.3.50`) | Only the IP — port `1024` is the default and is appended automatically. **If your radio uses a non-default port for this, you must enter `IP:port` explicitly (e.g. `10.0.3.50:2024`).** Find your radio's IP from your router, your old ExpertSDR config, or by pinging the radio if you know the address. |
+| **Radio IP** | `<your radio's IP>` (e.g. `10.0.3.50`) | IP only, no port. The discovery port (`1024`) is handled automatically. If the Setup dialog already listed an IP from a previous session it will be pre-filled here. |
 | **Protocol** | `Protocol 1` | Leave at default. |
 | **Board** | `SunSDR` | Leave at default. |
 
-> **⚠️ Pick the right Via NIC.** If you have multiple network interfaces (Wi-Fi + Ethernet, dual NICs, virtual adapters from VPNs / Hyper-V / VMware / WSL2, etc.), the dropdown will list all of them. **You must choose the adapter whose IP is on the same subnet as the radio.** For example: if the radio is at `10.0.3.50`, pick the NIC with an IP like `10.0.3.x`. Picking the wrong NIC is the #1 reason connection fails after a manual Custom add. The screenshot above shows `Intel(R) Ethernet Controller (3) I225-V [Ethernet] 10.0.3.254` as the selected NIC — same `10.0.3.x` subnet as the radio's `10.0.3.50`. If your dropdown shows `0.0.0.0` for an NIC, that NIC is unconfigured and won't work.
+> **⚠️ Pick the right Via NIC.** If you have multiple network interfaces (Wi-Fi + Ethernet, dual NICs, virtual adapters from VPNs / Hyper-V / VMware / WSL2, etc.), the dropdown will list all of them. **You must choose the adapter whose IP is on the same subnet as the radio.** For example: if the radio is at `10.0.3.50`, pick the NIC with an IP like `10.0.3.x`. Picking the wrong NIC is the #1 reason connection fails after a manual Custom add. The screenshot shows `Intel(R) Ethernet Controller (3) I225-V [Ethernet] 10.0.3.254` — same `10.0.3.x` subnet as the radio's `10.0.3.50`. If your dropdown shows `0.0.0.0` for an NIC, that NIC is unconfigured and won't work.
 
 Click **`Add`**. The dialog closes and the new radio appears back on the H/W Select page as a `Custom` entry in the radio list.
 
@@ -83,13 +114,13 @@ At this point the radio shows in the list with `Version Unknown` — that's norm
 2. Back on the main ArtemisSDR window, click the **Power** button (top-left, the round icon next to `RX2`).
 3. The connection handshake runs. On success:
    - the panadapter starts moving and you should hear receive audio
-   - the `H/W Select` row (and the title bar at the top of the ArtemisSDR window) refreshes to show the live firmware version and serial, e.g. `(FW 88.8 SunSDR Native SN EED06202100584)`
+   - the `H/W Select` row (and the title bar at the top of the ArtemisSDR window) refreshes to show the live firmware version and serial, e.g. `(FW 88.8 SunSDR Native SN EED0620210xxxx`
 
 If the title bar still shows `FW Unknown` after Power-on or the radio doesn't connect:
 
 - re-open `Setup → H/W Select` and double-check your **Via NIC** is the adapter on the same subnet as the radio
 - **double-check `Fixed listen port` matches your radio's actual control port** (default `50001`; if you changed it on the radio, you must change it here too)
-- **double-check the `Radio IP:Port` you typed in the Custom dialog matches your radio's actual IP and discovery/data port** (default `1024`)
+- **double-check the `Radio IP` you typed in the Custom dialog matches your radio's actual IP and**
 - confirm you can reach the radio from a command prompt: `ping <your-radio-IP>`
 - make sure no other ExpertSDR / Thetis / SDR client is running anywhere on the LAN — the SunSDR2 DX's control port is exclusive
 
@@ -204,18 +235,25 @@ The live values currently come from the SunSDR native control path during connec
 ## Known Current Limits
 
 - diversity is not currently supported on SunSDR2 DX in this fork
-- the displayed TX wattmeter is not yet authoritative for SunSDR calibration
-- RX band switching works, but the current implementation still uses a SunSDR-specific recovery path behind the scenes
+- HF TX power calibration is locked on 40m (AM) and behaves well on other HF bands; other bands may benefit from fine-tune adjustments in `Setup -> PA Settings -> PA Gain -> Offsets for <band>` if a band reads too hot/cold
+- 2m TX is supported — 2m forward-power meter is calibrated, RF on air reads ~6 W at drive max, which matches the SunSDR2 DX's 2m hardware spec (7-8 W typical)
 - intermittent raspy TUNE/MOX TX is a known polish item; cycling VAC (Enable VAC off/on from the sidebar) clears it
+
+## New In v2.0.0
+
+- **Native SunSDR2 DX auto-discovery** — the `Discover` button now works. The manual `Custom` path still works as a fallback.
+- **Custom Radio dialog simplified** — the field is `Radio IP` (no port); discovery port is handled automatically. The field pre-fills with the previously configured IP.
+- **2m (VHF) TX** — clean on-air TX, correct on-dial frequency, calibrated forward-power meter, VHF-specific IQ gain that pushes wire amplitude to full scale to match EESDR3 output.
+- **Cold-start race fix** — the intermittent "wide/AM-shape" cold-start issue is resolved via an explicit WDSP-ready gate.
+- **Band-switch speed** — sub-second band changes; no more extra relay clicks and 17m gain saturation.
 
 ## Quick Checklist
 
 1. Set hardware model to `SUNSDR2-DX`
 2. Open `Setup -> H/W Select`
-3. **Tick `Advanced`** (auto-discovery does not work for SunSDR2 DX — manual add is required). **Confirm `Fixed listen port` (default `50001`) matches your radio's actual control port.**
-4. Click **`Custom`** → fill in **Via NIC** (the LAN adapter on the radio's subnet) and **Radio IP:Port** (e.g. `10.0.3.50` — port `1024` is the default; if your radio uses a different one, type `IP:port` explicitly) → leave Protocol/Board at defaults → click `Add`
-5. Back on H/W Select: click the **radio button** next to the new `Custom` entry, then click `Apply`, then `OK`
-6. Click **Power** in the main ArtemisSDR window — the radio row + title bar should refresh with live `FW` and `SN`
-7. Confirm panadapter and audio
-8. Enable `xPA` via `Setup -> OC Control -> HF/VHF/SWL -> Ext PA Control (xPA)`
-9. Calibrate output with an external wattmeter
+3. Click **`Discover`** — the radio should appear in the list within ~1 second. (If not, tick `Advanced` and use the `Custom` button as a fallback — see Step 3b in the full guide above.)
+4. Click the **radio button** next to the new entry, then click `Apply`, then `OK`
+5. Click **Power** in the main ArtemisSDR window — the radio row + title bar should refresh with live `FW` and `SN`
+6. Confirm panadapter and audio
+7. Enable `xPA` via `Setup -> OC Control -> HF/VHF/SWL -> Ext PA Control (xPA)`
+8. Calibrate output with an external wattmeter
