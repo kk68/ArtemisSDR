@@ -494,6 +494,7 @@
       <DependentUpon>frmVariablePicker.cs</DependentUpon>
     </Compile>
     <Compile Include="HPSDR\clsRadioDiscovery.cs" />
+    <Compile Include="HPSDR\clsSunSDRDiscovery.cs" />
     <Compile Include="TimeOutTimerManager.cs" />
     <Compile Include="Firewall.cs" />
     <Compile Include="cmaster.cs" />

@@ -76,6 +76,7 @@ namespace Thetis
         public string RadioIPPort
         {
             get { return txtSpecificRadio.Text; }
+            set { txtSpecificRadio.Text = value ?? ""; }
         }
 
         public string Board

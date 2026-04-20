@@ -35988,6 +35988,23 @@ namespace Thetis
                     discovered = new List<NicRadioScanResult>();
                     if (result != null) discovered.Add(result);
                 }
+
+                /* SunSDR native-protocol probe: the HPSDR scan above will not
+                 * see a SunSDR2 DX (different discovery packet on port 50001).
+                 * Run the SunSDR probe only when the selected Radio Model is
+                 * SunSDR, and merge replies into the per-NIC Radios list. */
+                if (HardwareSpecific.Model == HPSDRModel.SUNSDR2DX)
+                {
+                    SunSDRDiscoveryService sunsdrSvc = new SunSDRDiscoveryService();
+                    foreach (NicRadioScanResult nic in discovered)
+                    {
+                        if (nic == null || nic.LocalIPv4 == null) continue;
+                        List<RadioInfo> sunsdrRadios = sunsdrSvc.Probe(nic.LocalIPv4, 800);
+                        if (sunsdrRadios == null || sunsdrRadios.Count < 1) continue;
+                        if (nic.Radios == null) nic.Radios = new List<RadioInfo>();
+                        nic.Radios.AddRange(sunsdrRadios);
+                    }
+                }
             }
             finally
             {
@@ -36237,6 +36254,14 @@ namespace Thetis
             }
 
             f.Board = HardwareSpecific.Hardware.ToString();
+
+            /* Pre-populate the IP field with the currently selected radio's
+             * IP (if any). Port is intentionally stripped — the field
+             * accepts IP only; discovery port defaults to 1024 in
+             * tryParseIpPort's fallback path. */
+            string priorIp = ucRadioList_Radios.SelectedRadioIp;
+            if (!string.IsNullOrWhiteSpace(priorIp))
+                f.RadioIPPort = priorIp;
 
             DialogResult dr = f.ShowDialog(this);
             if (dr == DialogResult.Cancel) return;

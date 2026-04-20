@@ -102,7 +102,7 @@
             this.txtSpecificRadio.Name = "txtSpecificRadio";
             this.txtSpecificRadio.Size = new System.Drawing.Size(242, 20);
             this.txtSpecificRadio.TabIndex = 130;
-            this.txtSpecificRadio.Text = "192.168.0.155:1024";
+            this.txtSpecificRadio.Text = "";
             // 
             // labelTS3
             // 
@@ -112,7 +112,7 @@
             this.labelTS3.Name = "labelTS3";
             this.labelTS3.Size = new System.Drawing.Size(70, 13);
             this.labelTS3.TabIndex = 131;
-            this.labelTS3.Text = "Radio IP:Port";
+            this.labelTS3.Text = "Radio IP:";
             // 
             // comboProtocol
             // 
