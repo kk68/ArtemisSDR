@@ -35992,7 +35992,15 @@ namespace Thetis
                 /* SunSDR native-protocol probe: the HPSDR scan above will not
                  * see a SunSDR2 DX (different discovery packet on port 50001).
                  * Run the SunSDR probe only when the selected Radio Model is
-                 * SunSDR, and merge replies into the per-NIC Radios list. */
+                 * SunSDR, and merge replies into the per-NIC Radios list.
+                 *
+                 * Broadcast target is the SunSDR2 DX default control port
+                 * (50001). Operators who changed the radio's control port
+                 * from 50001 cannot use Discover on that setup; they can
+                 * still add the radio via the Custom dialog by typing
+                 * IP:port (e.g. 10.0.3.50:40001) — the parser honours the
+                 * port and network.c passes it through to SunSDRInit
+                 * (fix for issue #15). */
                 if (HardwareSpecific.Model == HPSDRModel.SUNSDR2DX)
                 {
                     SunSDRDiscoveryService sunsdrSvc = new SunSDRDiscoveryService();

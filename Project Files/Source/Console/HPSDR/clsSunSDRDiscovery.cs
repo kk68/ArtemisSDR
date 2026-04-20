@@ -32,7 +32,7 @@ namespace Thetis
 {
     public sealed class SunSDRDiscoveryService
     {
-        private const int SunSDRControlPort = 50001;
+        public const int DefaultControlPort = 50001;
         private const int QueryPacketLength = 24;
 
         private static readonly byte[] QueryMagic = new byte[] { 0x32, 0xff, 0x00, 0x1a };
@@ -40,9 +40,18 @@ namespace Thetis
 
         public List<RadioInfo> Probe(IPAddress localIp, int timeoutMs)
         {
+            return Probe(localIp, timeoutMs, DefaultControlPort);
+        }
+
+        /* Probe with an explicit target control port. Use this when the
+         * operator has configured the radio's control port to something
+         * other than the 50001 default (Setup -> Fixed listen port). */
+        public List<RadioInfo> Probe(IPAddress localIp, int timeoutMs, int targetPort)
+        {
             List<RadioInfo> found = new List<RadioInfo>();
             if (localIp == null) return found;
             if (timeoutMs < 100) timeoutMs = 100;
+            if (targetPort <= 0 || targetPort > 65535) targetPort = DefaultControlPort;
 
             Socket sock = null;
             try
@@ -53,7 +62,7 @@ namespace Thetis
                 sock.Bind(new IPEndPoint(localIp, 0));
 
                 byte[] query = buildQueryPacket();
-                IPEndPoint dest = new IPEndPoint(IPAddress.Broadcast, SunSDRControlPort);
+                IPEndPoint dest = new IPEndPoint(IPAddress.Broadcast, targetPort);
                 sock.SendTo(query, dest);
 
                 byte[] rxBuf = new byte[1500];
@@ -84,11 +93,13 @@ namespace Thetis
 
                     IPEndPoint src = from as IPEndPoint;
                     if (src == null) continue;
-                    if (src.Port != SunSDRControlPort) continue;
+                    /* Accept replies from the port we queried; the radio
+                     * responds from its listen port which equals our target. */
+                    if (src.Port != targetPort) continue;
 
                     IPAddress radioIp = parseIpBE(rxBuf, 10);
                     int port = rxBuf[18] | (rxBuf[19] << 8);
-                    if (port == 0) port = SunSDRControlPort;
+                    if (port == 0) port = targetPort;
 
                     string key = radioIp.ToString();
                     if (!seenIps.Add(key)) continue;
