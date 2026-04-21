@@ -41310,6 +41310,16 @@ namespace Thetis
             if (comboFMMemory == null) return;
             if (_fmMemoryView == null || _fmMemoryView.Count == 0) return;
 
+            // If the currently-selected memory already matches the VFO
+            // frequency (within tolerance), leave it alone. This matters
+            // when multiple memories share the same RXFreq (e.g. several
+            // repeaters on 147.375): the user may have deliberately
+            // cycled to a specific one via the Up/Down memory buttons
+            // or the combo itself, and blindly snapping back to the
+            // first-by-index match would undo that selection.
+            MemoryRecord current = comboFMMemory.SelectedItem as MemoryRecord;
+            if (current != null && Math.Abs(current.RXFreq - vfoFreqMHz) < 0.0001) return;
+
             MemoryRecord match = null;
             foreach (var m in _fmMemoryView)
             {
