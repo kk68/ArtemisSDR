@@ -300,6 +300,7 @@
     <Reference Include="Svg, Version=3.4.0.0, Culture=neutral, PublicKeyToken=12a0bac221edeae2, processorArchitecture=MSIL">
       <HintPath>..\packages\Svg.3.4.7\lib\net472\Svg.dll</HintPath>
     </Reference>
+    <Reference Include="Microsoft.VisualBasic" />
     <Reference Include="System">
       <Name>System</Name>
     </Reference>
@@ -739,6 +740,7 @@
     </Compile>
     <Compile Include="Memory\MemoryList.cs" />
     <Compile Include="Memory\MemoryRecord.cs" />
+    <Compile Include="Memory\RepeaterBookImport.cs" />
     <Compile Include="Midi2CatCommands.cs" />
     <Compile Include="Andromeda\ModeButtonsPopup.cs">
       <SubType>Form</SubType>

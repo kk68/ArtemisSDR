@@ -189,6 +189,24 @@ namespace Thetis
             }
         }
 
+        // Computed, read-only — shown in the main-console FM memory dropdown
+        // so users can identify a memory by frequency + name at a glance.
+        // NOTE: do NOT add [Browsable(false)] — it also hides the property
+        // from the ComboBox DisplayMember resolver. The duplicate column it
+        // would otherwise cause in MemoryForm's DataGridView is explicitly
+        // removed there after DataSource binding.
+        // [XmlIgnore] keeps it out of the serialized memory DB.
+        [System.Xml.Serialization.XmlIgnore]
+        public string DisplayFreqName
+        {
+            get
+            {
+                string f = rx_freq.ToString("F4", System.Globalization.CultureInfo.InvariantCulture);
+                string n = (name ?? "").Trim();
+                return (n.Length > 0) ? (f + "  " + n) : f;
+            }
+        }
+
         private double rx_freq = 10.0;
         public double RXFreq
         {

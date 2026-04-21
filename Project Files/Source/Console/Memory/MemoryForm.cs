@@ -88,7 +88,25 @@ namespace Thetis
 
             dataGridView1.RowHeadersVisible = true;
 
+            // Suppress the default red-X DataError dialog for combo-box cells
+            // with values outside their Items list. Out-of-range tones from
+            // older / imported records still render with the underlying value;
+            // the user can edit the cell to a valid entry.
+            dataGridView1.DataError += (sndr, ev) =>
+            {
+                ev.ThrowException = false;
+                ev.Cancel = true;
+            };
+
             dataGridView1.DataSource = console.MemoryList.List; // ke9ns get list of memories from memorylist.cs is where the file is opened and saved
+
+            // MemoryRecord.DisplayFreqName is a computed property used by the
+            // main-console FM memory ComboBox's DisplayMember. When the grid
+            // auto-generates columns at binding time it picks this up too —
+            // remove it so the grid doesn't show a duplicate "Freq + Name"
+            // column alongside the existing RX Freq + Name columns.
+            if (dataGridView1.Columns.Contains("DisplayFreqName"))
+                dataGridView1.Columns.Remove("DisplayFreqName");
 
             dataGridView1.RowHeadersWidthSizeMode =  DataGridViewRowHeadersWidthSizeMode.AutoSizeToAllHeaders;
 
@@ -536,6 +554,40 @@ namespace Thetis
             console.MemoryList.Save();              // w4tme 
 
         } // MemoryRecordAdd_Click
+
+
+        //=========================================================================================================================================
+        // Import memory channels from a RepeaterBook CSV export
+        //   (File downloaded by the user from repeaterbook.com, not a live API call.)
+        private void btnImportRepeaterBook_Click(object sender, EventArgs e)
+        {
+            RepeaterBookImport.ImportInteractive(console, this);
+        }
+
+        //=========================================================================================================================================
+        // Delete every memory row (with confirmation).
+        private void btnDeleteAll_Click(object sender, EventArgs e)
+        {
+            int n = console.MemoryList.List.Count;
+            if (n == 0)
+            {
+                MessageBox.Show(this,
+                    "The memory list is already empty.",
+                    "Delete All Memories",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            DialogResult r = MessageBox.Show(this,
+                "This will remove ALL " + n + " memory channels. Continue?",
+                "Delete All Memories",
+                MessageBoxButtons.YesNo, MessageBoxIcon.Warning,
+                MessageBoxDefaultButton.Button2);
+            if (r != DialogResult.Yes) return;
+
+            console.MemoryList.List.Clear();
+            console.MemoryList.Save();
+        }
 
 
         //=========================================================================================================================================

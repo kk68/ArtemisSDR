@@ -7465,7 +7465,9 @@
             // 
             this.comboFMMemory.BackColor = System.Drawing.Color.FromArgb(((int)(((byte)(46)))), ((int)(((byte)(46)))), ((int)(((byte)(46)))));
             this.comboFMMemory.DropDownStyle = System.Windows.Forms.ComboBoxStyle.DropDownList;
-            this.comboFMMemory.DropDownWidth = 96;
+            this.comboFMMemory.DropDownWidth = 360;
+            this.comboFMMemory.IntegralHeight = false;
+            this.comboFMMemory.MaxDropDownItems = 20;
             resources.ApplyResources(this.comboFMMemory, "comboFMMemory");
             this.comboFMMemory.ForeColor = System.Drawing.SystemColors.ControlLightLight;
             this.comboFMMemory.Name = "comboFMMemory";

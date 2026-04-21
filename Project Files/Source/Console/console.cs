@@ -41228,11 +41228,49 @@ namespace Thetis
                 comboFMCTCSS.Items.Add(d.ToString("f1"));
         }
 
+        // Front-panel FM memory dropdown is bound to a view of the memory
+        // list sorted by frequency ascending, and shows "<freq>  <name>" so
+        // users can identify a repeater without memorising call-signs.
+        // The view is kept in sync with the underlying list via ListChanged.
+        private System.ComponentModel.BindingList<MemoryRecord> _fmMemoryView;
+        private bool _fmMemoryViewHooked;
+
         private void InitMemoryFrontPanel()
         {
-            comboFMMemory.DataSource = MemoryList.List;
-            comboFMMemory.DisplayMember = "Name";
+            if (!_fmMemoryViewHooked)
+            {
+                MemoryList.List.ListChanged += (sndr, ev) => RebuildFmMemoryView();
+                _fmMemoryViewHooked = true;
+            }
+            RebuildFmMemoryView();
+            comboFMMemory.DisplayMember = "DisplayFreqName";
             comboFMMemory.ValueMember = "Name";
+        }
+
+        private void RebuildFmMemoryView()
+        {
+            if (_fmMemoryView == null)
+                _fmMemoryView = new System.ComponentModel.BindingList<MemoryRecord>();
+
+            // Preserve the user's current selection across the rebuild so the
+            // combo doesn't jump to item 0 every time a memory is added/removed.
+            MemoryRecord keep = comboFMMemory.SelectedItem as MemoryRecord;
+
+            _fmMemoryView.RaiseListChangedEvents = false;
+            _fmMemoryView.Clear();
+            foreach (var m in MemoryList.List.OrderBy(m => m.RXFreq).ThenBy(m => m.Name ?? ""))
+                _fmMemoryView.Add(m);
+            _fmMemoryView.RaiseListChangedEvents = true;
+            _fmMemoryView.ResetBindings();
+
+            if (comboFMMemory.DataSource != _fmMemoryView)
+                comboFMMemory.DataSource = _fmMemoryView;
+
+            if (keep != null)
+            {
+                int idx = _fmMemoryView.IndexOf(keep);
+                if (idx >= 0) comboFMMemory.SelectedIndex = idx;
+            }
         }
 
         private void radFMDeviation2kHz_CheckedChanged(object sender, EventArgs e)

@@ -81,6 +81,8 @@ namespace Thetis
             this.btnMemoryRecordDelete = new System.Windows.Forms.ButtonTS();
             this.btnMemoryRecordCopy = new System.Windows.Forms.ButtonTS();
             this.MemoryRecordAdd = new System.Windows.Forms.ButtonTS();
+            this.btnImportRepeaterBook = new System.Windows.Forms.ButtonTS();
+            this.btnDeleteAll = new System.Windows.Forms.ButtonTS();
             this.textBox1 = new System.Windows.Forms.TextBox();
             this.textBox3 = new System.Windows.Forms.TextBox();
             this.textBox2 = new System.Windows.Forms.TextBox();
@@ -338,7 +340,37 @@ namespace Thetis
             this.toolTip1.SetToolTip(this.btnSelect, "Make the selected memory active ");
             this.btnSelect.UseVisualStyleBackColor = true;
             this.btnSelect.Click += new System.EventHandler(this.btnSelect_Click);
-            // 
+            //
+            // btnImportRepeaterBook
+            //
+            this.btnImportRepeaterBook.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Bottom | System.Windows.Forms.AnchorStyles.Left)));
+            this.btnImportRepeaterBook.Image = null;
+            this.btnImportRepeaterBook.Location = new System.Drawing.Point(12, 490);
+            this.btnImportRepeaterBook.Name = "btnImportRepeaterBook";
+            this.btnImportRepeaterBook.Selectable = true;
+            this.btnImportRepeaterBook.Size = new System.Drawing.Size(155, 23);
+            this.btnImportRepeaterBook.TabIndex = 6;
+            this.btnImportRepeaterBook.Text = "Import RepeaterBook CSV…";
+            this.toolTip1.SetToolTip(this.btnImportRepeaterBook,
+                "Import memory channels from a RepeaterBook CSV export.\r\n" +
+                "Export the CSV on repeaterbook.com (Downloads → CSV).");
+            this.btnImportRepeaterBook.UseVisualStyleBackColor = true;
+            this.btnImportRepeaterBook.Click += new System.EventHandler(this.btnImportRepeaterBook_Click);
+            //
+            // btnDeleteAll
+            //
+            this.btnDeleteAll.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Bottom | System.Windows.Forms.AnchorStyles.Left)));
+            this.btnDeleteAll.Image = null;
+            this.btnDeleteAll.Location = new System.Drawing.Point(180, 490);
+            this.btnDeleteAll.Name = "btnDeleteAll";
+            this.btnDeleteAll.Selectable = true;
+            this.btnDeleteAll.Size = new System.Drawing.Size(90, 23);
+            this.btnDeleteAll.TabIndex = 7;
+            this.btnDeleteAll.Text = "Delete All…";
+            this.toolTip1.SetToolTip(this.btnDeleteAll, "Remove every memory channel (with confirmation).");
+            this.btnDeleteAll.UseVisualStyleBackColor = true;
+            this.btnDeleteAll.Click += new System.EventHandler(this.btnDeleteAll_Click);
+            //
             // btnMemoryRecordDelete
             // 
             this.btnMemoryRecordDelete.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Bottom | System.Windows.Forms.AnchorStyles.Left)));
@@ -511,6 +543,8 @@ namespace Thetis
             this.Controls.Add(this.textBox1);
             this.Controls.Add(this.chkMemoryFormClose);
             this.Controls.Add(this.btnSelect);
+            this.Controls.Add(this.btnImportRepeaterBook);
+            this.Controls.Add(this.btnDeleteAll);
             this.Controls.Add(this.btnMemoryRecordDelete);
             this.Controls.Add(this.btnMemoryRecordCopy);
             this.Controls.Add(this.MemoryRecordAdd);
@@ -537,6 +571,8 @@ namespace Thetis
         private System.Windows.Forms.ButtonTS btnMemoryRecordDelete;
         private System.Windows.Forms.ToolTip toolTip1;
         private System.Windows.Forms.ButtonTS btnSelect;
+        private System.Windows.Forms.ButtonTS btnImportRepeaterBook;
+        private System.Windows.Forms.ButtonTS btnDeleteAll;
         private System.Windows.Forms.CheckBoxTS chkMemoryFormClose;
         public System.Windows.Forms.ButtonTS MemoryRecordAdd;
         private System.Windows.Forms.TextBox textBox1;
