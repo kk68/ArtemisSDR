@@ -4072,13 +4072,36 @@ namespace Thetis
                         RX1DisplayCalOffset = float.Parse(val);
                         break;
                     case "rx1_meter_cal_offset":
-                        RX1MeterCalOffset = float.Parse(val);
+                        {
+                            float loaded = float.Parse(val);
+                            // One-time migration for SunSDR2 DX: earlier Artemis
+                            // versions (<= v2.0.6) had no dedicated meter-cal
+                            // default for this model and fell through to the
+                            // generic 0.98 dB. v2.0.7 introduces a SunSDR-
+                            // calibrated default. Detect the legacy value and
+                            // upgrade; leave customised values alone.
+                            if (HardwareSpecific.Model == HPSDRModel.SUNSDR2DX
+                                && Math.Abs(loaded - 0.98f) < 0.01f)
+                            {
+                                loaded = HardwareSpecific.RXMeterCalbrationOffsetDefaults(HPSDRModel.SUNSDR2DX);
+                            }
+                            RX1MeterCalOffset = loaded;
+                        }
                         break;
                     case "rx2_display_cal_offset":
                         RX2DisplayCalOffset = float.Parse(val);
                         break;
                     case "rx2_meter_cal_offset":
-                        RX2MeterCalOffset = float.Parse(val);
+                        {
+                            float loaded = float.Parse(val);
+                            if (HardwareSpecific.Model == HPSDRModel.SUNSDR2DX
+                                && Math.Abs(loaded - 0.98f) < 0.01f)
+                            {
+                                loaded = HardwareSpecific.RXMeterCalbrationOffsetDefaults(HPSDRModel.SUNSDR2DX);
+                                System.Diagnostics.Debug.WriteLine("[SunSDR migration] rx2_meter_cal_offset legacy 0.98 -> " + loaded);
+                            }
+                            RX2MeterCalOffset = loaded;
+                        }
                         break;
                     case "panelBandHF.Visible": //added by w3sz
                         {
@@ -5021,9 +5044,20 @@ namespace Thetis
                         //This assumes the new radio model is added to the end of the HPSDRModel list. If a model is remove this will cause issues.
                         if (numVals <= (int)HPSDRModel.LAST)  //-W2PA  The number of rig types in the imported DB matches the number in this version
                         {
+                            int sunsdrIdx = (int)HPSDRModel.SUNSDR2DX;
+                            float sunsdrNew = HardwareSpecific.RXMeterCalbrationOffsetDefaults(HPSDRModel.SUNSDR2DX);
                             for (int i = 0; i < numVals; i++)
                             {
-                                rx_meter_cal_offset_by_radio[i] = float.Parse(list[i]);
+                                float v = float.Parse(list[i]);
+                                // One-time migration for SunSDR2 DX slot: legacy
+                                // builds (<= v2.0.6) stored 0.98 here because the
+                                // model had no calibrated default. v2.0.7 ships a
+                                // real SunSDR default (~+7 dB). Upgrade silently
+                                // when the saved value is still at legacy; leave
+                                // any customised value alone.
+                                if (i == sunsdrIdx && Math.Abs(v - 0.98f) < 0.01f)
+                                    v = sunsdrNew;
+                                rx_meter_cal_offset_by_radio[i] = v;
                             }
                         }  //-W2PA  else the number has changed so don't import, leave the defaults alone
                         break;

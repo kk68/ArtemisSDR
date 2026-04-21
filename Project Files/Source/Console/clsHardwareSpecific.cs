@@ -416,6 +416,17 @@ namespace Thetis
                 case HPSDRModel.ANAN_G2:
                 case HPSDRModel.ANAN_G2_1K:
                     return -4.476f;
+                case HPSDRModel.SUNSDR2DX:
+                    // Coarse anchor derived from direct comparison against
+                    // ExpertSDR3 in Signal mode on 40 m at +10 dB preamp:
+                    // EESDR showed S6 while Artemis read S5 on the same
+                    // band noise, i.e. ~1 S-unit (6 dB) low. Shift the
+                    // generic default (0.98) up by ~6 dB so the S-meter
+                    // lands in the right neighbourhood out of the box.
+                    // Users who want tighter calibration can fine-tune via
+                    // Setup → Tests → Level Cal; a signal-generator pass
+                    // is still the right way to lock this down per rig.
+                    return 6.98f;
                 default:
                     return 0.98f;
             }
