@@ -4024,13 +4024,14 @@ DWORD WINAPI SunSDRReadThread(LPVOID param)
          * Subtype 0x01: edge-event status packet (n==22). Emitted by the
          *   radio on hardware-PTT press/release and on TX state change.
          *   MUST be accepted at 22 bytes — the original guard rejected these.
-         * Wire-decoded across 3 hw_ptt captures on 2026-04-09:
-         *   u32 LE at offset 18:
-         *     bit  3 (byte 18 bit 3) = HW-PTT line asserted (mic button / rear
-         *                              PTT pin physically held). Toggles cleanly
-         *                              on press and release, independent of TX.
+         * Wire-decoded bit map of the u32 LE at offset 0x12:
+         *     bit  0 (byte 18 bit 0) = REAR-panel PTT jack asserted
+         *                              (captures 2026-04-21 rear_ptt_on/off).
+         *     bit  3 (byte 18 bit 3) = MIC2 mic-button PTT asserted
+         *                              (captures 2026-04-09 hw_ptt_on/off).
          *     bit 11 (byte 19 bit 3) = ATU flag (stable during test sessions).
          *     bit 24 (byte 21 bit 0) = TX active state (after host's 0x06=1 ack).
+         * We OR bits 0 and 3 so any hw-PTT source drives our MOX mirror.
          */
         if (pktbuf[3] == 0x1F && (n == 22 || n == 34 || n == 42)) {
             unsigned char subtype = pktbuf[2];
@@ -4140,18 +4141,21 @@ DWORD WINAPI SunSDRReadThread(LPVOID param)
             }
             else if (subtype == 0x01 && n >= 22) {
                 /* Edge-event status packet. Bit layout decoded from wire
-                 * captures (2026-04-09 hw_ptt_on/off + mox_on). */
+                 * captures 2026-04-09 (MIC2 mic button) and 2026-04-21
+                 * (rear-panel PTT jack). */
                 unsigned int status_word =
                     pktbuf[18] | (pktbuf[19]<<8) | (pktbuf[20]<<16) | (pktbuf[21]<<24);
-                int hw_ptt_line = (status_word >> 3)  & 1;   /* mic button / pedal held */
+                int rear_ptt    = (status_word >> 0)  & 1;   /* rear-panel PTT jack */
+                int mic_ptt     = (status_word >> 3)  & 1;   /* MIC2 mic-button PTT */
+                int hw_ptt_line = rear_ptt | mic_ptt;        /* any hw source */
                 int atu_flag    = (status_word >> 11) & 1;
-                int tx_active   = (status_word >> 24) & 1;   /* radio in TX state */
-                /* Mirror hw_ptt_line to sdr.hwPttState so C# can poll it via
-                 * nativeSunSDRGetHwPttState() and drive MOX from the
-                 * hardware PTT jack / footswitch / mic button. */
+                int tx_active   = (status_word >> 24) & 1;
+                /* Mirror the OR of all hw-PTT sources to sdr.hwPttState so
+                 * the C# polling timer drives MOX from either the rear PTT
+                 * jack OR the MIC2 mic button. */
                 InterlockedExchange(&sdr.hwPttState, (LONG)hw_ptt_line);
-                sdr_logf("TELEM 0x1F/01 status: word=0x%08X hwPtt=%d tx=%d atu=%d\n",
-                    status_word, hw_ptt_line, tx_active, atu_flag);
+                sdr_logf("TELEM 0x1F/01 status: word=0x%08X rearPtt=%d micPtt=%d tx=%d atu=%d\n",
+                    status_word, rear_ptt, mic_ptt, tx_active, atu_flag);
             }
             else {
                 sdr_logf("TELEM 0x1F/%02X len=%d (unknown subtype)\n", subtype, n);

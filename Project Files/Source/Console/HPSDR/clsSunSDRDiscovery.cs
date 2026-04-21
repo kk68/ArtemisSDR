@@ -35,8 +35,17 @@ namespace Thetis
         public const int DefaultControlPort = 50001;
         private const int QueryPacketLength = 24;
 
+        // Query magic: `32 ff 00 1a`. The `1a` byte is understood to be a
+        // model-family selector (confirmed 1a == SunSDR2 DX). Older SunSDR2
+        // variants may honour other values here; we broadcast the DX family
+        // query for now because that's the one we know is accepted.
         private static readonly byte[] QueryMagic = new byte[] { 0x32, 0xff, 0x00, 0x1a };
-        private static readonly byte[] ReplyMagic = new byte[] { 0x32, 0xff, 0x01, 0x1a };
+        // Reply magic: `32 ff 01 XX`. We only require the first 3 bytes to
+        // match — the XX model byte varies by radio family (SunSDR2 DX = 0x1a
+        // from our captures; SunSDR2 classic / PRO / QRP likely different).
+        // Accepting any fourth byte lets older SunSDR2 variants appear in
+        // the Discover list so we at least know they're on the wire.
+        private static readonly byte[] ReplyMagic = new byte[] { 0x32, 0xff, 0x01 };
 
         public List<RadioInfo> Probe(IPAddress localIp, int timeoutMs)
         {
@@ -96,6 +105,14 @@ namespace Thetis
                     /* Accept replies from the port we queried; the radio
                      * responds from its listen port which equals our target. */
                     if (src.Port != targetPort) continue;
+
+                    // Byte 3 is the model-family selector (0x1a confirmed
+                    // == SunSDR2 DX). Surface it via Debug so we can tell
+                    // what models are being discovered on different setups.
+                    byte modelByte = rxBuf[3];
+                    System.Diagnostics.Debug.WriteLine(
+                        "[SunSDRDiscovery] Reply from " + src.Address +
+                        ":" + src.Port + " modelByte=0x" + modelByte.ToString("x2"));
 
                     IPAddress radioIp = parseIpBE(rxBuf, 10);
                     int port = rxBuf[18] | (rxBuf[19] << 8);
