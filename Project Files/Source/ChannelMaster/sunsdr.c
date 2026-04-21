@@ -3312,33 +3312,69 @@ void SunSDRSetPA(int enabled)
 
 void SunSDRSetAntenna(int antenna)
 {
-    int selector = sunsdr_map_ant_selector(antenna);
-
     if (antenna > 0)
         sdr.currentRxAntenna = antenna;
 
-    if (selector == 0) {
-        sdr_logf("SunSDRSetAntenna(%d) ignored: unsupported antenna\n", antenna);
-        return;
+    /* On VHF the user-meaningful antenna selector is wire opcode 0x1E
+     * (ANT_PREAMBLE), NOT 0x15. Captures 2026-04-18 ant_a1_to_adc_on_2m
+     * and ant_adc_to_a1_on_2m confirmed:
+     *   0x1E = 0x00, 0x15 = 0x01  →  A1 (rear VHF antenna port)
+     *   0x1E = 0x01, 0x15 = 0x01  →  ADC path
+     * On HF, 0x1E = 0 is a preamble and 0x15 carries the selector.
+     * Map UI antenna slot 1 → A1, slot 2 → ADC on VHF. */
+    unsigned int preamble_val;
+    unsigned int selector;
+
+    if (sdr.currentBandIsVhf) {
+        preamble_val = (antenna == 2) ? 1u : 0u;  /* 2 = ADC */
+        selector = 0x01u;  /* constant on VHF per captures */
+    } else {
+        int hf_sel = sunsdr_map_ant_selector(antenna);
+        if (hf_sel == 0) {
+            sdr_logf("SunSDRSetAntenna(%d) ignored: unsupported antenna\n", antenna);
+            return;
+        }
+        preamble_val = 0u;
+        selector = (unsigned int)hf_sel;
     }
 
     if (!sdr.powered) {
-        sdr_logf("SunSDRSetAntenna(%d) cached while unpowered\n", antenna);
+        sdr_logf("SunSDRSetAntenna(%d) cached while unpowered (vhf=%d preamble=0x%02X sel=0x%02X)\n",
+            antenna, sdr.currentBandIsVhf, preamble_val, selector);
         return;
     }
 
-    sdr_logf("SunSDRSetAntenna(%d) selector=0x%02X\n", antenna, selector);
-    sunsdr_send_u32_cmd(SUNSDR_OP_ANT_PREAMBLE, 0);
-    sunsdr_send_u32_cmd(SUNSDR_OP_RX_ANT, (unsigned int)selector);
+    sdr_logf("SunSDRSetAntenna(%d) vhf=%d preamble=0x%02X selector=0x%02X\n",
+        antenna, sdr.currentBandIsVhf, preamble_val, selector);
+    sunsdr_send_u32_cmd(SUNSDR_OP_ANT_PREAMBLE, preamble_val);
+    sunsdr_send_u32_cmd(SUNSDR_OP_RX_ANT, selector);
     sunsdr_send_u32_cmd(SUNSDR_OP_KEEPALIVE, 0);
 }
 
 void SunSDRSetTxAntenna(int antenna)
 {
-    int selector = sunsdr_map_tx_ant_selector(antenna);
-
     if (antenna > 0)
         sdr.currentTxAntenna = antenna;
+
+    /* VHF: same selector mechanism as RX (single physical 2m port, with
+     * A1 / ADC choice via 0x1E). HF: existing per-band TX antenna via
+     * 0x15 with the tx selector mapping. */
+    if (sdr.currentBandIsVhf) {
+        unsigned int preamble_val = (antenna == 2) ? 1u : 0u;
+        if (!sdr.powered) {
+            sdr_logf("SunSDRSetTxAntenna(%d) cached while unpowered (vhf=1 preamble=0x%02X)\n",
+                antenna, preamble_val);
+            return;
+        }
+        sdr_logf("SunSDRSetTxAntenna(%d) vhf=1 preamble=0x%02X selector=0x01\n", antenna, preamble_val);
+        sunsdr_send_u32_cmd(SUNSDR_OP_ANT_PREAMBLE, preamble_val);
+        sunsdr_send_u32_cmd(SUNSDR_OP_RX_ANT, 0x01u);
+        sunsdr_send_u32_cmd(SUNSDR_OP_KEEPALIVE, 0);
+        return;
+    }
+
+    int selector = sunsdr_map_tx_ant_selector(antenna);
+    /* (currentTxAntenna already assigned at function top) */
 
     if (selector == 0) {
         sdr_logf("SunSDRSetTxAntenna(%d) ignored: unsupported antenna\n", antenna);

@@ -108,6 +108,16 @@
             this.panelAlexRXAntControl = new System.Windows.Forms.PanelTS();
             this.chkBlockTxAnt3 = new System.Windows.Forms.CheckBoxTS();
             this.chkBlockTxAnt2 = new System.Windows.Forms.CheckBoxTS();
+            this.label2mRx = new System.Windows.Forms.LabelTS();
+            this.panel2mRx = new System.Windows.Forms.PanelTS();
+            this.radAlexR1_2 = new System.Windows.Forms.RadioButtonTS();
+            this.radAlexR2_2 = new System.Windows.Forms.RadioButtonTS();
+            this.radAlexR3_2 = new System.Windows.Forms.RadioButtonTS();
+            this.label2mTx = new System.Windows.Forms.LabelTS();
+            this.panel2mTx = new System.Windows.Forms.PanelTS();
+            this.radAlexT1_2 = new System.Windows.Forms.RadioButtonTS();
+            this.radAlexT2_2 = new System.Windows.Forms.RadioButtonTS();
+            this.radAlexT3_2 = new System.Windows.Forms.RadioButtonTS();
             this.labelTS257 = new System.Windows.Forms.LabelTS();
             this.panelAlexRXXVRTControl = new System.Windows.Forms.PanelTS();
             this.labelRXAntControl = new System.Windows.Forms.LabelTS();
@@ -5975,7 +5985,7 @@
             this.grpAlexAntCtrl.Controls.Add(this.panelAlexRXAntControl);
             this.grpAlexAntCtrl.Location = new System.Drawing.Point(6, 6);
             this.grpAlexAntCtrl.Name = "grpAlexAntCtrl";
-            this.grpAlexAntCtrl.Size = new System.Drawing.Size(426, 262);
+            this.grpAlexAntCtrl.Size = new System.Drawing.Size(426, 278);
             this.grpAlexAntCtrl.TabIndex = 0;
             this.grpAlexAntCtrl.TabStop = false;
             this.grpAlexAntCtrl.Text = "Antenna Control";
@@ -6000,6 +6010,8 @@
             this.panelAlexTXAntControl.Controls.Add(this.label9);
             this.panelAlexTXAntControl.Controls.Add(this.label8);
             this.panelAlexTXAntControl.Controls.Add(this.labelTS15);
+            this.panelAlexTXAntControl.Controls.Add(this.label2mTx);
+            this.panelAlexTXAntControl.Controls.Add(this.panel2mTx);
             this.panelAlexTXAntControl.Controls.Add(this.panel23);
             this.panelAlexTXAntControl.Controls.Add(this.panel22);
             this.panelAlexTXAntControl.Controls.Add(this.panel21);
@@ -6013,7 +6025,7 @@
             this.panelAlexTXAntControl.Controls.Add(this.panel13);
             this.panelAlexTXAntControl.Location = new System.Drawing.Point(268, 13);
             this.panelAlexTXAntControl.Name = "panelAlexTXAntControl";
-            this.panelAlexTXAntControl.Size = new System.Drawing.Size(155, 223);
+            this.panelAlexTXAntControl.Size = new System.Drawing.Size(155, 239);
             this.panelAlexTXAntControl.TabIndex = 234;
             // 
             // labelTS104
@@ -6220,7 +6232,63 @@
             this.radAlexT3_6.TextAlign = System.Drawing.ContentAlignment.MiddleRight;
             this.radAlexT3_6.UseVisualStyleBackColor = true;
             this.radAlexT3_6.CheckedChanged += new System.EventHandler(this.radAlexT_6_CheckedChanged);
-            // 
+            //
+            // label2mTx (added for VHF 2m antenna selection — GH #12)
+            //
+            this.label2mTx.Image = null;
+            this.label2mTx.Location = new System.Drawing.Point(27, 216);
+            this.label2mTx.Name = "label2mTx";
+            this.label2mTx.Size = new System.Drawing.Size(30, 16);
+            this.label2mTx.TabIndex = 260;
+            this.label2mTx.Text = "2m";
+            this.label2mTx.TextAlign = System.Drawing.ContentAlignment.MiddleCenter;
+            //
+            // panel2mTx
+            //
+            this.panel2mTx.AutoScrollMargin = new System.Drawing.Size(0, 0);
+            this.panel2mTx.AutoScrollMinSize = new System.Drawing.Size(0, 0);
+            this.panel2mTx.Controls.Add(this.radAlexT2_2);
+            this.panel2mTx.Controls.Add(this.radAlexT1_2);
+            this.panel2mTx.Controls.Add(this.radAlexT3_2);
+            this.panel2mTx.Location = new System.Drawing.Point(67, 216);
+            this.panel2mTx.Name = "panel2mTx";
+            this.panel2mTx.Size = new System.Drawing.Size(48, 16);
+            this.panel2mTx.TabIndex = 261;
+            //
+            // radAlexT1_2
+            //
+            this.radAlexT1_2.Image = null;
+            this.radAlexT1_2.Location = new System.Drawing.Point(0, 0);
+            this.radAlexT1_2.Name = "radAlexT1_2";
+            this.radAlexT1_2.Size = new System.Drawing.Size(16, 16);
+            this.radAlexT1_2.TabIndex = 0;
+            this.radAlexT1_2.TextAlign = System.Drawing.ContentAlignment.BottomRight;
+            this.radAlexT1_2.UseVisualStyleBackColor = true;
+            this.radAlexT1_2.CheckedChanged += new System.EventHandler(this.radAlexT_2_CheckedChanged);
+            //
+            // radAlexT2_2
+            //
+            this.radAlexT2_2.Image = null;
+            this.radAlexT2_2.Location = new System.Drawing.Point(16, 0);
+            this.radAlexT2_2.Name = "radAlexT2_2";
+            this.radAlexT2_2.Size = new System.Drawing.Size(16, 16);
+            this.radAlexT2_2.TabIndex = 1;
+            this.radAlexT2_2.UseVisualStyleBackColor = true;
+            /* 2m TX: Ant 2 = DAC path (EESDR offers A1 and DAC for 2m TX). */
+            this.radAlexT2_2.CheckedChanged += new System.EventHandler(this.radAlexT_2_CheckedChanged);
+            //
+            // radAlexT3_2
+            //
+            this.radAlexT3_2.Image = null;
+            this.radAlexT3_2.Location = new System.Drawing.Point(32, 0);
+            this.radAlexT3_2.Name = "radAlexT3_2";
+            this.radAlexT3_2.Size = new System.Drawing.Size(16, 16);
+            this.radAlexT3_2.TabIndex = 2;
+            this.radAlexT3_2.TextAlign = System.Drawing.ContentAlignment.MiddleRight;
+            this.radAlexT3_2.UseVisualStyleBackColor = true;
+            this.radAlexT3_2.Enabled = false;  /* 2m has only A1 + ADC; no Ant 3 */
+            this.radAlexT3_2.CheckedChanged += new System.EventHandler(this.radAlexT_2_CheckedChanged);
+            //
             // panel22
             // 
             this.panel22.AutoScrollMargin = new System.Drawing.Size(0, 0);
@@ -6686,6 +6754,8 @@
             this.panelAlexRXAntControl.Controls.Add(this.labelTS14);
             this.panelAlexRXAntControl.Controls.Add(this.labelTS56);
             this.panelAlexRXAntControl.Controls.Add(this.labelTS22);
+            this.panelAlexRXAntControl.Controls.Add(this.label2mRx);
+            this.panelAlexRXAntControl.Controls.Add(this.panel2mRx);
             this.panelAlexRXAntControl.Controls.Add(this.panel11);
             this.panelAlexRXAntControl.Controls.Add(this.panel9);
             this.panelAlexRXAntControl.Controls.Add(this.panel10);
@@ -6698,14 +6768,14 @@
             this.panelAlexRXAntControl.Controls.Add(this.panel2);
             this.panelAlexRXAntControl.Location = new System.Drawing.Point(6, 13);
             this.panelAlexRXAntControl.Name = "panelAlexRXAntControl";
-            this.panelAlexRXAntControl.Size = new System.Drawing.Size(260, 243);
+            this.panelAlexRXAntControl.Size = new System.Drawing.Size(260, 259);
             this.panelAlexRXAntControl.TabIndex = 233;
             // 
             // chkBlockTxAnt3
             // 
             this.chkBlockTxAnt3.AutoSize = true;
             this.chkBlockTxAnt3.Image = null;
-            this.chkBlockTxAnt3.Location = new System.Drawing.Point(118, 220);
+            this.chkBlockTxAnt3.Location = new System.Drawing.Point(118, 236);
             this.chkBlockTxAnt3.Name = "chkBlockTxAnt3";
             this.chkBlockTxAnt3.Size = new System.Drawing.Size(15, 14);
             this.chkBlockTxAnt3.TabIndex = 236;
@@ -6716,7 +6786,7 @@
             // 
             this.chkBlockTxAnt2.AutoSize = true;
             this.chkBlockTxAnt2.Image = null;
-            this.chkBlockTxAnt2.Location = new System.Drawing.Point(102, 220);
+            this.chkBlockTxAnt2.Location = new System.Drawing.Point(102, 236);
             this.chkBlockTxAnt2.Name = "chkBlockTxAnt2";
             this.chkBlockTxAnt2.Size = new System.Drawing.Size(15, 14);
             this.chkBlockTxAnt2.TabIndex = 237;
@@ -6727,7 +6797,7 @@
             // 
             this.labelTS257.AutoSize = true;
             this.labelTS257.Image = null;
-            this.labelTS257.Location = new System.Drawing.Point(18, 220);
+            this.labelTS257.Location = new System.Drawing.Point(18, 236);
             this.labelTS257.Name = "labelTS257";
             this.labelTS257.Size = new System.Drawing.Size(58, 13);
             this.labelTS257.TabIndex = 238;
@@ -7397,6 +7467,61 @@
             this.radAlexR3_6.TextAlign = System.Drawing.ContentAlignment.MiddleRight;
             this.radAlexR3_6.UseVisualStyleBackColor = true;
             this.radAlexR3_6.CheckedChanged += new System.EventHandler(this.radAlexR_6_CheckedChanged);
+            //
+            // label2mRx (added for VHF 2m antenna selection — GH #12)
+            //
+            this.label2mRx.Image = null;
+            this.label2mRx.Location = new System.Drawing.Point(26, 216);
+            this.label2mRx.Name = "label2mRx";
+            this.label2mRx.Size = new System.Drawing.Size(30, 16);
+            this.label2mRx.TabIndex = 260;
+            this.label2mRx.Text = "2m";
+            this.label2mRx.TextAlign = System.Drawing.ContentAlignment.MiddleCenter;
+            //
+            // panel2mRx
+            //
+            this.panel2mRx.AutoScrollMargin = new System.Drawing.Size(0, 0);
+            this.panel2mRx.AutoScrollMinSize = new System.Drawing.Size(0, 0);
+            this.panel2mRx.Controls.Add(this.radAlexR2_2);
+            this.panel2mRx.Controls.Add(this.radAlexR1_2);
+            this.panel2mRx.Controls.Add(this.radAlexR3_2);
+            this.panel2mRx.Location = new System.Drawing.Point(86, 216);
+            this.panel2mRx.Name = "panel2mRx";
+            this.panel2mRx.Size = new System.Drawing.Size(48, 16);
+            this.panel2mRx.TabIndex = 261;
+            //
+            // radAlexR1_2
+            //
+            this.radAlexR1_2.Image = null;
+            this.radAlexR1_2.Location = new System.Drawing.Point(0, 0);
+            this.radAlexR1_2.Name = "radAlexR1_2";
+            this.radAlexR1_2.Size = new System.Drawing.Size(16, 16);
+            this.radAlexR1_2.TabIndex = 0;
+            this.radAlexR1_2.TextAlign = System.Drawing.ContentAlignment.BottomRight;
+            this.radAlexR1_2.UseVisualStyleBackColor = true;
+            this.radAlexR1_2.CheckedChanged += new System.EventHandler(this.radAlexR_2_CheckedChanged);
+            //
+            // radAlexR2_2
+            //
+            this.radAlexR2_2.Image = null;
+            this.radAlexR2_2.Location = new System.Drawing.Point(16, 0);
+            this.radAlexR2_2.Name = "radAlexR2_2";
+            this.radAlexR2_2.Size = new System.Drawing.Size(16, 16);
+            this.radAlexR2_2.TabIndex = 1;
+            this.radAlexR2_2.UseVisualStyleBackColor = true;
+            this.radAlexR2_2.CheckedChanged += new System.EventHandler(this.radAlexR_2_CheckedChanged);
+            //
+            // radAlexR3_2
+            //
+            this.radAlexR3_2.Image = null;
+            this.radAlexR3_2.Location = new System.Drawing.Point(32, 0);
+            this.radAlexR3_2.Name = "radAlexR3_2";
+            this.radAlexR3_2.Size = new System.Drawing.Size(16, 16);
+            this.radAlexR3_2.TabIndex = 2;
+            this.radAlexR3_2.TextAlign = System.Drawing.ContentAlignment.MiddleRight;
+            this.radAlexR3_2.UseVisualStyleBackColor = true;
+            this.radAlexR3_2.Enabled = false;  /* 2m has only A1 + ADC; no Ant 3 */
+            this.radAlexR3_2.CheckedChanged += new System.EventHandler(this.radAlexR_2_CheckedChanged);
             // 
             // panel9
             // 
@@ -73224,6 +73349,16 @@
         private System.Windows.Forms.LabelTS label8;
         private System.Windows.Forms.LabelTS labelTS15;
         private System.Windows.Forms.PanelTS panel23;
+        private System.Windows.Forms.LabelTS label2mRx;
+        private System.Windows.Forms.PanelTS panel2mRx;
+        private System.Windows.Forms.RadioButtonTS radAlexR1_2;
+        private System.Windows.Forms.RadioButtonTS radAlexR2_2;
+        private System.Windows.Forms.RadioButtonTS radAlexR3_2;
+        private System.Windows.Forms.LabelTS label2mTx;
+        private System.Windows.Forms.PanelTS panel2mTx;
+        private System.Windows.Forms.RadioButtonTS radAlexT1_2;
+        private System.Windows.Forms.RadioButtonTS radAlexT2_2;
+        private System.Windows.Forms.RadioButtonTS radAlexT3_2;
         private System.Windows.Forms.RadioButtonTS radAlexT2_6;
         private System.Windows.Forms.RadioButtonTS radAlexT1_6;
         private System.Windows.Forms.RadioButtonTS radAlexT3_6;

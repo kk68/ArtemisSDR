@@ -314,6 +314,19 @@ namespace Thetis
             // zero the drive on selection (MemoryRecord default is 0).
             int importDrive = console.PWR;
 
+            // Same reasoning for the tune-step string — RecallMemory restores
+            // MemoryRecord.TuneStep via TuneStepLookup. If we bake a hard-coded
+            // "10Hz" into every imported row, selecting an imported memory
+            // forces the main-console tune step to 10 Hz regardless of what
+            // the user had set (e.g. 500 Hz for band-hopping).
+            string importTuneStep = "10Hz";
+            try
+            {
+                if (console.TuneStepList != null && console.TuneStepList.Count > 0)
+                    importTuneStep = console.TuneStepList[console.TuneStepIndex].Name;
+            }
+            catch { /* fall back to "10Hz" */ }
+
             // Build duplicate set from existing records.
             // Repeater identity = (freq, CTCSS, name) — NOT just (freq, CTCSS).
             // Multiple real-world repeaters legitimately share the same
@@ -359,7 +372,7 @@ namespace Thetis
                     /*name*/       rowName,
                     /*dspmode*/    DSPMode.FM,
                     /*scan*/       true,
-                    /*tune_step*/  "10Hz",
+                    /*tune_step*/  importTuneStep,
                     /*rpt_mode*/   rpt,
                     /*fm_tx_off*/  offsetMhz,
                     /*ctcss_on*/   ctcssOn,

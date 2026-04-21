@@ -13193,7 +13193,8 @@ namespace Thetis
                                                          new[] { radAlexR1_15,  radAlexR2_15, radAlexR3_15 },
                                                          new[] { radAlexR1_12,  radAlexR2_12, radAlexR3_12 },
                                                          new[] { radAlexR1_10,  radAlexR2_10, radAlexR3_10 },
-                                                         new[] { radAlexR1_6,  radAlexR2_6, radAlexR3_6 }
+                                                         new[] { radAlexR1_6,  radAlexR2_6, radAlexR3_6 },
+                                                         new[] { radAlexR1_2,  radAlexR2_2, radAlexR3_2 }
                                                      };
 
             _AlexTxAntButtons = new[] { new RadioButtonTS[] { radAlexT1_160, radAlexT2_160, radAlexT3_160 },
@@ -13206,7 +13207,8 @@ namespace Thetis
                                                          new[] { radAlexT1_15,  radAlexT2_15, radAlexT3_15 },
                                                          new[] { radAlexT1_12,  radAlexT2_12, radAlexT3_12 },
                                                          new[] { radAlexT1_10,  radAlexT2_10, radAlexT3_10 },
-                                                         new[] { radAlexT1_6,  radAlexT2_6, radAlexT3_6 }
+                                                         new[] { radAlexT1_6,  radAlexT2_6, radAlexT3_6 },
+                                                         new[] { radAlexT1_2,  radAlexT2_2, radAlexT3_2 }
                                                      };
 
             // old state copy
@@ -13234,7 +13236,8 @@ namespace Thetis
                                                             new bool[] { false, false, false },
                                                             new bool[] { false, false, false },
                                                             new bool[] { false, false, false },
-                                                            new bool[] { false, false, false }
+                                                            new bool[] { false, false, false },
+                                                            new bool[] { false, false, false }   /* B2M */
                                                      };
 
             _AlexTxAntButtons_old = new[] { new bool[]  { false, false, false },
@@ -13247,7 +13250,8 @@ namespace Thetis
                                                             new bool[] { false, false, false },
                                                             new bool[] { false, false, false },
                                                             new bool[] { false, false, false },
-                                                            new bool[] { false, false, false }
+                                                            new bool[] { false, false, false },
+                                                            new bool[] { false, false, false }   /* B2M */
                                                      };
         }
 
@@ -13610,6 +13614,21 @@ namespace Thetis
             ProcessAlexAntRadioButton(sender, Band.B6M, true);
         }
 
+        // VHF 2m — added GH #12. SunSDR2 DX's 2m port has two meaningful RX
+        // paths (A1 / ADC) which the native layer encodes via opcode 0x1E.
+        // We store the UI selection in the standard B2M slot of the Alex
+        // per-band antenna table and let SunSDRSetAntenna / SunSDRSetTxAntenna
+        // in sunsdr.c translate UI slot 1/2 → 0x1E=0/1 on VHF bands.
+        private void radAlexR_2_CheckedChanged(object sender, System.EventArgs e)
+        {
+            ProcessAlexAntRadioButton(sender, Band.B2M, false);
+        }
+
+        private void radAlexT_2_CheckedChanged(object sender, System.EventArgs e)
+        {
+            ProcessAlexAntRadioButton(sender, Band.B2M, true);
+        }
+
         private void chkAlex160R_CheckedChanged(object sender, System.EventArgs e)
         {
             ProcessAlexAntCheckBox(sender, Band.B160M);
@@ -13820,8 +13839,11 @@ namespace Thetis
 
             console.AlexAntCtrlEnabled = true; // need side effect of prop set to push data down to C code 
 
-            if (is_xmit && NetworkIO.CurrentRadioProtocol == RadioProtocol.SUNSDR)
-                NetworkIO.nativeSunSDRSetTxAntenna(ant);
+            if (NetworkIO.CurrentRadioProtocol == RadioProtocol.SUNSDR)
+            {
+                if (is_xmit) NetworkIO.nativeSunSDRSetTxAntenna(ant);
+                else         NetworkIO.nativeSunSDRSetAntenna(ant);
+            }
 
             // changed notification
             updateChangedAntAlexButton(is_xmit, idx, band);
@@ -13859,7 +13881,7 @@ namespace Thetis
         public int GetRXAntenna(Band band)
         {
             int antInUse = 0; //0 none, 1-3 valid
-            if ((band >= Band.B160M) && (band <= Band.B6M))
+            if ((band >= Band.B160M) && (band <= Band.B2M))
             {
                 int idx = (int)band - (int)Band.B160M;
                 int Btn;
@@ -13876,7 +13898,7 @@ namespace Thetis
         public int GetTXAntenna(Band band)
         {
             int antInUse = 0; //0 none, 1-3 valid
-            if ((band >= Band.B160M) && (band <= Band.B6M))
+            if ((band >= Band.B160M) && (band <= Band.B2M))
             {
                 int idx = (int)band - (int)Band.B160M;
                 int Btn;
@@ -21851,6 +21873,10 @@ namespace Thetis
             if (pnlAlexApollo != null)       pnlAlexApollo.Visible = visible;
             // panelOrionPTT intentionally NOT hidden — reserved for SunSDR
             // hardware PTT support coming in a future release.
+            // "Disable BYPASS" on the Ant/Filters tab is an ANAN100/100B
+            // PA-revision flag. SunSDR has no Alex filter board and no
+            // PA-rev ambiguity, so hide it under the same switch.
+            if (chkDisableRXOut != null)     chkDisableRXOut.Visible = visible;
         }
 
         public bool CheckForAnyExternalPACheckBoxes()
@@ -24691,7 +24717,13 @@ namespace Thetis
             btnContainer_load.Enabled = bEnableAdd;// MeterManager.TotalMeterContainers < MAX_CONTAINERS;
             btnContainer_dupe.Enabled = bEnableControls;// && comboContainerSelect.SelectedIndex > -1;
             btnRecoverContainer.Enabled = bEnableControls && !locked;
-            btnContainerDelete.Enabled = bEnableControls && !locked;
+            // btnContainerDelete stays enabled whenever a container is
+            // selected, regardless of the Lock checkbox — locking should
+            // prevent accidental edits to meters INSIDE the container, not
+            // block intentional removal of the whole container. The click
+            // handler confirms deletion when locked so the user can't
+            // wipe a locked container by accident.
+            btnContainerDelete.Enabled = bEnableControls;
             chkContainerHighlight.Enabled = bEnableControls;
             comboContainerSelect.Enabled = bEnableControls;
             clrbtnContainerBackground.Enabled = bEnableControls;
@@ -24820,7 +24852,15 @@ namespace Thetis
         }
         private void btnContainerDelete_Click(object sender, EventArgs e)
         {
-            if (chkLockContainer.Checked) return;
+            if (chkLockContainer.Checked)
+            {
+                DialogResult dr = MessageBox.Show(this,
+                    "This container is locked. Remove it anyway?",
+                    "Remove locked container",
+                    MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2);
+                if (dr != DialogResult.Yes) return;
+            }
             if (preventIfContainerContainsLockedRecordings()) return;
 
             clsContainerComboboxItem cci = (clsContainerComboboxItem)comboContainerSelect.SelectedItem;
@@ -32479,7 +32519,9 @@ namespace Thetis
             {
                 MeterManager.LockContainer(cci.ID, chkLockContainer.Checked);
                 btnRecoverContainer.Enabled = !chkLockContainer.Checked;
-                btnContainerDelete.Enabled = !chkLockContainer.Checked;
+                // btnContainerDelete stays enabled regardless of Lock;
+                // its click handler confirms deletion when locked.
+                btnContainerDelete.Enabled = true;
                 btnAddMeterItem.Enabled = !chkLockContainer.Checked;
                 btnRemoveMeterItem.Enabled = !chkLockContainer.Checked;
                 btnMeterUp.Enabled = !chkLockContainer.Checked;

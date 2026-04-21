@@ -18838,6 +18838,11 @@ namespace Thetis
             // Same trigger also flips WDSP's FM demod between narrow and
             // wide config when crossing the broadcast-band boundary.
             ApplyFMDSPForCurrentBand();
+            // Reverse memory lookup: if the new VFO freq matches one of the
+            // imported memories, auto-select it in the FM memory combo so
+            // the user sees the repeater name/callsign for whatever they're
+            // tuned to. No side-effects — the memory is shown, not recalled.
+            UpdateMemoryComboFromVFO(m_dVFOAFreq);
         }
         private void VFOBUpdate(double freq)
         {
@@ -21466,6 +21471,21 @@ namespace Thetis
                 fm_tx_offset_mhz = value;
                 if (udFMOffset.Value != (decimal)fm_tx_offset_mhz)
                     udFMOffset.Value = (decimal)fm_tx_offset_mhz;
+
+                // Persist the live value into the per-band array on every
+                // user-driven change. The band-change handler also writes
+                // here, but only at the moment of band switch — so if the
+                // user set an offset (e.g. 0.600 on 2m) and closed the app
+                // without changing bands, the DB would save the stale
+                // default (0.100) and the user would see it "reset" on
+                // relaunch. Guarding with !initializing keeps the startup
+                // load path clean.
+                if (!initializing && fm_tx_offset_by_band_mhz != null)
+                {
+                    int bandIdx = (int)rx1_band;
+                    if (bandIdx >= 0 && bandIdx < fm_tx_offset_by_band_mhz.Length)
+                        fm_tx_offset_by_band_mhz[bandIdx] = fm_tx_offset_mhz;
+                }
             }
         }
 
@@ -41234,6 +41254,11 @@ namespace Thetis
         // The view is kept in sync with the underlying list via ListChanged.
         private System.ComponentModel.BindingList<MemoryRecord> _fmMemoryView;
         private bool _fmMemoryViewHooked;
+        // Reverse lookup flag: when true, programmatic changes to
+        // comboFMMemory.SelectedIndex do NOT fire RecallMemory (we're just
+        // showing which memory matches the currently-tuned VFO freq, not
+        // overwriting the user's current mode/CTCSS/drive state).
+        private bool _suppressMemoryRecall;
 
         private void InitMemoryFrontPanel()
         {
@@ -41271,6 +41296,41 @@ namespace Thetis
                 int idx = _fmMemoryView.IndexOf(keep);
                 if (idx >= 0) comboFMMemory.SelectedIndex = idx;
             }
+        }
+
+        // Reverse memory lookup: when VFO A lands on a frequency that matches
+        // an imported memory, auto-select that memory in the front-panel
+        // combo so the user sees "K3FBI — Quantico" without having to pick
+        // from the dropdown. Does NOT call RecallMemory — mode / CTCSS / drive
+        // are left untouched; this is a display-only hint.
+        // Matching tolerance is 100 Hz, which covers RepeaterBook's 4-decimal
+        // precision vs the 6-decimal VFO display.
+        private void UpdateMemoryComboFromVFO(double vfoFreqMHz)
+        {
+            if (comboFMMemory == null) return;
+            if (_fmMemoryView == null || _fmMemoryView.Count == 0) return;
+
+            MemoryRecord match = null;
+            foreach (var m in _fmMemoryView)
+            {
+                if (Math.Abs(m.RXFreq - vfoFreqMHz) < 0.0001)
+                {
+                    match = m;
+                    break;
+                }
+            }
+
+            int target;
+            if (match != null)
+                target = _fmMemoryView.IndexOf(match);
+            else
+                target = -1;
+
+            if (comboFMMemory.SelectedIndex == target) return;  // already there
+
+            _suppressMemoryRecall = true;
+            try { comboFMMemory.SelectedIndex = target; }
+            finally { _suppressMemoryRecall = false; }
         }
 
         private void radFMDeviation2kHz_CheckedChanged(object sender, EventArgs e)
@@ -41469,7 +41529,13 @@ namespace Thetis
             VFOAFreq = record.RXFreq;
             RX1DSPMode = record.DSPMode;
 
-            TuneStepIndex = TuneStepLookup(record.TuneStep);
+            // Intentionally NOT restoring TuneStepIndex from the memory
+            // record. Tune step is a workflow preference (e.g. 10 Hz for
+            // HF tuning, 500 Hz or 1 kHz for band-hopping), not a
+            // per-repeater attribute — forcing it on every memory recall
+            // kept resetting the user's live choice to whatever was
+            // baked into the imported record ("10Hz" by default).
+            // TuneStepIndex = TuneStepLookup(record.TuneStep);
 
             if (record.DSPMode == DSPMode.FM)
             {
@@ -41498,7 +41564,7 @@ namespace Thetis
         {
             if (comboFMMemory.Items.Count == 0 || comboFMMemory.SelectedItem == null) return;
             MemoryRecord recordToRestore = new MemoryRecord((MemoryRecord)comboFMMemory.SelectedItem);
-            if (!initializing)
+            if (!initializing && !_suppressMemoryRecall)
                 RecallMemory(recordToRestore);
         }
 
