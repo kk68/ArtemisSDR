@@ -1108,22 +1108,15 @@ static void sunsdr_cache_identity_candidate(const unsigned char* data, int len, 
     }
 }
 
-/* ========== Resampler: 312500 → 192000 Hz ========== */
-
-#define SUNSDR_NATIVE_RATE   312500.0
-#define SUNSDR_TARGET_RATE   384000.0
-#define SUNSDR_RESAMPLE_STEP (SUNSDR_NATIVE_RATE / SUNSDR_TARGET_RATE)  /* 0.8138 */
-#define SUNSDR_RESAMPLE_MAX  512  /* max output samples per call (200 * 384/312.5 = ~246) */
-
-typedef struct _sunsdr_resampler_state
-{
-    double phase;
-    double prev_I;
-    double prev_Q;
-    double out[SUNSDR_RESAMPLE_MAX * 2];
-} sunsdr_resampler_state_t;
-
-static sunsdr_resampler_state_t resampler[2];
+/* ========== RX IQ rate ========== */
+/*
+ * SunSDR delivers native 312,500 Hz IQ (200 complex samples per 0xFE packet).
+ * We feed xrouter directly at that rate — WDSP runs natively at 312.5 kHz
+ * and rmatch handles the final 312500 → 48000 Hz drop to audio. No
+ * intermediate upsample stage; removed 2026-04-22 on feature/native-312k-rate
+ * to eliminate the linear-interp resampler that was aliasing strong
+ * out-of-window signals into the display band (GH #26).
+ */
 
 /*
  * TX IQ stream rate. From live ExpertSDR3 voice MOX capture, the host sends
@@ -1137,43 +1130,6 @@ static sunsdr_resampler_state_t resampler[2];
 #define SUNSDR_TX_INPUT_RATE   192000.0
 #define SUNSDR_TX_OUTPUT_RATE  39062.5
 #define SUNSDR_TX_RESAMPLE_STEP (SUNSDR_TX_INPUT_RATE / SUNSDR_TX_OUTPUT_RATE)  /* ~4.9152 */
-
-/*
- * Resample nsamples complex pairs from in[] to resample_out[].
- * Returns number of complex output samples produced.
- * Uses linear interpolation with state preserved across calls.
- */
-static int sunsdr_resample(int source, const double* in, int nsamples)
-{
-    int out_count = 0;
-    int i;
-    sunsdr_resampler_state_t* rs = &resampler[source];
-    double prev_I = rs->prev_I;
-    double prev_Q = rs->prev_Q;
-
-    for (i = 0; i < nsamples; i++) {
-        double cur_I = in[2 * i + 0];
-        double cur_Q = in[2 * i + 1];
-
-        /* Emit output samples while phase < 1.0 (we're within this input interval) */
-        while (rs->phase < 1.0 && out_count < SUNSDR_RESAMPLE_MAX) {
-            double frac = rs->phase;
-            rs->out[2 * out_count + 0] = prev_I + frac * (cur_I - prev_I);
-            rs->out[2 * out_count + 1] = prev_Q + frac * (cur_Q - prev_Q);
-            out_count++;
-            rs->phase += SUNSDR_RESAMPLE_STEP;
-        }
-        rs->phase -= 1.0;
-
-        prev_I = cur_I;
-        prev_Q = cur_Q;
-    }
-
-    rs->prev_I = prev_I;
-    rs->prev_Q = prev_Q;
-
-    return out_count;
-}
 
 /* ========== Helpers ========== */
 
@@ -2814,9 +2770,6 @@ int SunSDRPowerOn(void)
     sdr.txPrevQ = 0.0;
     sdr.txAccumCount = 0;
 
-    /* Reset resampler state */
-    memset(resampler, 0, sizeof(resampler));
-
     /* Dump audio state BEFORE any fixes */
     sunsdr_dump_audio_state("before-fix");
 
@@ -3283,8 +3236,8 @@ void SunSDRSetDrive(int raw)
  * right after WDSP.SetChannelState(RX1, 1, 1) completes in
  * chkPower_CheckedChanged, which tells the SunSDR read thread it is
  * safe to start dispatching IQ to xrouter. Until then, real-IQ and
- * silence-injection xrouter calls are skipped (packets dropped,
- * resampler continues so its state stays continuous). */
+ * silence-injection xrouter calls are skipped (packets dropped;
+ * there is no resampler state to keep continuous since 2026-04-22). */
 void SunSDRSetRxWdspReady(int ready)
 {
     int r = ready ? 1 : 0;
@@ -3759,7 +3712,7 @@ DWORD WINAPI SunSDRReadThread(LPVOID param)
      * whenever packets aren't arriving fast enough. This keeps WDSP's input rate constant.
      */
     int rx_stream_id = inid(0, 0);
-    int rx_resample_outsize = 246;  /* matches sunsdr_resample output size */
+    int rx_resample_outsize = SUNSDR_IQ_COMPLEX_PER_PKT;  /* 200, native packet size (no resample) */
     double* rx_silence_buf = (double*)calloc(2 * rx_resample_outsize, sizeof(double));
     double rx_feed_rate_target = 1562.5; /* expected packets/sec */
     double rx_silence_accum = 0.0;
@@ -4239,7 +4192,7 @@ DWORD WINAPI SunSDRReadThread(LPVOID param)
                                payload[k + 0] << 8));     /* Q (from bytes 0-2) */
         }
 
-        /* Resample 312500 → 384000 Hz, then feed into Thetis DSP pipeline */
+        /* Feed native 312.5 kHz IQ directly to Thetis DSP pipeline (no resample) */
         {
             int active_sources = pktbuf[8];
             int source = 0;
@@ -4247,14 +4200,11 @@ DWORD WINAPI SunSDRReadThread(LPVOID param)
             if (active_sources >= 2 && pktbuf[9] < 2)
                 source = pktbuf[9];
 
-            int out_n = sunsdr_resample(source, sdr.rxBuf, SUNSDR_IQ_COMPLEX_PER_PKT);
             /* WDSP-ready gate: drop IQ dispatch until C# has configured
-             * the WDSP RX channel (see SunSDRSetRxWdspReady). Resampler
-             * is still fed above so its phase/prev state is continuous;
-             * we just skip xrouter. */
-            if (out_n > 0 && InterlockedAnd(&sdr.rxWdspReady, 0xffffffff)) {
+             * the WDSP RX channel (see SunSDRSetRxWdspReady). */
+            if (InterlockedAnd(&sdr.rxWdspReady, 0xffffffff)) {
                 __try {
-                    xrouter(NULL, 0, source, out_n, resampler[source].out);
+                    xrouter(NULL, 0, source, SUNSDR_IQ_COMPLEX_PER_PKT, sdr.rxBuf);
                     if (source == 0) {
                         last_rx_pkt_tick = GetTickCount64();
                         dbg_xrouter_real_feeds++;
@@ -4267,15 +4217,15 @@ DWORD WINAPI SunSDRReadThread(LPVOID param)
                         }
                     }
                 } __except(EXCEPTION_EXECUTE_HANDLER) {
-                    sdr_logf("CRASH in xrouter at pkt %d (source=%d, out_n=%d)! Exception=0x%08X\n",
-                        pkt_count, source, out_n, GetExceptionCode());
+                    sdr_logf("CRASH in xrouter at pkt %d (source=%d)! Exception=0x%08X\n",
+                        pkt_count, source, GetExceptionCode());
                     Sleep(1000);
                     continue;
                 }
             }
             if (pkt_count == 1 || pkt_count == 100 || pkt_count % 5000 == 0)
-                sdr_logf("IQ pkts=%d, source=%d/%d, resample_out=%d, tx_sent=%d (HaveSync=%d)\n",
-                    pkt_count, source, active_sources, out_n, sdr.txSeq, HaveSync);
+                sdr_logf("IQ pkts=%d, source=%d/%d, feed=%d samples, tx_sent=%d (HaveSync=%d)\n",
+                    pkt_count, source, active_sources, SUNSDR_IQ_COMPLEX_PER_PKT, sdr.txSeq, HaveSync);
         }
         pkt_count++;
 
