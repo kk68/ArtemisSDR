@@ -381,6 +381,38 @@ void downslew2 (IOB a, OUTREAL* pIout, OUTREAL* pQout)
 *																										*
 ********************************************************************************************************/
 
+/* Ring-buffer sizing must satisfy BOTH producer step (in_size / out_size)
+ * and consumer step (r1_outsize / r2_insize) dividing the active buffer
+ * size exactly, because the wrap check below uses `(idx += step) == buffsize`.
+ * For integer sample-rate ratios (Anan 48/96/192/384/768/1536 kHz vs WDSP
+ * dsp_rate=48 kHz) the two steps are always equal, so max() was sufficient
+ * and the ring wraps cleanly. For SunSDR2 DX's 312.5 / 156.25 / 78.125 kHz
+ * native rates the ratio to dsp_rate=48 kHz is not an integer, so in_size
+ * and r1_outsize differ (e.g. 416 vs 384 at 312.5 kHz). In that case max()
+ * yields a buffer size that is not a common multiple and the wrap check
+ * never triggers at the right index, walking the pointer past the malloc
+ * allocation on subsequent reads. Use LCM to size the ring to the smallest
+ * buffer that is a clean multiple of both steps. For integer ratios LCM
+ * reduces to max() (no behaviour change on Anan/HL2); for the SunSDR
+ * non-integer ratios it produces a slightly larger but correct ring. */
+static int iob_gcd (int a, int b)
+{
+	while (b != 0) {
+		int t = b;
+		b = a % b;
+		a = t;
+	}
+	return a;
+}
+
+static int iob_lcm (int a, int b)
+{
+	/* Degenerate inputs: preserve legacy max() behaviour. */
+	if (a <= 0) return b;
+	if (b <= 0) return a;
+	return (a / iob_gcd (a, b)) * b;
+}
+
 void create_iobuffs (int channel)
 {
 	int n;
@@ -389,16 +421,10 @@ void create_iobuffs (int channel)
 	a->channel = channel;
 	a->in_size = ch[channel].in_size;
 	a->r1_outsize = ch[channel].dsp_insize;
-	if (a->r1_outsize > a->in_size)
-		a->r1_size = a->r1_outsize;
-	else
-		a->r1_size = a->in_size;
+	a->r1_size = iob_lcm (a->r1_outsize, a->in_size);
 	a->out_size = ch[channel].out_size;
 	a->r2_insize = ch[channel].dsp_outsize;
-	if (a->out_size > a->r2_insize)
-		a->r2_size = a->out_size;
-	else
-		a->r2_size = a->r2_insize;
+	a->r2_size = iob_lcm (a->r2_insize, a->out_size);
 	a->r1_active_buffsize = DSP_MULT * a->r1_size;
 	a->r2_active_buffsize = DSP_MULT * a->r2_size;
 	a->r1_baseptr = (double*) malloc0 (a->r1_active_buffsize * sizeof (complex));

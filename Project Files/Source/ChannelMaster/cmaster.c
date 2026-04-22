@@ -486,6 +486,32 @@ void SetXcmInrate (int in_id, int rate)	// 2014-12-18:  called for streams 0, 1,
 			// PIPE - set wave recorder (leave in C# since player is there)
 			if (rx == 0) SetSiphonInsize (rx, pcm->xcm_insize[in_id]);			// PIPE - set siphon for phase2 display, RX1 only
 			SetIVACiqSizeAndRate (rx, pcm->xcm_insize[in_id], pcm->xcm_inrate[in_id]);	// PIPE - set vacOUT size and rate for IQ data
+			/* Rate changed → WDSP channel's audio out_size changed too.
+			 * rcvr[rx].ch_outsize and audio_outsize (AAMixer ring sizing)
+			 * are set once at init from the INITIAL rate and never
+			 * refreshed here. For non-integer rate ratios (SunSDR2 DX
+			 * native 312.5 / 156.25 / 78.125 kHz) the initial value is
+			 * wrong after switching to those rates, causing downstream
+			 * undersampling and VAC underflow. Recompute from the new
+			 * xcm_insize × ch_outrate / xcm_inrate. */
+			if (rate > 0)
+			{
+				int new_rcvr_outsize = (int)(((long long)pcm->xcm_insize[in_id]
+				                              * pcm->rcvr[rx].ch_outrate)
+				                             / rate);
+				if (new_rcvr_outsize > 0 && new_rcvr_outsize != pcm->rcvr[rx].ch_outsize)
+				{
+					pcm->rcvr[rx].ch_outsize = new_rcvr_outsize;
+					SetIVACaudioSize (rx, pcm->rcvr[rx].ch_outsize);
+					SetTCIRxAudioSize (rx, pcm->rcvr[rx].ch_outsize);
+					if (rx == 0 && pcm->rcvr[0].ch_outsize != pcm->audio_outsize)
+					{
+						pcm->audio_outsize = pcm->rcvr[0].ch_outsize;
+						SetAAudioRingInsize  (0, 0, pcm->audio_outsize);
+						SetAAudioRingOutsize (0, 0, pcm->audio_outsize);
+					}
+				}
+			}
 			break;
 		case 1:  // transmitter
 			tx = txid (in_id);
@@ -520,7 +546,14 @@ void SetCMAudioOutrate (int in_id, int rate)		// 2014-11-24:  NOT called by cons
 {													//   protocol and that is the default rate being set at creation.
 	EnterCriticalSection (&pcm->update[in_id]);
 	pcm->audio_outrate = rate;
-	pcm->audio_outsize = getbuffsize (rate);
+	/* Mirror the init-time policy in cmsetup.c:set_cmdefault_rates —
+	 * audio_outsize must match rcvr[0].ch_outsize (the per-block audio
+	 * chunk size from the DSP channel), not just getbuffsize(rate).
+	 * Required for SunSDR non-integer rate ratios. */
+	if (pcm->cmRCVR > 0 && pcm->rcvr[0].ch_outsize > 0)
+		pcm->audio_outsize = pcm->rcvr[0].ch_outsize;
+	else
+		pcm->audio_outsize = getbuffsize (rate);
 	SetAAudioOutRate     (0, 0, pcm->audio_outrate);
 	SetAAudioRingInsize  (0, 0, pcm->audio_outsize);
 	SetAAudioRingOutsize (0, 0, pcm->audio_outsize);
@@ -535,7 +568,15 @@ void SetRcvrChannelOutrate (int rcvr_id, int rate, int state)	// 2014-12-18:  NO
 	int mix_in_id;
 	EnterCriticalSection (&pcm->update[in_id]);
 	pcm->rcvr[rcvr_id].ch_outrate = rate;
-	pcm->rcvr[rcvr_id].ch_outsize = getbuffsize (rate);
+	/* Match WDSP channel's actual out_size (see comment in
+	 * cmsetup.c:set_cmdefault_rates — required for non-integer
+	 * in:out rate ratios to avoid VAC underflow). */
+	if (pcm->xcm_inrate[in_id] > 0)
+		pcm->rcvr[rcvr_id].ch_outsize = (int)(((long long)pcm->xcm_insize[in_id]
+		                                       * rate)
+		                                      / pcm->xcm_inrate[in_id]);
+	else
+		pcm->rcvr[rcvr_id].ch_outsize = getbuffsize (rate);
 	for (j = 0; j < pcm->cmSubRCVR; j++)
 	{
 		SetOutputSamplerate(chid(in_id, j), rate);							// set DSP Channel output rate (sets size too)

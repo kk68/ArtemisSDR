@@ -297,6 +297,20 @@ void CwriteZetaHat(const char* cfile, int zetaHat_rows, int zetaHat_cols,
 }
 void post2_calc_w(EMNR a);
 
+/* GCD/LCM helpers for non-integer-ratio bsize/incr support. */
+static int emnr_gcd (int a, int b)
+{
+	while (b != 0) { int t = b; b = a % b; a = t; }
+	return a;
+}
+
+static int emnr_lcm (int a, int b)
+{
+	if (a <= 0) return b;
+	if (b <= 0) return a;
+	return (a / emnr_gcd (a, b)) * b;
+}
+
 void calc_emnr(EMNR a)
 {
 	int i;
@@ -316,8 +330,30 @@ void calc_emnr(EMNR a)
 	a->iaoutidx = 0;
 	if (a->fsize > a->bsize)
 	{
-		if (a->bsize > a->incr)  a->oasize = a->bsize;
-		else					 a->oasize = a->incr;
+		/* Output accumulator ring must hold a common multiple of the
+		 * writer step (incr) AND the reader step (bsize). For integer
+		 * ratios (bsize | incr, e.g. Anan 64/1024) LCM reduces to
+		 * max(bsize, incr) and preserves the original behaviour.
+		 *
+		 * For SunSDR non-integer ratios (bsize=96 at 312.5 kHz, but
+		 * incr=1024 from fsize=4096/ovrlp=4), the current max() sizing
+		 * puts oasize=incr=1024. Since bsize doesn't divide incr,
+		 * reader and writer indices drift relative to each other and
+		 * the writer overwrites ring regions the reader hasn't fully
+		 * drained — every overlap boundary the reader's 96-sample
+		 * block straddles the writer's overwrite boundary, producing
+		 * the audible ~50 Hz click train when NR2 is enabled.
+		 *
+		 * LCM-sized ring lets reader and writer cycle through the
+		 * full ring exactly once per LCM samples, in lock step, with
+		 * the writer always ahead of the reader. */
+		int lcm_sz = emnr_lcm (a->bsize, a->incr);
+		if (lcm_sz >= a->bsize && lcm_sz >= a->incr)
+			a->oasize = lcm_sz;
+		else if (a->bsize > a->incr)
+			a->oasize = a->bsize;
+		else
+			a->oasize = a->incr;
 		a->oainidx = (a->fsize - a->bsize - a->incr) % a->oasize;
 	}
 	else

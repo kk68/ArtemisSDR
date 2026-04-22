@@ -71,17 +71,52 @@ void set_cmdefault_rates (
 		pcm->xcm_insize[i] = getbuffsize (pcm->xcm_inrate[i]);
 	}
 	pcm->audio_outrate = aud_outrate;
-	pcm->audio_outsize = getbuffsize (pcm->audio_outrate);
 	pcm->audioCodecId = HERMES;
 	for (i = 0; i < pcm->cmRCVR; i++)
 	{
 		pcm->rcvr[i].ch_outrate = rcvr_ch_outrates[i];
-		pcm->rcvr[i].ch_outsize = getbuffsize (pcm->rcvr[i].ch_outrate);
+		/* ch_outsize must match the audio block size the WDSP channel
+		 * actually emits per fexchange, which is
+		 *     xcm_insize * ch_outrate / xcm_inrate
+		 * For Anan/HL2 integer-ratio rates this is algebraically equal
+		 * to getbuffsize(ch_outrate), so no behaviour change. For
+		 * SunSDR non-integer ratios (xcm_insize rounded to multiple
+		 * of M by getbuffsize() above), the channel produces a larger
+		 * per-call block (e.g. 96 at 312.5 kHz in with 48 kHz out)
+		 * and getbuffsize(ch_outrate) alone (64) would under-sample,
+		 * causing 33% VAC underflow and staccato audio. */
+		if (pcm->xcm_inrate[i] > 0)
+			pcm->rcvr[i].ch_outsize = (int)(((long long)pcm->xcm_insize[i]
+			                                 * pcm->rcvr[i].ch_outrate)
+			                                / pcm->xcm_inrate[i]);
+		else
+			pcm->rcvr[i].ch_outsize = getbuffsize (pcm->rcvr[i].ch_outrate);
 	}
+	/* audio_outsize is the block size the AAMixer emits to downstream
+	 * (cmasio, VAC via xvacOUT, etc.). It must equal the size of audio
+	 * chunks arriving from the DSP channels — i.e. rcvr[0].ch_outsize
+	 * (or max across receivers). Using getbuffsize(audio_outrate) alone
+	 * assumes integer rate ratios and undersamples at SunSDR rates
+	 * (64 instead of 96), choking the mixer and causing VAC underflow.
+	 * Must be set AFTER rcvr[].ch_outsize above. */
+	if (pcm->cmRCVR > 0 && pcm->rcvr[0].ch_outsize > 0)
+		pcm->audio_outsize = pcm->rcvr[0].ch_outsize;
+	else
+		pcm->audio_outsize = getbuffsize (pcm->audio_outrate);
 	for (i = 0; i < pcm->cmXMTR; i++)
 	{
 		pcm->xmtr[i].ch_outrate = xmtr_ch_outrates[i];
-		pcm->xmtr[i].ch_outsize = getbuffsize (pcm->xmtr[i].ch_outrate);
+		/* Symmetric treatment for TX: stream index for xmtr[i] is
+		 * pcm->cmRCVR + i (receivers come first in the xcm_ array). */
+		{
+			int s = pcm->cmRCVR + i;
+			if (s < pcm->cmSTREAM && pcm->xcm_inrate[s] > 0)
+				pcm->xmtr[i].ch_outsize = (int)(((long long)pcm->xcm_insize[s]
+				                                 * pcm->xmtr[i].ch_outrate)
+				                                / pcm->xcm_inrate[s]);
+			else
+				pcm->xmtr[i].ch_outsize = getbuffsize (pcm->xmtr[i].ch_outrate);
+		}
 	}
 }
 
@@ -101,13 +136,38 @@ void DestroyRadio()
 	destroy_cmaster();
 }
 
-// buffer sizes are a function of sample rate to yield constant latency
+// buffer sizes are a function of sample rate to yield constant latency.
+//
+// For clean polyphase resampling in the downstream WDSP chain, the buffer
+// size passed to OpenChannel() as 'in_size' must be a whole multiple of the
+// polyphase M-factor (= rate / gcd(rate, dsp_rate)). If it isn't, the
+// resampler's phase accumulator doesn't return to its initial state at the
+// end of each call and the number of output samples per call fluctuates by
+// ±1, creating a block-boundary discontinuity once per DSP iteration —
+// audible as a loud ~750 Hz buzz at a 312.5 kHz input rate.
+//
+// For integer-ratio rates (every rate on Anan/HL2 is a multiple of the
+// 48 kHz base_rate), the natural formula already gives a multiple of M=1
+// and nothing changes. For the SunSDR2 DX native rates (312500, 156250,
+// 78125, all sharing gcd=500..125 with 48000 and M=625) the natural formula
+// yields 416 / 208 / 104 samples, none of which are multiples of 625, and
+// we round up to 625 — giving a clean 2 / 4 / 8 ms block period.
 PORT
 int getbuffsize (int rate)
 {
 	const int base_rate = 48000;
 	const int base_size = 64;
-	return base_size * rate / base_rate;
+	int natural, a, b, t, m;
+
+	natural = base_size * rate / base_rate;
+
+	/* M = rate / gcd(rate, base_rate) */
+	a = rate; b = base_rate;
+	while (b) { t = b; b = a % b; a = t; }
+	m = rate / a;
+
+	if (m <= 1) return natural;              /* integer ratio: unchanged */
+	return ((natural + m - 1) / m) * m;      /* round up to multiple of M */
 }
 
 PORT
