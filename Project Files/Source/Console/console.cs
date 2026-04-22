@@ -52605,6 +52605,7 @@ namespace Thetis
                 case OtherButtonId.SR_48000: DoGeneralSettingAction(rx, OtherButtonId.SR_48000, true); break;
                 case OtherButtonId.SR_96000: DoGeneralSettingAction(rx, OtherButtonId.SR_96000, true); break;
                 case OtherButtonId.SR_192000: DoGeneralSettingAction(rx, OtherButtonId.SR_192000, true); break;
+                case OtherButtonId.SR_312500: DoGeneralSettingAction(rx, OtherButtonId.SR_312500, true); break;
                 case OtherButtonId.SR_384000: DoGeneralSettingAction(rx, OtherButtonId.SR_384000, true); break;
                 case OtherButtonId.SR_768000: DoGeneralSettingAction(rx, OtherButtonId.SR_768000, true); break;
                 case OtherButtonId.SR_1536000: DoGeneralSettingAction(rx, OtherButtonId.SR_1536000, true); break;
@@ -52829,6 +52830,7 @@ namespace Thetis
                 case OtherButtonId.SR_48000:
                 case OtherButtonId.SR_96000:
                 case OtherButtonId.SR_192000:
+                case OtherButtonId.SR_312500:
                 case OtherButtonId.SR_384000:
                 case OtherButtonId.SR_768000:
                 case OtherButtonId.SR_1536000:
@@ -53174,6 +53176,7 @@ namespace Thetis
                 case OtherButtonId.SR_48000: return GetGeneralSetting(rx, OtherButtonId.SR_48000);
                 case OtherButtonId.SR_96000: return GetGeneralSetting(rx, OtherButtonId.SR_96000);
                 case OtherButtonId.SR_192000: return GetGeneralSetting(rx, OtherButtonId.SR_192000);
+                case OtherButtonId.SR_312500: return GetGeneralSetting(rx, OtherButtonId.SR_312500);
                 case OtherButtonId.SR_384000: return GetGeneralSetting(rx, OtherButtonId.SR_384000);
                 case OtherButtonId.SR_768000: return GetGeneralSetting(rx, OtherButtonId.SR_768000);
                 case OtherButtonId.SR_1536000: return GetGeneralSetting(rx, OtherButtonId.SR_1536000);
@@ -53827,6 +53830,7 @@ namespace Thetis
                 case OtherButtonId.SR_48000: if (!IsSetupFormNull) return SetupForm.GetHWSampleRate(rx) == 48000; break;
                 case OtherButtonId.SR_96000: if (!IsSetupFormNull) return SetupForm.GetHWSampleRate(rx) == 96000; break;
                 case OtherButtonId.SR_192000: if (!IsSetupFormNull) return SetupForm.GetHWSampleRate(rx) == 192000; break;
+                case OtherButtonId.SR_312500: if (!IsSetupFormNull) return SetupForm.GetHWSampleRate(rx) == 312500; break;
                 case OtherButtonId.SR_384000: if (!IsSetupFormNull) return SetupForm.GetHWSampleRate(rx) == 384000; break;
                 case OtherButtonId.SR_768000: if (!IsSetupFormNull) return SetupForm.GetHWSampleRate(rx) == 768000; break;
                 case OtherButtonId.SR_1536000: if (!IsSetupFormNull) return SetupForm.GetHWSampleRate(rx) == 1536000; break;
@@ -53901,8 +53905,9 @@ namespace Thetis
                 SetGeneralSetting(n, OtherButtonId.SR_48000, GetGeneralSetting(n, OtherButtonId.SR_48000));
                 SetGeneralSetting(n, OtherButtonId.SR_96000, GetGeneralSetting(n, OtherButtonId.SR_96000));
                 SetGeneralSetting(n, OtherButtonId.SR_192000, GetGeneralSetting(n, OtherButtonId.SR_192000));
+                SetGeneralSetting(n, OtherButtonId.SR_312500, GetGeneralSetting(n, OtherButtonId.SR_312500));
                 SetGeneralSetting(n, OtherButtonId.SR_384000, GetGeneralSetting(n, OtherButtonId.SR_384000));
-                SetGeneralSetting(n, OtherButtonId.SR_768000, GetGeneralSetting(n, OtherButtonId.SR_768000));                
+                SetGeneralSetting(n, OtherButtonId.SR_768000, GetGeneralSetting(n, OtherButtonId.SR_768000));
                 SetGeneralSetting(n, OtherButtonId.SR_1536000, GetGeneralSetting(n, OtherButtonId.SR_1536000));
 
                 setATTGeneralSetting(n);
@@ -54017,6 +54022,8 @@ namespace Thetis
                     if (!IsSetupFormNull) SetupForm.SetHWSampleRate(rx, 96000); return true;
                 case OtherButtonId.SR_192000:
                     if (!IsSetupFormNull) SetupForm.SetHWSampleRate(rx, 192000); return true;
+                case OtherButtonId.SR_312500:
+                    if (!IsSetupFormNull) SetupForm.SetHWSampleRate(rx, 312500); return true;
                 case OtherButtonId.SR_384000:
                     if (!IsSetupFormNull) SetupForm.SetHWSampleRate(rx, 384000); return true;
                 case OtherButtonId.SR_768000:
@@ -54030,12 +54037,13 @@ namespace Thetis
         public void SetHWSampleRateSetting(int rx, int rate)
         {
             if (rx < 1 || rx > 2) return;
-            if (!(rate == 48000 || rate == 96000 || rate == 192000 || rate == 384000 || rate == 768000 || rate == 1536000)) return;
+            if (!(rate == 48000 || rate == 96000 || rate == 192000 || rate == 312500 || rate == 384000 || rate == 768000 || rate == 1536000)) return;
 
             //set all off
             SetGeneralSetting(rx, OtherButtonId.SR_48000, false);
             SetGeneralSetting(rx, OtherButtonId.SR_96000, false);
             SetGeneralSetting(rx, OtherButtonId.SR_192000, false);
+            SetGeneralSetting(rx, OtherButtonId.SR_312500, false);
             SetGeneralSetting(rx, OtherButtonId.SR_384000, false);
             SetGeneralSetting(rx, OtherButtonId.SR_768000, false);
             SetGeneralSetting(rx, OtherButtonId.SR_1536000, false);
@@ -54050,6 +54058,9 @@ namespace Thetis
                     break;
                 case 192000:
                     SetGeneralSetting(rx, OtherButtonId.SR_192000, true);
+                    break;
+                case 312500:
+                    SetGeneralSetting(rx, OtherButtonId.SR_312500, true);
                     break;
                 case 384000:
                     SetGeneralSetting(rx, OtherButtonId.SR_384000, true);

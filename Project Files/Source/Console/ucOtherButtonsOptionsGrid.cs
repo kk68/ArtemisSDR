@@ -137,6 +137,7 @@ namespace Thetis
         SR_48000,
         SR_96000,
         SR_192000,
+        SR_312500,
         SR_384000,
         SR_768000,
         SR_1536000,
@@ -683,6 +684,7 @@ namespace Thetis
             (OtherButtonId.SR_384000,      7, 5, "384k", "", "", "384k hardware sample rate"),
             (OtherButtonId.SR_768000,      7, 6, "768k", "", "", "768k hardware sample rate"),
             (OtherButtonId.SR_1536000,     7, 7, "1536k", "", "", "1536k hardware sample rate"),
+            (OtherButtonId.SR_312500,      7, 8, "312k", "", "", "312.5k native hardware sample rate (SunSDR2 DX)"),
 
             (OtherButtonId.INFO_TEXT,     -1, -1, "RF Power", "", "", ""),
             (OtherButtonId.SPLITTER,      -1, -1, "", "", "", ""),

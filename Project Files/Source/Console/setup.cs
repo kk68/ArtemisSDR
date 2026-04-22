@@ -811,7 +811,7 @@ namespace Thetis
         public void SetHWSampleRate(int rx, int rate)
         {
             if (rx < 1 || rx > 2) return;
-            if (!(rate == 48000 || rate == 96000 || rate == 192000 || rate == 384000 || rate == 768000 || rate == 1536000)) return;
+            if (!(rate == 48000 || rate == 96000 || rate == 192000 || rate == 312500 || rate == 384000 || rate == 768000 || rate == 1536000)) return;
             if (comboAudioSampleRate1 == null || comboAudioSampleRateRX2 == null) return;
 
             string sRate = rate.ToString();
@@ -853,7 +853,7 @@ namespace Thetis
 
             int[] p1_rates = include_extra_p1_rate ? new int[] { 48000, 96000, 192000, 384000 } : new int[] { 48000, 96000, 192000 };
             int[] p2_rates = { 48000, 96000, 192000, 384000, 768000, 1536000 };
-            int[] sunsdr_rates = { 384000 }; // SunSDR2 DX: native 312500, closest standard rate
+            int[] sunsdr_rates = { 312500 }; // SunSDR2 DX: native 312.5 kHz rate, no resample stage
 
             int[] rates = HardwareSpecific.Model == HPSDRModel.SUNSDR2DX ? sunsdr_rates :
                           NetworkIO.CurrentRadioProtocol == RadioProtocol.ETH ? p2_rates : p1_rates;

@@ -5075,6 +5075,7 @@ namespace Thetis
             general_settings.Add(OtherButtonId.SR_48000, _console.GetGeneralSetting(m.RX, OtherButtonId.SR_48000));
             general_settings.Add(OtherButtonId.SR_96000, _console.GetGeneralSetting(m.RX, OtherButtonId.SR_96000));
             general_settings.Add(OtherButtonId.SR_192000, _console.GetGeneralSetting(m.RX, OtherButtonId.SR_192000));
+            general_settings.Add(OtherButtonId.SR_312500, _console.GetGeneralSetting(m.RX, OtherButtonId.SR_312500));
             general_settings.Add(OtherButtonId.SR_384000, _console.GetGeneralSetting(m.RX, OtherButtonId.SR_384000));
             general_settings.Add(OtherButtonId.SR_768000, _console.GetGeneralSetting(m.RX, OtherButtonId.SR_768000));
             general_settings.Add(OtherButtonId.SR_1536000, _console.GetGeneralSetting(m.RX, OtherButtonId.SR_1536000));
