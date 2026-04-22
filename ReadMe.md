@@ -2,7 +2,7 @@
 
 *Open source. Native protocol. Dedicated to Artemis II.*
 
-**Current version: v2.0.7**
+**Current version: v2.0.8**
 
 ⬇️ [**Download Latest Release**](https://github.com/kk68/ArtemisSDR/releases/latest)  ·  📘 [**Quick Start Guide**](START_HERE_SUNSDR2DX.md)  ·  📝 [What's new](https://github.com/kk68/ArtemisSDR/releases/latest)  ·  💬 [Discussions](https://github.com/kk68/ArtemisSDR/discussions)  ·  🐛 [Issues](https://github.com/kk68/ArtemisSDR/issues)
 
@@ -45,7 +45,7 @@ Distributed free of charge under the GNU General Public License v2 for the amate
 You'll get the most out of this fork if:
 
 - You own a **SunSDR2 DX** and want to use it with ArtemisSDR instead of (or alongside) ExpertSDR.
-- You're comfortable building a Visual Studio project once. There's no pre-built installer yet.
+- You're OK running a Windows MSI installer (or building from source — both are supported).
 - You have an external wattmeter and dummy load handy for the first TX bring-up on each band.
 - You operate with normal amateur-radio discipline — we transmit into dummy loads for testing, not onto the air.
 
@@ -135,7 +135,9 @@ Short version:
 
 **No TX RF output.** Confirm `Setup → General → Use watts on Drive/Tune slider` is on. Confirm the drive slider isn't at zero. Confirm you're in a transmittable mode (not SPEC or DRM).
 
-**Audio is garbled or robotic after a TX cycle.** Cycle VAC off and on from its sidebar (the "Enable VAC" checkbox). This clears a resampler transient that occasionally lingers after certain TX → RX transitions.
+**Audio is garbled or robotic after a TX cycle.** Cycle VAC off and on from its sidebar (the "Enable VAC" checkbox). This clears a transient that can linger in some TX → RX transitions.
+
+**App crashes when you change the audio driver in Setup → Audio while running.** Known issue, pre-existing. Select your audio driver once at startup and leave it for the session. If you need to change it, close ArtemisSDR first, then reopen with the new driver selected.
 
 **Signals on the panadapter look unusually wide, audio quality is off, right after startup.** Rare, but seen. Power-cycle ArtemisSDR (Power off → Power on) to re-initialize the RX DSP.
 
@@ -143,7 +145,7 @@ Short version:
 
 ## Building from source
 
-Source-only distribution for now. Build locally with Visual Studio 2022.
+A pre-built Windows MSI installer is available on the [Releases page](https://github.com/kk68/ArtemisSDR/releases/latest). If you prefer to build from source, here's how.
 
 **Prerequisites**
 
