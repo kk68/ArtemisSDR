@@ -1,10 +1,16 @@
-# Anti-alias Resampler Plan
+# Anti-alias Resampler Plan — FALLBACK
+
+> **Status (2026-04-22): FALLBACK.** Strategic decision is to pursue the **native 312.5 kHz refactor** instead. See [`NATIVE_312K_RATE_PLAN.md`](NATIVE_312K_RATE_PLAN.md) on `feature/native-312k-rate` — that approach removes the resampler entirely, which is architecturally cleaner and achieves EESDR3 parity. This plan is kept as the **fallback** if the native refactor hits an unrecoverable snag (most likely in VAC phase-lock or rmatch rate-alignment) that forces a pivot to patching the existing resampler instead of removing it.
+>
+> **Do not start Phase 0 here unless the native refactor is abandoned.** If you are reading this while native is in progress and failing, this doc is your plan B.
+
+---
 
 Targeted fix for GH #26 (ghost signals). Replace the linear-interpolation upsampler on the SunSDR RX path with a properly bandlimited resampler so strong adjacent-band content (41 m broadcast next to 40 m amateur, contest-density on 20 m, etc.) stops producing phantom image copies in the display window.
 
-**Status**: planning only. No code changes yet.
+**Status**: FALLBACK (see header). Planning only. No code changes yet.
 **Branch**: `feature/antialias-prefilter` (this branch).
-**Related**: [`NATIVE_312K_RATE_PLAN.md`](NATIVE_312K_RATE_PLAN.md) on `feature/native-312k-rate` — larger architectural change that removes the resample stage entirely. This plan is the *smaller, more targeted* fix; not mutually exclusive but typically only one will ship.
+**Related**: [`NATIVE_312K_RATE_PLAN.md`](NATIVE_312K_RATE_PLAN.md) on `feature/native-312k-rate` — the primary strategy; removes the resample stage entirely. Mutually exclusive with this plan; ship one, not both.
 
 ## Problem
 
