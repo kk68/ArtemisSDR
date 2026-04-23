@@ -417,16 +417,24 @@ namespace Thetis
                 case HPSDRModel.ANAN_G2_1K:
                     return -4.476f;
                 case HPSDRModel.SUNSDR2DX:
-                    // Coarse anchor derived from direct comparison against
-                    // ExpertSDR3 in Signal mode on 40 m at +10 dB preamp:
-                    // EESDR showed S6 while Artemis read S5 on the same
-                    // band noise, i.e. ~1 S-unit (6 dB) low. Shift the
-                    // generic default (0.98) up by ~6 dB so the S-meter
-                    // lands in the right neighbourhood out of the box.
-                    // Users who want tighter calibration can fine-tune via
-                    // Setup → Tests → Level Cal; a signal-generator pass
-                    // is still the right way to lock this down per rig.
-                    return 6.98f;
+                    // S-meter calibration anchor vs ExpertSDR3 (ground truth).
+                    //
+                    // Reference measurement 2026-04-22 at 7.243.500 MHz, LSB,
+                    // 40 m RX on A2 antenna: EESDR3 read -94.5 dBm (≈ S6 + ¼
+                    // on its scale); Artemis on the same noise floor showed
+                    // S4 (≈ -106 dBm) — a 12 dB (2 S-unit) shortfall even
+                    // after the v2.0.7 bump to 6.98. Current anchor adds
+                    // +12 dB on top of the v2.0.7 value, landing at +18.98.
+                    // Migration in console.cs catches users whose DB still
+                    // holds legacy 0.98 or the v2.0.7 6.98 value and lifts
+                    // them to this new default silently; any customised
+                    // value is left alone.
+                    //
+                    // If you change this, update:
+                    //   - console.cs migration predicates (rx1/rx2 scalar
+                    //     + rx_meter_cal_offset_by_radio array)
+                    //   - memory/project_smeter_reference_20260422.md
+                    return 18.98f;
                 default:
                     return 0.98f;
             }

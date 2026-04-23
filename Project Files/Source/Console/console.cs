@@ -1452,6 +1452,26 @@ namespace Thetis
         {
             Debug.WriteLine((e.ExceptionObject as Exception).Message);
             Common.LogException(e.ExceptionObject as Exception);
+
+            // Release the WASAPI / PortAudio output device before the
+            // process aborts. If we don't, Windows keeps the audio
+            // endpoint half-open (COM references to IAudioClient /
+            // IAudioRenderClient never released) and the next Artemis
+            // launch comes up with no audio until the user forces a
+            // re-enumeration (e.g. by nudging the taskbar volume).
+            //
+            // Pa_Terminate is normally called from ExitConsole() on
+            // clean shutdown; this is the belt-and-suspenders for the
+            // crash path.
+            try
+            {
+                PA19.PA_Terminate();
+            }
+            catch
+            {
+                // We're already dying — swallow anything here. The
+                // original exception info is what matters.
+            }
         }
         public bool Restart
         {
@@ -4074,14 +4094,17 @@ namespace Thetis
                     case "rx1_meter_cal_offset":
                         {
                             float loaded = float.Parse(val);
-                            // One-time migration for SunSDR2 DX: earlier Artemis
-                            // versions (<= v2.0.6) had no dedicated meter-cal
-                            // default for this model and fell through to the
-                            // generic 0.98 dB. v2.0.7 introduces a SunSDR-
-                            // calibrated default. Detect the legacy value and
-                            // upgrade; leave customised values alone.
+                            // One-time migration for SunSDR2 DX. Two legacy
+                            // values trip the upgrade: the pre-v2.0.7 fall-
+                            // through default of 0.98 dB, and the v2.0.7
+                            // coarse-anchor value of 6.98 dB (which turned
+                            // out to still be ~12 dB low vs EESDR3). Both
+                            // get lifted to whatever the current SUNSDR2DX
+                            // default is. Customised values outside these
+                            // two known-bad points are left alone.
                             if (HardwareSpecific.Model == HPSDRModel.SUNSDR2DX
-                                && Math.Abs(loaded - 0.98f) < 0.01f)
+                                && (Math.Abs(loaded - 0.98f) < 0.01f
+                                    || Math.Abs(loaded - 6.98f) < 0.01f))
                             {
                                 loaded = HardwareSpecific.RXMeterCalbrationOffsetDefaults(HPSDRModel.SUNSDR2DX);
                             }
@@ -4095,10 +4118,11 @@ namespace Thetis
                         {
                             float loaded = float.Parse(val);
                             if (HardwareSpecific.Model == HPSDRModel.SUNSDR2DX
-                                && Math.Abs(loaded - 0.98f) < 0.01f)
+                                && (Math.Abs(loaded - 0.98f) < 0.01f
+                                    || Math.Abs(loaded - 6.98f) < 0.01f))
                             {
                                 loaded = HardwareSpecific.RXMeterCalbrationOffsetDefaults(HPSDRModel.SUNSDR2DX);
-                                System.Diagnostics.Debug.WriteLine("[SunSDR migration] rx2_meter_cal_offset legacy 0.98 -> " + loaded);
+                                System.Diagnostics.Debug.WriteLine("[SunSDR migration] rx2_meter_cal_offset legacy -> " + loaded);
                             }
                             RX2MeterCalOffset = loaded;
                         }
@@ -5049,13 +5073,16 @@ namespace Thetis
                             for (int i = 0; i < numVals; i++)
                             {
                                 float v = float.Parse(list[i]);
-                                // One-time migration for SunSDR2 DX slot: legacy
-                                // builds (<= v2.0.6) stored 0.98 here because the
-                                // model had no calibrated default. v2.0.7 ships a
-                                // real SunSDR default (~+7 dB). Upgrade silently
-                                // when the saved value is still at legacy; leave
-                                // any customised value alone.
-                                if (i == sunsdrIdx && Math.Abs(v - 0.98f) < 0.01f)
+                                // One-time migration for the SUNSDR2DX slot of
+                                // this per-radio array. Both known-bad legacy
+                                // defaults get upgraded to the current SunSDR
+                                // default: 0.98 (pre-v2.0.7 fall-through) and
+                                // 6.98 (v2.0.7 coarse anchor that turned out
+                                // still ~12 dB low vs EESDR3). Customised values
+                                // outside these points are left alone.
+                                if (i == sunsdrIdx
+                                    && (Math.Abs(v - 0.98f) < 0.01f
+                                        || Math.Abs(v - 6.98f) < 0.01f))
                                     v = sunsdrNew;
                                 rx_meter_cal_offset_by_radio[i] = v;
                             }
@@ -17845,6 +17872,11 @@ namespace Thetis
                     RF = tmp;
                 }
                 DisplayAriesRXAntenna();
+
+                // Per-band visibility for the SunSDR2 DX status-bar antenna
+                // dropdowns — show only the physically valid antennas for
+                // the new band (A2/A3 on HF/6m, A1 on 2m).
+                UpdateSunSdrStatusBarAntennaMenuVisibility();
 
                 //MW0LGE_21b
                 if (old_band != rx1_band)
@@ -45763,6 +45795,57 @@ namespace Thetis
             SetNewRXAntenna(1);
         }
 
+        // Relabel + filter the status-bar antenna dropdowns for SunSDR2 DX
+        // using the physical-ant convention:
+        //
+        //   menu item 20 / 16  -> slot 1 -> A1  (valid on 2m only)
+        //   menu item 19 / 15  -> slot 2 -> A2  (valid on HF/6m only)
+        //   menu item 18 / 17  -> slot 3 -> A3  (valid on HF/6m only)
+        //
+        // Drop is called on model init (once) to set the text, and on
+        // band change to toggle visibility. Non-SunSDR protocols keep
+        // whatever labels the designer gave them.
+        public void ConfigureSunSdrStatusBarAntennaMenu()
+        {
+            if (HardwareSpecific.Model != HPSDRModel.SUNSDR2DX) return;
+
+            // RX dropdown: item20 / item19 / item18 -> slots 1 / 2 / 3
+            toolStripMenuItem20.Text = SunSdrAntennaSpec.DisplayName(SunSdrAntenna.A1);
+            toolStripMenuItem19.Text = SunSdrAntennaSpec.DisplayName(SunSdrAntenna.A2);
+            toolStripMenuItem18.Text = SunSdrAntennaSpec.DisplayName(SunSdrAntenna.A3);
+            // TX dropdown: item16 / item15 / item17 -> slots 1 / 2 / 3
+            toolStripMenuItem16.Text = SunSdrAntennaSpec.DisplayName(SunSdrAntenna.A1);
+            toolStripMenuItem15.Text = SunSdrAntennaSpec.DisplayName(SunSdrAntenna.A2);
+            toolStripMenuItem17.Text = SunSdrAntennaSpec.DisplayName(SunSdrAntenna.A3);
+
+            UpdateSunSdrStatusBarAntennaMenuVisibility();
+        }
+
+        public void UpdateSunSdrStatusBarAntennaMenuVisibility()
+        {
+            if (HardwareSpecific.Model != HPSDRModel.SUNSDR2DX) return;
+
+            Band rxBand = RX1Band;
+            Band txBand = TXBand;
+
+            bool rxA1 = SunSdrAntennaSpec.IsValidForBand(SunSdrAntenna.A1, rxBand);
+            bool rxA2 = SunSdrAntennaSpec.IsValidForBand(SunSdrAntenna.A2, rxBand);
+            bool rxA3 = SunSdrAntennaSpec.IsValidForBand(SunSdrAntenna.A3, rxBand);
+            bool txA1 = SunSdrAntennaSpec.IsValidForBand(SunSdrAntenna.A1, txBand);
+            bool txA2 = SunSdrAntennaSpec.IsValidForBand(SunSdrAntenna.A2, txBand);
+            bool txA3 = SunSdrAntennaSpec.IsValidForBand(SunSdrAntenna.A3, txBand);
+
+            // RX: item20=A1 item19=A2 item18=A3
+            toolStripMenuItem20.Visible = rxA1;
+            toolStripMenuItem19.Visible = rxA2;
+            toolStripMenuItem18.Visible = rxA3;
+
+            // TX: item16=A1 item15=A2 item17=A3
+            toolStripMenuItem16.Visible = txA1;
+            toolStripMenuItem15.Visible = txA2;
+            toolStripMenuItem17.Visible = txA3;
+        }
+
         private void Console_Shown(object sender, EventArgs e)
         {
             //attempt to fix ampview on top issue
@@ -45788,6 +45871,11 @@ namespace Thetis
             toolStripStatusLabel_TXInhibit.Width = 18;
             toolStripStatusLabelRXAnt.Width = 90;
             toolStripStatusLabelTXAnt.Width = 90;
+
+            // SunSDR2 DX: relabel the status-bar antenna dropdowns from
+            // default "1 / 2 / 3" to "A1 / A2 / A3", and apply initial
+            // per-band visibility for the current RX / TX bands.
+            ConfigureSunSdrStatusBarAntennaMenu();
             toolStripStatusLabelAndromedaMulti.Width = 140;
 
             toolStripStatusLabel_N1MM.Width = 22;
@@ -46486,9 +46574,28 @@ namespace Thetis
                     if (!chkPower.Checked)
                         return;
 
-                    int ant = SetupForm != null ? SetupForm.GetRXAntenna(newBand) : 0;
-                    if (ant == 1 || ant == 2)
-                        NetworkIO.nativeSunSDRSetAntenna(ant);
+                    // Push only the direction that matches the current
+                    // MOX state. The shared 0x15 selector means pushing
+                    // the "other" direction here would stomp the live
+                    // antenna. The non-pushed direction takes effect on
+                    // the next MOX transition via UpdateAlexAntSelection.
+                    if (SetupForm != null)
+                    {
+                        if (!_mox)
+                        {
+                            SunSdrAntenna ant = (SunSdrAntenna)SetupForm.GetRXAntenna(newBand);
+                            int rxWire = SunSdrAntennaSpec.WireValueFor(ant, newBand, false);
+                            if (rxWire > 0)
+                                NetworkIO.nativeSunSDRSetAntenna(rxWire);
+                        }
+                        else
+                        {
+                            SunSdrAntenna ant = (SunSdrAntenna)SetupForm.GetTXAntenna(newBand);
+                            int txWire = SunSdrAntennaSpec.WireValueFor(ant, newBand, true);
+                            if (txWire > 0)
+                                NetworkIO.nativeSunSDRSetTxAntenna(txWire);
+                        }
+                    }
 
                     NetworkIO.nativeSunSDRSetMode((int)RX1DSPMode);
                     NetworkIO.VFOfreq(0, RX1DDSFreq, 0);

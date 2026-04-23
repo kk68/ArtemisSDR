@@ -623,6 +623,7 @@
     <Compile Include="CW\CWInput.cs" />
     <Compile Include="GlobalMouseHandler.cs" />
     <Compile Include="HPSDR\Alex.cs" />
+    <Compile Include="HPSDR\SunSdrAntenna.cs" />
     <Compile Include="audio.cs">
       <SubType>Code</SubType>
     </Compile>

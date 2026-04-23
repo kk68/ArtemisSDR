@@ -95,20 +95,22 @@ namespace Thetis
 			RxOnlyAnt[idx] = ant; 
 		} 
 
-		public void setTxAnt(Band band, byte ant) 
-		{ 
-			if ( ant > 3 ) 
-			{ 
-				ant = 1; 
-			} 
-			int idx = (int)band - (int)Band.B160M; 
+		public void setTxAnt(Band band, byte ant)
+		{
+			if ( ant > 3 )
+			{
+				ant = 1;
+			}
+			int idx = (int)band - (int)Band.B160M;
 			TxAnt[idx] = ant;
 
-            // SunSDR does not use the normal Alex bitfield push path for TX antenna
-            // reliably, so drive the native selector from the source-of-truth setter.
-            if (NetworkIO.CurrentRadioProtocol == RadioProtocol.SUNSDR && (ant == 1 || ant == 2))
-                NetworkIO.nativeSunSDRSetTxAntenna(ant);
-		} 
+            // Do NOT push to the wire here. SunSDR2 DX uses opcode 0x15 for
+            // both RX and TX antenna, so writing TX ant while the radio is
+            // in RX mode physically switches the live antenna and the user
+            // loses their current RX. Wire writes now go through the
+            // direction-and-MOX-aware paths in Setup (ProcessAlexAntRadioButton),
+            // band-change handlers, and UpdateAlexAntSelection on MOX edges.
+		}
 
         public static Band AntBandFromFreq(double freq)
         {
@@ -403,13 +405,35 @@ namespace Thetis
 				m_nOld_rx_out != rx_out ||
 				m_bOld_tx != tx ||
                 m_bOld_alex_enabled != alex_enabled)
-			{                             
+			{
                 if (NetworkIO.CurrentRadioProtocol == RadioProtocol.SUNSDR)
                 {
-                    if (!tx && rx_only_ant == 0 && (trx_ant == 1 || trx_ant == 2))
-                        NetworkIO.nativeSunSDRSetAntenna(trx_ant);
-                    else if (tx && (tx_ant == 1 || tx_ant == 2))
-                        NetworkIO.nativeSunSDRSetTxAntenna(tx_ant);
+                    // SunSDR2 DX uses a single antenna selector (0x15) for
+                    // both RX and TX; the radio applies whatever we last
+                    // wrote. Drive it from the direction (MOX) so the
+                    // live antenna matches the stored RX ant while in RX
+                    // and matches the stored TX ant while in TX. Use the
+                    // per-band RxAnt[idx] / TxAnt[idx] values directly —
+                    // NOT the Alex-derived `trx_ant`, which cross-couples
+                    // RX to TX via the legacy TRxAnt flag.
+                    //
+                    // Stored bytes ARE SunSdrAntenna enum values (1=A1,
+                    // 2=A2, 3=A3), translated to the wire value through
+                    // SunSdrAntennaSpec.WireValueFor.
+                    if (tx)
+                    {
+                        SunSdrAntenna ant = (SunSdrAntenna)TxAnt[idx];
+                        int wire = SunSdrAntennaSpec.WireValueFor(ant, band, true);
+                        if (wire > 0)
+                            NetworkIO.nativeSunSDRSetTxAntenna(wire);
+                    }
+                    else
+                    {
+                        SunSdrAntenna ant = (SunSdrAntenna)RxAnt[idx];
+                        int wire = SunSdrAntennaSpec.WireValueFor(ant, band, false);
+                        if (wire > 0)
+                            NetworkIO.nativeSunSDRSetAntenna(wire);
+                    }
                 }
                 else
                 {

@@ -507,7 +507,7 @@ namespace Thetis
 
             CurrentBand = TXBand;
             // see if we are in an amateur band; if not lookup using Alex function
-            if ((CurrentBand < Band.B160M) || (CurrentBand > Band.B6M))
+            if ((CurrentBand < Band.B160M) || (CurrentBand > Band.B2M))
                 CurrentBand = AntennaBandFromFreq(true);
 
             int idx = (int)CurrentBand - (int)Band.B160M;
@@ -516,7 +516,20 @@ namespace Thetis
                 Antenna = AntennaArrayByBand[idx];
                 if(Antenna != TXAntennaSent)
                 {
-                    toolStripStatusLabelTXAnt.Text = "Tx Ant " + Antenna.ToString();
+                    // On SunSDR2 DX the stored `Antenna` is a SunSdrAntenna
+                    // enum value (1=A1, 2=A2, 3=A3). Render as "Tx A2" etc.
+                    // using the EESDR physical name. The "Tx " prefix stays
+                    // so the user can tell the RX and TX status-bar labels
+                    // apart when they sit side by side.
+                    if (HardwareSpecific.Model == HPSDRModel.SUNSDR2DX)
+                    {
+                        toolStripStatusLabelTXAnt.Text = "Tx " + SunSdrAntennaSpec.DisplayName(
+                            (SunSdrAntenna)Antenna);
+                    }
+                    else
+                    {
+                        toolStripStatusLabelTXAnt.Text = "Tx Ant " + Antenna.ToString();
+                    }
                     TXAntennaSent = Antenna;
                 }
             }
@@ -575,7 +588,7 @@ namespace Thetis
             CurrentBand = RX1Band;
 
             // see if we are in an amateur band; if not lookup using Alex function
-            if ((CurrentBand < Band.B160M) || (CurrentBand > Band.B6M))
+            if ((CurrentBand < Band.B160M) || (CurrentBand > Band.B2M))
                 CurrentBand = AntennaBandFromFreq(false);
 
             // convert to int, 160m = index value 0
@@ -607,7 +620,21 @@ namespace Thetis
                             break;
                     }
                 else
-                    AntString = "Rx Ant " + Antenna.ToString();
+                {
+                    // SunSDR2 DX: stored `Antenna` is a SunSdrAntenna enum
+                    // value (1=A1, 2=A2, 3=A3). Render as "Rx A2" etc. The
+                    // "Rx " prefix stays so the user can tell RX and TX
+                    // status-bar labels apart when they sit side by side.
+                    if (HardwareSpecific.Model == HPSDRModel.SUNSDR2DX)
+                    {
+                        AntString = "Rx " + SunSdrAntennaSpec.DisplayName(
+                            (SunSdrAntenna)Antenna);
+                    }
+                    else
+                    {
+                        AntString = "Rx Ant " + Antenna.ToString();
+                    }
+                }
                 if(AntString != RXAntennaSentString)
                 {
                     toolStripStatusLabelRXAnt.Text = AntString;

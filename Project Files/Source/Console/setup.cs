@@ -583,6 +583,17 @@ namespace Thetis
             LogTool.AddLogEntry("        Setup applying settings...", "FORCEALL");
             ForceAllEvents();
 
+            // SunSDR2 DX antenna-tab layout + one-shot legacy→SunSdrAntenna
+            // migration. MUST run AFTER ForceAllEvents() — that call fires
+            // comboRadioModel_SelectedIndexChanged → initHPSDR(), which sets
+            // panelAlexRXXVRTControl.Visible = true. If we ran before that,
+            // initHPSDR() would re-show the middle RX-only XVTR checkbox
+            // grid we just hid.
+            if (HardwareSpecific.Model == HPSDRModel.SUNSDR2DX)
+            {
+                ConfigureSunSDRAntennaButtons();
+            }
+
             //model known, update anything that might have been initialsed without this being known
             if (console.psform != null) console.psform.UpdateWarningSetPk();
 
@@ -13262,6 +13273,234 @@ namespace Thetis
             return orig_state;
         }
 
+        // While this is true, CheckedChanged side effects from bulk
+        // radio-button state mutation (during migration + row layout)
+        // are suppressed in ProcessAlexAntRadioButton. Prevents a cascade
+        // of wire writes / console-side work during form construction,
+        // which hits paths that assume the radio is up and the console
+        // is fully initialised — both untrue during AfterConstructor.
+        private bool _suppressSunSdrAntCascades = false;
+
+        public bool SuppressSunSdrAntCascades
+        {
+            get { return _suppressSunSdrAntCascades; }
+        }
+
+        // SunSDR2 DX antenna layout — single source of truth for per-band
+        // validity, UI column assignment, and physical-name labels lives in
+        // SunSdrAntennaSpec. Every antenna-touching code path goes through
+        // it (setup form, bottom-left meter, wire writes).
+        //
+        // Physical column assignment:
+        //   button[0] = column 1 = A1 (2m only)
+        //   button[1] = column 2 = A2 (HF / 6m only)
+        //   button[2] = column 3 = A3 (HF / 6m only)
+        //
+        // Alex.RxAnt[idx] / TxAnt[idx] now store SunSdrAntenna enum values
+        // (A1=1, A2=2, A3=3) directly. A one-shot DB-flagged migration
+        // translates legacy "slot-index-1-based" storage into the new
+        // convention on first run.
+        //
+        // Also hides the legacy RX-only / XVTR checkbox grid and the
+        // "Do Not TX" row — neither is meaningful on this radio.
+        public void ConfigureSunSDRAntennaButtons()
+        {
+            // All radio-button state mutation below fires CheckedChanged,
+            // which would cascade through ProcessAlexAntRadioButton into
+            // Alex / console / native wire writes. At this point in the
+            // startup sequence the console is still being constructed and
+            // the radio is not connected — those side effects crash or
+            // leave half-initialised state. Suppress for the duration.
+            _suppressSunSdrAntCascades = true;
+            try
+            {
+                // One-shot legacy → SunSdrAntenna migration, flagged in DB
+                // so it runs exactly once per installation.
+                MigrateAntennaSelectionsIfNeeded();
+
+                for (int idx = 0; idx < _AlexRxAntButtons.Length; idx++)
+                {
+                    Band band = (Band)((int)Band.B160M + idx);
+                    ApplySunSdrAntennaRowLayout(_AlexRxAntButtons[idx], band);
+                    ApplySunSdrAntennaRowLayout(_AlexTxAntButtons[idx], band);
+                }
+            }
+            finally
+            {
+                _suppressSunSdrAntCascades = false;
+            }
+
+            // Column headers — logical A1 / A2 / A3 left-to-right.
+            // Note: label8/9/10 are in panelAlexTXAntControl (TX side) and
+            // label2/3/4 are in panelAlexRXAntControl (RX side); both get
+            // the same labels since button[n] means the same physical ant
+            // on both sides. Also bump their width so "A1"/"A2"/"A3"
+            // doesn't clip at the default 16px designer size.
+            SetAntColumnLabel(label8,  "A1");
+            SetAntColumnLabel(label9,  "A2");
+            SetAntColumnLabel(label10, "A3");
+            SetAntColumnLabel(label2,  "A1");
+            SetAntColumnLabel(label3,  "A2");
+            SetAntColumnLabel(label4,  "A3");
+
+            // Hide the middle RX-only / XVTR checkbox grid + its header.
+            panelAlexRXXVRTControl.Visible = false;
+
+            // Hide the "Do Not TX" row and force its flags off.
+            chkBlockTxAnt2.Visible = false;
+            chkBlockTxAnt3.Visible = false;
+            labelTS257.Visible = false;
+            if (chkBlockTxAnt2.Checked) chkBlockTxAnt2.Checked = false;
+            if (chkBlockTxAnt3.Checked) chkBlockTxAnt3.Checked = false;
+
+            // MeterManager legacy display names (A1/A2/A3 in column order).
+            RXAntChk1Name = "A1";
+            RXAntChk2Name = "A2";
+            RXAntChk3Name = "A3";
+        }
+
+        private static void SetAntColumnLabel(LabelTS lbl, string text)
+        {
+            lbl.Text = text;
+            // Designer sets these at 16x16 which clips "A2"/"A3". Bump to 20
+            // and slide left 2px so the label stays centered over its button.
+            if (lbl.Width < 20)
+            {
+                lbl.Left -= 2;
+                lbl.Width = 20;
+            }
+        }
+
+        // Per-band visibility + default selection for one antenna row
+        // (either the RX side or the TX side — same rules on both).
+        private static void ApplySunSdrAntennaRowLayout(RadioButtonTS[] btns, Band band)
+        {
+            // Show exactly the columns that are valid for this band.
+            SunSdrAntenna[] valid = SunSdrAntennaSpec.ValidForBand(band);
+            for (int col = 0; col < 3; col++)
+            {
+                btns[col].Visible = ContainsColumn(valid, col);
+            }
+
+            // Make sure something valid is checked. If nothing is, or
+            // something invalid is, snap to DefaultForBand.
+            SunSdrAntenna checkedAnt = SunSdrAntenna.None;
+            for (int col = 0; col < 3; col++)
+            {
+                if (!btns[col].Checked) continue;
+                SunSdrAntenna a = SunSdrAntennaSpec.FromColumnIndex(col);
+                if (SunSdrAntennaSpec.IsValidForBand(a, band))
+                {
+                    checkedAnt = a;
+                }
+                else
+                {
+                    btns[col].Checked = false;
+                }
+            }
+
+            if (checkedAnt == SunSdrAntenna.None)
+            {
+                SunSdrAntenna dflt = SunSdrAntennaSpec.DefaultForBand(band);
+                int dfltCol = SunSdrAntennaSpec.ColumnIndexFor(dflt);
+                if (dfltCol >= 0 && dfltCol < 3)
+                {
+                    btns[dfltCol].Checked = true;
+                }
+            }
+        }
+
+        private static bool ContainsColumn(SunSdrAntenna[] valid, int col)
+        {
+            foreach (var a in valid)
+            {
+                if (SunSdrAntennaSpec.ColumnIndexFor(a) == col) return true;
+            }
+            return false;
+        }
+
+        private const string SUNSDR_ANT_MIGRATION_KEY = "sunsdr_ant_scheme_v2_migrated";
+
+        // One-shot migration: translate the pre-SunSdrAntenna legacy radio-
+        // button "slot-index" convention into the physical-column convention
+        // enforced by ApplySunSdrAntennaRowLayout. Runs exactly once per
+        // installation — guarded by a DB key that persists via DB.SaveVarsDictionary.
+        //
+        // Pre-migration convention (Artemis ≤ 2.0.8 development builds):
+        //   HF rows: button[0] = Thetis "Ant 1" (SunSDR A2)
+        //            button[1] = Thetis "Ant 2" (SunSDR A3)
+        //            button[2] = Thetis "XVTR" (invalid on SunSDR)
+        //   2m row:  any of the three buttons could be checked, often
+        //            button[2] (slot 3 = A1 under the very brief in-progress
+        //            scheme) — treat all as "force A1".
+        //
+        // Post-migration convention:
+        //   button[0] = A1 (valid only on 2m)
+        //   button[1] = A2 (valid only on HF/6m)
+        //   button[2] = A3 (valid only on HF/6m)
+        private void MigrateAntennaSelectionsIfNeeded()
+        {
+            var opts = DB.GetVarsDictionary("Options");
+            string flag;
+            if (opts.TryGetValue(SUNSDR_ANT_MIGRATION_KEY, out flag) && flag == "True")
+            {
+                return; // already migrated
+            }
+
+            for (int idx = 0; idx < _AlexRxAntButtons.Length; idx++)
+            {
+                Band band = (Band)((int)Band.B160M + idx);
+                MigrateLegacyAntRow(_AlexRxAntButtons[idx], band);
+                MigrateLegacyAntRow(_AlexTxAntButtons[idx], band);
+            }
+
+            opts[SUNSDR_ANT_MIGRATION_KEY] = "True";
+            DB.SaveVarsDictionary("Options", ref opts, true);
+            // Flush to disk right away so a crash before the next normal
+            // save doesn't leave the flag in-memory only and re-run
+            // migration on the already-migrated buttons next launch.
+            DB.WriteDB();
+        }
+
+        private static void MigrateLegacyAntRow(RadioButtonTS[] btns, Band band)
+        {
+            // Snapshot which button was checked under the legacy convention
+            // before we clobber the state.
+            int legacyChecked = -1;
+            for (int i = 0; i < btns.Length; i++)
+            {
+                if (btns[i].Checked) { legacyChecked = i; break; }
+            }
+
+            // Clear everything.
+            for (int i = 0; i < btns.Length; i++) btns[i].Checked = false;
+
+            if (band == Band.B2M)
+            {
+                // 2m → always A1 (button 0). Legacy 2m state is ambiguous;
+                // A1 is the only physically valid selection.
+                btns[0].Checked = true;
+                return;
+            }
+
+            // HF / 6m.
+            // Legacy button[0] = SunSDR A2 → new button[1] (A2)
+            // Legacy button[1] = SunSDR A3 → new button[2] (A3)
+            // Legacy button[2] = XVTR (invalid) → new button[1] (A2 default)
+            switch (legacyChecked)
+            {
+                case 1:
+                    btns[2].Checked = true; // A3
+                    break;
+                case 0:
+                case 2:
+                case -1:
+                default:
+                    btns[1].Checked = true; // A2 (default)
+                    break;
+            }
+        }
+
         private void radAlexR_160_CheckedChanged(object sender, System.EventArgs e)
         {
             if (radAlexR2_160.Checked)
@@ -13794,6 +14033,15 @@ namespace Thetis
             RadioButtonTS radBtnTS = (RadioButtonTS)sender;
             if (!radBtnTS.Checked) return;
 
+            // Bulk SunSDR antenna-button init (migration + row layout) sets
+            // button state programmatically during form construction. Those
+            // changes must not cascade into wire writes / console side
+            // effects because the radio link isn't up and the console isn't
+            // finished initialising. The flag is set only around
+            // ConfigureSunSDRAntennaButtons; normal user clicks are not
+            // affected.
+            if (_suppressSunSdrAntCascades) return;
+
             int idx = (int)band - (int)Band.B160M;
 
             RadioButtonTS[] buttons = is_xmit ? _AlexTxAntButtons[idx] : _AlexRxAntButtons[idx];
@@ -13837,12 +14085,38 @@ namespace Thetis
                 handleRXAntennaChangeForNF(band);
             }
 
-            console.AlexAntCtrlEnabled = true; // need side effect of prop set to push data down to C code 
+            console.AlexAntCtrlEnabled = true; // need side effect of prop set to push data down to C code
 
             if (NetworkIO.CurrentRadioProtocol == RadioProtocol.SUNSDR)
             {
-                if (is_xmit) NetworkIO.nativeSunSDRSetTxAntenna(ant);
-                else         NetworkIO.nativeSunSDRSetAntenna(ant);
+                // SunSDR2 DX uses a single physical antenna selector (opcode
+                // 0x15) for both RX and TX. Wire writes must match the live
+                // direction (MOX state) — otherwise editing TX ant during
+                // RX would visibly switch the antenna and vice versa.
+                //
+                // Write only when:
+                //   - the edited band is the currently-tuned band, AND
+                //   - the edit direction matches the current MOX state
+                //     (TX edits while transmitting, RX edits while
+                //     receiving).
+                // Any other edit stays purely in per-band storage and
+                // takes effect on the next matching band/MOX transition.
+                Band activeBand = is_xmit ? console.TXBand : console.RX1Band;
+                bool mox = console.MOX;
+                if (band == activeBand && is_xmit == mox)
+                {
+                    // Our `ant` here is the 1-based button-column index
+                    // (1 = column 1 = A1, 2 = A2, 3 = A3). Translate to
+                    // SunSdrAntenna, then to wire. Column-index 0-based is
+                    // `ant - 1`.
+                    SunSdrAntenna physical = SunSdrAntennaSpec.FromColumnIndex(ant - 1);
+                    int wireAnt = SunSdrAntennaSpec.WireValueFor(physical, band, is_xmit);
+                    if (wireAnt > 0)
+                    {
+                        if (is_xmit) NetworkIO.nativeSunSDRSetTxAntenna(wireAnt);
+                        else         NetworkIO.nativeSunSDRSetAntenna(wireAnt);
+                    }
+                }
             }
 
             // changed notification
@@ -13927,7 +14201,7 @@ namespace Thetis
         // this must also cancel any ext input check boxes
         public void SetRXAntenna(int Antenna, Band band)
         {
-            if ((band >= Band.B160M) && (band <= Band.B6M))
+            if ((band >= Band.B160M) && (band <= Band.B2M))
             {
                 int idx = (int)band - (int)Band.B160M;
                 int Btn;
@@ -13941,10 +14215,19 @@ namespace Thetis
                         buttons[Btn].Checked = false;
                 }
 
-                CheckBoxTS[] cboxes = _AlexRxOnlyAntCheckBoxes[idx];
-                for (Btn = 0; Btn < 3; Btn++)
+                // _AlexRxOnlyAntCheckBoxes is sized for HF+6m only (11 rows,
+                // 160m..6m). The method's range was widened to include B2M
+                // so the bottom-left meter and band-change restore can call
+                // it on 2m, but the RX-only XVTR checkbox grid doesn't exist
+                // for 2m — skip the access to avoid IndexOutOfRangeException.
+                if (band >= Band.B160M && band <= Band.B6M
+                    && idx < _AlexRxOnlyAntCheckBoxes.Length)
                 {
-                    cboxes[Btn].Checked = false;
+                    CheckBoxTS[] cboxes = _AlexRxOnlyAntCheckBoxes[idx];
+                    for (Btn = 0; Btn < 3; Btn++)
+                    {
+                        cboxes[Btn].Checked = false;
+                    }
                 }
             }
         }
@@ -13969,7 +14252,7 @@ namespace Thetis
         // only select antennas 2 or 3 if not blocked by "do not TX" check boxes
         public void SetTXAntenna(int Antenna, Band band)
         {
-            if ((band >= Band.B160M) && (band <= Band.B6M))
+            if ((band >= Band.B160M) && (band <= Band.B2M))
             {
                 int idx = (int)band - (int)Band.B160M;
                 int Btn;
@@ -14003,8 +14286,14 @@ namespace Thetis
 
                     updateChangedAntAlexButton(true, idx, band);
 
-                    if (NetworkIO.CurrentRadioProtocol == RadioProtocol.SUNSDR)
-                        NetworkIO.nativeSunSDRSetTxAntenna(Antenna);
+                    // Do NOT push to the SunSDR wire here. Setting a radio
+                    // button's Checked above already triggered
+                    // radAlexT_*_CheckedChanged -> ProcessAlexAntRadioButton
+                    // which applies the correct MOX-gated wire write. Firing
+                    // nativeSunSDRSetTxAntenna again here was unconditional,
+                    // bypassed the MOX gate, and was the last remaining path
+                    // that moved the live RX antenna when the user clicked
+                    // a Tx Ant button in the bottom-left meter.
                 }
             }
         }
@@ -20472,6 +20761,11 @@ namespace Thetis
                     break;
             }
 
+            if (HardwareSpecific.Model == HPSDRModel.SUNSDR2DX)
+            {
+                ConfigureSunSDRAntennaButtons();
+            }
+
             bool user_adjusted = sender != this;
 
             setupADCRadioButtions();
@@ -23997,9 +24291,18 @@ namespace Thetis
 
             if (NetworkIO.CurrentRadioProtocol == RadioProtocol.SUNSDR)
             {
-                int ant = GetTXAntenna(newBand);
-                if (ant == 1 || ant == 2)
-                    NetworkIO.nativeSunSDRSetTxAntenna(ant);
+                // Only push the TX ant to the wire if we are currently
+                // transmitting; otherwise the stored TX ant takes effect
+                // on the next PTT (via UpdateAlexAntSelection on MOX edge).
+                // Writing it during RX would switch the live RX antenna
+                // because the radio uses 0x15 as a shared selector.
+                if (console != null && console.MOX)
+                {
+                    SunSdrAntenna ant = (SunSdrAntenna)GetTXAntenna(newBand);
+                    int wireAnt = SunSdrAntennaSpec.WireValueFor(ant, newBand, true);
+                    if (wireAnt > 0)
+                        NetworkIO.nativeSunSDRSetTxAntenna(wireAnt);
+                }
 
                 if (console != null && console.PowerOn)
                 {

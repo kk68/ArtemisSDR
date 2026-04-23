@@ -9681,6 +9681,65 @@ namespace Thetis
                 }
                 //
 
+                // SunSDR2 DX antenna-meter overlay. Restrict the bottom-left
+                // button bar to the antennas that physically exist on this
+                // band, using EESDR terminology (A1 / A2 / A3).
+                //
+                // Slot-to-physical-ant mapping is inherited from the Setup
+                // tab layout (SunSdrAntennaSpec.ColumnIndexFor):
+                //   RX slot 0 / TX slot 6 -> A1  (2m only)
+                //   RX slot 1 / TX slot 7 -> A2  (HF/6m only)
+                //   RX slot 2 / TX slot 8 -> A3  (HF/6m only)
+                //
+                // Aux slots (3, 4, 5 = BYP / EXT1 / XVTR) and the rx/tx
+                // "different-ant" mux indicator (slot 9) don't apply on this
+                // radio — hidden.
+                //
+                // Labels are just "A1" / "A2" / "A3" — colour coding (green
+                // for RX, red for TX) distinguishes direction, no prefix.
+                //
+                // Gate on HardwareSpecific.Model (set from DB during Setup
+                // construction) rather than NetworkIO.CurrentRadioProtocol
+                // (only flipped to SUNSDR once the radio is actually
+                // connected — too late for the first meter render).
+                if (HardwareSpecific.Model == HPSDRModel.SUNSDR2DX)
+                {
+                    bool isRx2m = (rx_band == Band.B2M);
+                    bool isTx2m = (tx_band == Band.B2M);
+                    SunSdrAntenna[] rxValid = SunSdrAntennaSpec.ValidForBand(rx_band);
+                    SunSdrAntenna[] txValid = SunSdrAntennaSpec.ValidForBand(tx_band);
+
+                    // RX slots 0 / 1 / 2 = A1 / A2 / A3
+                    ConfigureSunSDRAntMeterSlot(1, 0, "A1", SunSdrAntenna.A1, rxValid,
+                                                 System.Drawing.Color.LimeGreen);
+                    ConfigureSunSDRAntMeterSlot(1, 1, "A2", SunSdrAntenna.A2, rxValid,
+                                                 System.Drawing.Color.LimeGreen);
+                    ConfigureSunSDRAntMeterSlot(1, 2, "A3", SunSdrAntenna.A3, rxValid,
+                                                 System.Drawing.Color.LimeGreen);
+
+                    // On 2m: GetRXAntState returns false because it's
+                    // bounded to B160M..B6M. Force the A1 indicator on.
+                    if (isRx2m) SetOn(1, 0, true);
+
+                    // Aux slots — never apply on SunSDR.
+                    SetVisible(1, 3, false);
+                    SetVisible(1, 4, false);
+                    SetVisible(1, 5, false);
+
+                    // TX slots 6 / 7 / 8 = A1 / A2 / A3
+                    ConfigureSunSDRAntMeterSlot(1, 6, "A1", SunSdrAntenna.A1, txValid,
+                                                 System.Drawing.Color.Red);
+                    ConfigureSunSDRAntMeterSlot(1, 7, "A2", SunSdrAntenna.A2, txValid,
+                                                 System.Drawing.Color.Red);
+                    ConfigureSunSDRAntMeterSlot(1, 8, "A3", SunSdrAntenna.A3, txValid,
+                                                 System.Drawing.Color.Red);
+                    if (isTx2m) SetOn(1, 6, true);
+
+                    // RX/TX-different swap indicator: disabled (SunSDR
+                    // always supports independent RX / TX antennas).
+                    SetVisible(1, 9, false);
+                }
+
                 int total_buttons = 0;
                 for (int i = 0; i < Buttons; i++)
                 {
@@ -9711,6 +9770,28 @@ namespace Thetis
                 tmp = char.ToUpper(tmp[0]) + tmp.Substring(1);
                 if (tmp == "Byps") tmp = "Bypass";
                 return tmp;
+            }
+
+            // Configure a single antenna-meter slot for the SunSDR path.
+            // Sets the label text, font colour, and visibility based on
+            // whether the given physical antenna is valid for the current
+            // band. The "on" state is left as whatever the legacy code
+            // above set via GetRXAntState / GetTXAntState — callers can
+            // override for edge cases like 2m where GetRXAntState is
+            // bounded out of range.
+            private void ConfigureSunSDRAntMeterSlot(
+                int bank, int slot, string label,
+                SunSdrAntenna physicalAnt, SunSdrAntenna[] validForBand,
+                System.Drawing.Color colour)
+            {
+                bool valid = false;
+                foreach (var a in validForBand)
+                {
+                    if (a == physicalAnt) { valid = true; break; }
+                }
+                SetText(bank, slot, label);
+                SetFontColour(bank, slot, colour);
+                SetVisible(bank, slot, valid);
             }
             public void AntennasChanged(Band rx1_band, Band tx_band, double vfoa_freq, double tx_freq, int rxtx_swap)
             {
