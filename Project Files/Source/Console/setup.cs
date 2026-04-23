@@ -36595,6 +36595,47 @@ namespace Thetis
                     break;
             }
 
+            // Auto-sync the Radio Model dropdown to match the selected
+            // discovered radio's family, so a user who picked the wrong
+            // model from the dropdown before running Discovery doesn't
+            // end up talking to the radio with the wrong protocol.
+            //
+            // Example of the bug this closes: pick "SUNSDR2-PRO" from the
+            // dropdown → click Discover → the multi-family probe finds a
+            // SunSDR2 DX → user selects it in the list → without this
+            // sync, Model stays on "SUNSDR2-PRO" and Artemis tries to
+            // drive a DX with the PRO wire profile, which fails.
+            //
+            // Discovery result is the source of truth when Discovery is
+            // used; the dropdown is the fallback for manual entry. We
+            // only touch the dropdown if the selected discovered radio
+            // clearly belongs to a different model than what's chosen.
+            RadioInfo details = ucRadioList_Radios.SelectedRadioDetails;
+            if (details != null && !string.IsNullOrWhiteSpace(details.DisplayName))
+            {
+                string dn = details.DisplayName;
+                string targetModel = null;
+                if (dn.IndexOf("PRO", StringComparison.OrdinalIgnoreCase) >= 0
+                    && dn.IndexOf("SunSDR", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    targetModel = "SUNSDR2-PRO";
+                }
+                else if (dn.IndexOf("DX", StringComparison.OrdinalIgnoreCase) >= 0
+                         && dn.IndexOf("SunSDR", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    targetModel = "SUNSDR2-DX";
+                }
+
+                if (targetModel != null
+                    && comboRadioModel.Items.Contains(targetModel)
+                    && !string.Equals(comboRadioModel.Text, targetModel, StringComparison.OrdinalIgnoreCase))
+                {
+                    // Setting .Text cascades through comboRadioModel_SelectedIndexChanged
+                    // -> HardwareSpecific.Model update -> initHPSDR -> all downstream UI.
+                    comboRadioModel.Text = targetModel;
+                }
+            }
+
             UpdateDDCTab();
             InitAudioTab();
         }

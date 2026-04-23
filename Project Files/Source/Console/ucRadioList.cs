@@ -365,6 +365,12 @@ HPSDRHW hw = (HPSDRHW)0;
                 }
 
                 info.DeviceType = hw;
+                // Propagate the discovery-time DisplayName ("SunSDR2 DX" /
+                // "SunSDR2 PRO" / etc.) out to callers so they can auto-sync
+                // the Radio Model dropdown to match the selected discovered
+                // radio. Without this, HPSDRHW.SunSDR doesn't distinguish DX
+                // from PRO — the specific model only lives in the string.
+                info.DisplayName = model;
 
                 info.CodeVersion = item.RadioCodeVersion;
                 info.BetaVersion = item.RadioBetaVersion;
