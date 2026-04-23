@@ -422,7 +422,7 @@ enum HPSDRHW
 	HermesLite = 6,  // MI0BOT: HL2 allocated number
 	Saturn = 10,     // ANAN-G2: added G8NJJ
 	SaturnMKII = 11, // ANAN-G2: MKII board
-	SunSDR = 20      // SunSDR2 native
+	SunSDR = 20      // SunSDR2 DX/PRO native
 };
 
 enum _HPSDRModel //from enums.cs

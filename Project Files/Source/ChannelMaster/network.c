@@ -102,10 +102,14 @@ int nativeInitMetis(char* netaddr, int port, char* localaddr, int localport, int
 
 	/* SunSDR native protocol — bypass HPSDR socket setup entirely.
 	 *
+	 * Honour the radio's configured control port (from the Setup
+	 * `Fixed listen port` field or the discovered RadioInfo) so
+	 * operators who changed the port from the default can still connect.
+	 * Stream port is control port + 1, matching the original SunSDR2 DX
+	 * 50001/50002 pairing convention. Closes issue #15.
+	 *
 	 * Prefer the explicit UI-selected model when choosing defaults so DX
-	 * and PRO each get their own bootstrap profile. If the operator (or
-	 * discovery result) provides a control port, honour it and derive the
-	 * stream port from that runtime port pair. */
+	 * and PRO each get their own bootstrap profile and default port pair. */
 	if (protocol == SUNSDR) {
 		int default_ctrl = (model_id == HPSDRModel_SUNSDR2PRO) ? 50002 : SUNSDR_CONTROL_PORT;
 		int default_stream = (model_id == HPSDRModel_SUNSDR2PRO) ? 50003 : SUNSDR_STREAM_PORT;

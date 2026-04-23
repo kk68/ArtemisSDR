@@ -36,10 +36,15 @@ namespace Thetis
         public const int DefaultControlPort = 50001;
         private const int QueryPacketLength = 24;
 
-        // ExpertSDR3 probes several SunSDR families by varying byte 0 while
-        // keeping bytes 1..3 as `ff 00 1a`. Confirmed:
+        // Query magic: the original DX-only path used `32 ff 00 1a`.
+        // The `1a` byte is understood to be a model-family selector
+        // (confirmed 1a == SunSDR2 DX). ExpertSDR3 probes several SunSDR
+        // families by varying byte 0 while keeping bytes 1..3 as `ff 00 1a`.
+        // Confirmed:
         //   0x32 = SunSDR2 DX
         //   0x01 = SunSDR2 PRO
+        // Additional family bytes are probed so older SunSDR2 variants can
+        // at least appear in the Discover list if they respond on the wire.
         private static readonly byte[] QueryFamilyBytes = new byte[] { 0x32, 0x01, 0x42, 0x22, 0x12, 0x03 };
 
         private static string getDisplayName(byte familyByte)
@@ -114,6 +119,11 @@ namespace Thetis
                      * responds from its listen port which equals our target. */
                     if (src.Port != targetPort) continue;
 
+                    // Byte 0 is the family byte we varied in the query.
+                    // Byte 3 remains the model-family selector (0x1a confirmed
+                    // == SunSDR2 DX/PRO discovery family). Surface both via
+                    // Debug so we can tell what models are being discovered
+                    // on different setups.
                     byte familyByte = rxBuf[0];
                     byte modelByte = rxBuf[3];
                     System.Diagnostics.Debug.WriteLine(
@@ -189,6 +199,10 @@ namespace Thetis
 
         private static bool isSunSDRDiscoveryReply(byte[] buf)
         {
+            // Reply magic: `XX ff 01 1a`. The original DX path only required
+            // `32 ff 01` because the fourth model byte could vary by radio
+            // family. For multi-family probing, accept any byte 0 but keep the
+            // common `ff 01 1a` signature.
             return buf != null &&
                    buf.Length >= QueryPacketLength &&
                    buf[1] == 0xff &&
