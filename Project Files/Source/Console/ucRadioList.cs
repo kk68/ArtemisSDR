@@ -360,7 +360,7 @@ HPSDRHW hw = (HPSDRHW)0;
                     }
                     catch
                     {
-                        hw = (HPSDRHW)0;
+                        hw = model.StartsWith("SunSDR", StringComparison.OrdinalIgnoreCase) ? HPSDRHW.SunSDR : (HPSDRHW)0;
                     }
                 }
 
@@ -632,7 +632,7 @@ HPSDRHW hw = (HPSDRHW)0;
             item.NicStatus = nic.NicStatus;
             item.NicMtu = nic.Mtu;
 
-            item.RadioModel = radio.DeviceType.ToString();
+            item.RadioModel = string.IsNullOrWhiteSpace(radio.DisplayName) ? radio.DeviceType.ToString() : radio.DisplayName;
             item.RadioIp = (radioIp != null) ? radioIp.ToString() : "";
             item.RadioPort = port;
             item.RadioProtocol = radio.Protocol;

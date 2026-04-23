@@ -1,6 +1,6 @@
 /*  sunsdr.c
 
-SunSDR2 DX native protocol implementation for Thetis.
+SunSDR2 native protocol implementation for Thetis.
 
 All SunSDR-specific protocol logic is contained in this file.
 This includes: discovery, bootstrap, power on/off, frequency,
@@ -56,6 +56,11 @@ static void sunsdr_build_tx_packet(unsigned char* buf, unsigned int seq, const d
 static void sunsdr_send_tx_packet(const double* iq);
 static struct sockaddr_in sunsdr_stream_dest(void);
 static void sunsdr_dbg_note_tx_packet(unsigned int seq);
+static unsigned char sunsdr_magic0(void);
+static int sunsdr_is_pro(void);
+static int sunsdr_freq_is_vhf(int freqHz);
+static const char* sunsdr_state_sync_template_hex(void);
+static const sunsdr_macro_step_t* sunsdr_power_on_macro(void);
 
 /* sunsdr_debug.log writer (sdr_logf path) and per-attempt IQ dumps.
  * Both disabled in production. Flip to 1 only when actively
@@ -66,6 +71,16 @@ static void sunsdr_dbg_note_tx_packet(unsigned int seq);
 /* Global SunSDR session state — moved above the iq_dump / tx_pace
  * helpers which need sdr.currentPTT, sdr.streamSock, sdr.txSeq, etc. */
 static sunsdr_state_t sdr;
+
+static unsigned char sunsdr_magic0(void)
+{
+    return (sdr.profile != NULL) ? sdr.profile->magic0 : SUNSDR_MAGIC_0;
+}
+
+static int sunsdr_is_pro(void)
+{
+    return sdr.profile != NULL && sdr.profile->variant == SUNSDR_VARIANT_PRO;
+}
 
 /* TX IQ ground-truth recorder.
  *
@@ -1013,7 +1028,7 @@ static void sunsdr_try_parse_identity_011a(const unsigned char* data, int len, c
         return;
     }
 
-    if (data[0] != 0x32 || data[1] != 0xFF || data[2] != 0x01 || data[3] != 0x1A) {
+    if (data[0] != sunsdr_magic0() || data[1] != 0xFF || data[2] != 0x01 || data[3] != 0x1A) {
         return;
     }
 
@@ -1041,7 +1056,7 @@ static void sunsdr_try_parse_serial_from_fwmgr(const unsigned char* data, int le
         return;
     }
 
-    if (data[0] != 0x32 || data[1] != 0xFF || data[2] != 0x1A || data[4] != 0x20 || data[5] != 0x00) {
+    if (data[0] != sunsdr_magic0() || data[1] != 0xFF || data[2] != 0x1A || data[4] != 0x20 || data[5] != 0x00) {
         return;
     }
 
@@ -1108,15 +1123,24 @@ static void sunsdr_cache_identity_candidate(const unsigned char* data, int len, 
     }
 }
 
-/* ========== RX IQ rate ========== */
-/*
- * SunSDR delivers native 312,500 Hz IQ (200 complex samples per 0xFE packet).
- * We feed xrouter directly at that rate — WDSP runs natively at 312.5 kHz
- * and rmatch handles the final 312500 → 48000 Hz drop to audio. No
- * intermediate upsample stage; removed 2026-04-22 on feature/native-312k-rate
- * to eliminate the linear-interp resampler that was aliasing strong
- * out-of-window signals into the display band (GH #26).
- */
+/* ========== Resampler: 39.0625 kHz packet IQ → Thetis RX rate ========== */
+
+/* DX now feeds xrouter natively at 312.5 kHz (upstream v2.0.8 path).
+ * PRO still needs the older 39.0625 kHz -> 384 kHz upsample stage to
+ * keep FM audio correct. Keep the resampler only for non-native-rate
+ * profiles. */
+#define SUNSDR_TARGET_RATE   384000.0
+#define SUNSDR_RESAMPLE_MAX  2048 /* 200 * 384000 / 39062.5 = 1966.08 */
+
+typedef struct _sunsdr_resampler_state
+{
+    double phase;
+    double prev_I;
+    double prev_Q;
+    double out[SUNSDR_RESAMPLE_MAX * 2];
+} sunsdr_resampler_state_t;
+
+static sunsdr_resampler_state_t resampler[2];
 
 /*
  * TX IQ stream rate. From live ExpertSDR3 voice MOX capture, the host sends
@@ -1131,6 +1155,61 @@ static void sunsdr_cache_identity_candidate(const unsigned char* data, int len, 
 #define SUNSDR_TX_OUTPUT_RATE  39062.5
 #define SUNSDR_TX_RESAMPLE_STEP (SUNSDR_TX_INPUT_RATE / SUNSDR_TX_OUTPUT_RATE)  /* ~4.9152 */
 
+/*
+ * Resample nsamples complex pairs from in[] to resample_out[].
+ * Returns number of complex output samples produced.
+ * Uses linear interpolation with state preserved across calls.
+ */
+static int sunsdr_resample(int source, const double* in, int nsamples)
+{
+    int out_count = 0;
+    int i;
+    sunsdr_resampler_state_t* rs = &resampler[source];
+    double prev_I = rs->prev_I;
+    double prev_Q = rs->prev_Q;
+    double native_rate = (sdr.profile != NULL && sdr.profile->rxNativeRate > 1.0)
+        ? sdr.profile->rxNativeRate
+        : 39062.5;
+    double resample_step = native_rate / SUNSDR_TARGET_RATE;
+
+    for (i = 0; i < nsamples; i++) {
+        double cur_I = in[2 * i + 0];
+        double cur_Q = in[2 * i + 1];
+
+        /* Emit output samples while phase < 1.0 (we're within this input interval) */
+        while (rs->phase < 1.0 && out_count < SUNSDR_RESAMPLE_MAX) {
+            double frac = rs->phase;
+            rs->out[2 * out_count + 0] = prev_I + frac * (cur_I - prev_I);
+            rs->out[2 * out_count + 1] = prev_Q + frac * (cur_Q - prev_Q);
+            out_count++;
+            rs->phase += resample_step;
+        }
+        rs->phase -= 1.0;
+
+        prev_I = cur_I;
+        prev_Q = cur_Q;
+    }
+
+    rs->prev_I = prev_I;
+    rs->prev_Q = prev_Q;
+
+    return out_count;
+}
+
+static int sunsdr_rx_uses_native_router_rate(void)
+{
+    return sdr.profile != NULL && fabs(sdr.profile->rxNativeRate - 312500.0) < 1.0;
+}
+
+static int sunsdr_rx_router_feed_size(void)
+{
+    return sunsdr_rx_uses_native_router_rate() ? SUNSDR_IQ_COMPLEX_PER_PKT : 1966;
+}
+
+static double sunsdr_rx_packet_rate(void)
+{
+    return sunsdr_rx_uses_native_router_rate() ? 1562.5 : 195.3125;
+}
 /* ========== Helpers ========== */
 
 static const double NORM = 1.0 / 2147483648.0;
@@ -1452,7 +1531,7 @@ static int sunsdr_quantize24(double sample)
 static void sunsdr_build_iq_header(unsigned char* buf, int opcode, unsigned int seq, unsigned char byte8, unsigned char byte9)
 {
     memset(buf, 0, SUNSDR_IQ_PKT_SIZE);
-    buf[0] = SUNSDR_MAGIC_0;
+    buf[0] = sunsdr_magic0();
     buf[1] = SUNSDR_MAGIC_1;
     buf[2] = (unsigned char)opcode;
     buf[3] = 0xFF;
@@ -1874,11 +1953,20 @@ static int sunsdr_parse_hex(const char* hex, unsigned char* buf, int maxlen)
     return len;
 }
 
+static void sunsdr_patch_magic(unsigned char* pkt, int len)
+{
+    if (pkt != NULL && len > 0) {
+        pkt[0] = sunsdr_magic0();
+    }
+}
+
 static void sunsdr_send_hex_pkt_u8(const char* hex, int offset, unsigned char value)
 {
     unsigned char pkt[128];
     unsigned char reply[128];
     int len = sunsdr_parse_hex(hex, pkt, (int)sizeof(pkt));
+
+    sunsdr_patch_magic(pkt, len);
 
     if (offset >= 0 && offset < len)
         pkt[offset] = value;
@@ -1894,6 +1982,8 @@ static void sunsdr_send_hex_pkt(const char* hex, int len_hint)
 
     if (len_hint > 0 && len_hint < len)
         len = len_hint;
+
+    sunsdr_patch_magic(pkt, len);
 
     sunsdr_send_ctrl_and_recv(pkt, len, reply, (int)sizeof(reply));
 }
@@ -1947,7 +2037,7 @@ static void sunsdr_drain_control_socket(const char* label)
 static void sunsdr_build_header(unsigned char* buf, int opcode, int sub, int decl_len)
 {
     memset(buf, 0, SUNSDR_CTL_HDR_SIZE);
-    buf[0] = SUNSDR_MAGIC_0;
+    buf[0] = sunsdr_magic0();
     buf[1] = SUNSDR_MAGIC_1;
     buf[2] = (unsigned char)opcode;
     buf[3] = 0x00;
@@ -2120,6 +2210,9 @@ static void sunsdr_send_zero_cmd(int opcode)
 static const char* SUNSDR_STATE_SYNC_TEMPLATE_HEX =
     "32ff01003200000000000100000000000000320000003200000032000000320000003200000032000000320000003200000000000000010003000300322af87f000028f8";
 
+static const char* SUNSDR_PRO_STATE_SYNC_TEMPLATE_HEX =
+    "32ff01003200000000000100000000000000140000001400000014000000140000001400000014000000140000001400000000000000010000000000a23cfc7f00008859";
+
 static const char* SUNSDR_CONFIG_BLOCK_TEMPLATE_HEX =
     "32ff20003400000000000100000000000000010000000100000000000000000000006400000000000000000000001e000000bc02000007000000640000002c01000064000000";
 
@@ -2213,7 +2306,10 @@ static void sunsdr_send_band_change_prelude(int toVhf)
 
 static void sunsdr_send_state_sync_count(int rx_count)
 {
-    sunsdr_send_hex_pkt_u8(SUNSDR_STATE_SYNC_TEMPLATE_HEX, 0x36, (unsigned char)rx_count);
+    if (sunsdr_is_pro())
+        sunsdr_send_hex_pkt(sunsdr_state_sync_template_hex(), 68);
+    else
+        sunsdr_send_hex_pkt_u8(sunsdr_state_sync_template_hex(), 0x36, (unsigned char)rx_count);
 }
 
 static void sunsdr_send_config_block_state(int rx_state)
@@ -2318,11 +2414,7 @@ static void sunsdr_reconfigure_rx_paths(int rx2_enabled)
 /* ========== Bootstrap + Power-On Macro ========== */
 
 /* control_ready_v2 macro - validated 2026-04-07 */
-static const struct {
-    const char* hex;
-    int len;
-    int delay_us; /* microseconds */
-} power_on_macro[] = {
+static const sunsdr_macro_step_t power_on_macro_dx[] = {
     /* Bootstrap: primer_minimal */
     {"32ff5a000000000000000100000000000000", 18, 50000},
     {"32ff1800040000000000010000000000000000000000", 22, 50000},
@@ -2360,6 +2452,63 @@ static const struct {
     {NULL, 0, 0} /* sentinel */
 };
 
+static const sunsdr_macro_step_t power_on_macro_pro[] = {
+    {"32ff1800040000000000010000000000000000000000", 22, 300},
+    {"32ff1d00040000000000010000000000000000000000", 22, 300},
+    {"32ff1b00040000000000010000000000000000000000", 22, 300},
+    {"32ff0500040000000000010000000000000000000000", 22, 300},
+    {"32ff1800040000000000010000000000000000000000", 22, 300},
+    {"32ff19000400000000000100000000000000ff000000", 22, 300},
+    {"32ff2100040000000000010000000000000000000000", 22, 300},
+    {"32ff01003200000000000100000000000000140000001400000014000000140000001400000014000000140000001400000000000000010000000000a23cfc7f00008859", 68, 300},
+    {"32ff0900080000000000010000000000000060fd4d0400000000", 26, 300},
+    {"32ff0800080000000000010000000000000098f35b0400000000", 26, 300},
+    {"32ff08000800010000000100000000000000c058510400000000", 26, 300},
+    {NULL, 0, 0} /* sentinel */
+};
+
+static const sunsdr_profile_t sunsdr_profile_dx = {
+    SUNSDR_VARIANT_DX, "SunSDR2 DX", 50001, 50002, 0x32, 312500.0, -1, -1
+};
+
+static const sunsdr_profile_t sunsdr_profile_pro = {
+    SUNSDR_VARIANT_PRO, "SunSDR2 PRO", 50002, 50003, 0x01, 39062.5, 0, 0
+};
+
+static const sunsdr_profile_t* sunsdr_profile_from_model(int modelId)
+{
+    switch (modelId) {
+    case HPSDRModel_SUNSDR2PRO:
+        return &sunsdr_profile_pro;
+    case HPSDRModel_SUNSDR2DX:
+        return &sunsdr_profile_dx;
+    default:
+        return NULL;
+    }
+}
+
+static const sunsdr_profile_t* sunsdr_pick_profile(int modelId, int ctrlPort, int streamPort)
+{
+    const sunsdr_profile_t* explicit_profile = sunsdr_profile_from_model(modelId);
+    if (explicit_profile != NULL)
+        return explicit_profile;
+
+    if (ctrlPort == sunsdr_profile_pro.defaultCtrlPort ||
+        streamPort == sunsdr_profile_pro.defaultStreamPort)
+        return &sunsdr_profile_pro;
+    return &sunsdr_profile_dx;
+}
+
+static const char* sunsdr_state_sync_template_hex(void)
+{
+    return sunsdr_is_pro() ? SUNSDR_PRO_STATE_SYNC_TEMPLATE_HEX : SUNSDR_STATE_SYNC_TEMPLATE_HEX;
+}
+
+static const sunsdr_macro_step_t* sunsdr_power_on_macro(void)
+{
+    return sunsdr_is_pro() ? power_on_macro_pro : power_on_macro_dx;
+}
+
 static int sunsdr_run_macro(void)
 {
     unsigned char pkt[128];
@@ -2368,10 +2517,15 @@ static int sunsdr_run_macro(void)
 
     sunsdr_set_ctrl_trace_label("macro");
 
-    for (i = 0; power_on_macro[i].hex != NULL; i++) {
-        int len = power_on_macro[i].len;
+    for (i = 0; ; i++) {
+        const sunsdr_macro_step_t* step = &sunsdr_power_on_macro()[i];
+        const char* hex = step->hex;
+        int len = step->len;
+        int delay_us = step->delay_us;
         int j;
         char step_label[32];
+
+        if (hex == NULL) break;
 
         _snprintf(step_label, sizeof(step_label), "macro[%02d]", i + 1);
         step_label[sizeof(step_label) - 1] = '\0';
@@ -2380,16 +2534,30 @@ static int sunsdr_run_macro(void)
         /* Parse hex string to bytes */
         for (j = 0; j < len && j < (int)sizeof(pkt); j++) {
             unsigned int byte;
-            sscanf(power_on_macro[i].hex + j * 2, "%02x", &byte);
+            sscanf(hex + j * 2, "%02x", &byte);
             pkt[j] = (unsigned char)byte;
+        }
+        if (len > 0) pkt[0] = sunsdr_magic0();
+
+        if (len >= 68 && pkt[1] == 0xff && pkt[2] == 0x01) {
+            len = sunsdr_parse_hex(sunsdr_state_sync_template_hex(), pkt, (int)sizeof(pkt));
+            sunsdr_patch_magic(pkt, len);
+        }
+
+        if (sdr.profile->macroStartIqValue >= 0 &&
+            len >= 22 && pkt[1] == 0xff && pkt[2] == SUNSDR_OP_START_IQ) {
+            pkt[18] = (unsigned char)(sdr.profile->macroStartIqValue & 0xFF);
+            pkt[19] = 0;
+            pkt[20] = 0;
+            pkt[21] = 0;
         }
 
         /* Patch the mic-source packet (OP 0x21) at byte 18 to carry the
          * user's saved mic source, instead of the hardcoded 1 (Mic2) that
          * the baked macro string contains. This keeps the init macro's
          * exact structure while honouring the saved user preference. */
-        if (len >= 22 && pkt[0] == 0x32 && pkt[1] == 0xff && pkt[2] == 0x21) {
-            pkt[18] = (unsigned char)(sdr.currentMicSource & 0xFF);
+        if (len >= 22 && pkt[0] == sunsdr_magic0() && pkt[1] == 0xff && pkt[2] == 0x21) {
+            pkt[18] = (unsigned char)((sdr.profile->macroMicSourceValue >= 0) ? sdr.profile->macroMicSourceValue : sdr.currentMicSource);
             pkt[19] = 0;
             pkt[20] = 0;
             pkt[21] = 0;
@@ -2397,9 +2565,9 @@ static int sunsdr_run_macro(void)
 
         sunsdr_send_ctrl_and_recv(pkt, len, reply, sizeof(reply));
 
-        if (power_on_macro[i].delay_us > 0) {
+        if (delay_us > 0) {
             /* Sleep in microseconds (Windows minimum is ~1ms) */
-            int ms = power_on_macro[i].delay_us / 1000;
+            int ms = delay_us / 1000;
             if (ms < 1) ms = 1;
             Sleep(ms);
         }
@@ -2454,12 +2622,15 @@ static DWORD WINAPI SunSDRKeepaliveThread(LPVOID param)
 
 /* ========== Exported functions ========== */
 
-int SunSDRInit(const char* radioIP, int ctrlPort, int streamPort)
+int SunSDRInit(const char* radioIP, int ctrlPort, int streamPort, int modelId)
 {
     WSADATA wsaData;
     int optval;
     MMRESULT tbp_rc;
     LARGE_INTEGER qpc_freq_check;
+    const sunsdr_profile_t* profile;
+    int resolvedCtrlPort;
+    int resolvedStreamPort;
 
     /* Explicitly start the async logger writer thread BEFORE any sdr_logf
      * calls, so we deterministically route through the non-blocking path.
@@ -2476,7 +2647,7 @@ int SunSDRInit(const char* radioIP, int ctrlPort, int streamPort)
     tbp_rc = timeBeginPeriod(1);
     QueryPerformanceFrequency(&qpc_freq_check);
 
-    sdr_logf("SunSDRInit(%s, %d, %d)\n", radioIP, ctrlPort, streamPort);
+    sdr_logf("SunSDRInit(%s, %d, %d, model=%d)\n", radioIP, ctrlPort, streamPort, modelId);
     sdr_logf("TIMING_INIT: timeBeginPeriod(1) rc=%u (0=OK) qpcFreq=%lld\n",
         (unsigned)tbp_rc, (long long)qpc_freq_check.QuadPart);
 
@@ -2516,12 +2687,20 @@ int SunSDRInit(const char* radioIP, int ctrlPort, int streamPort)
         sdr_logf("SunSDRInit() cleaning up previous session state before re-init\n");
         SunSDRDestroy();
     }
+    profile = sunsdr_pick_profile(modelId, ctrlPort, streamPort);
+    resolvedCtrlPort = (ctrlPort > 0) ? ctrlPort : profile->defaultCtrlPort;
+    resolvedStreamPort = (streamPort > 0) ? streamPort :
+        ((ctrlPort > 0) ? (ctrlPort + 1) : profile->defaultStreamPort);
     memset(&sdr, 0, sizeof(sdr));
     sdr.ctrlSock = INVALID_SOCKET;
     sdr.streamSock = INVALID_SOCKET;
     sdr.currentMode = -1;
-    sdr.ctrlPort = ctrlPort;
-    sdr.streamPort = streamPort;
+    sdr.ctrlPort = resolvedCtrlPort;
+    sdr.streamPort = resolvedStreamPort;
+    sdr.profile = profile;
+    sdr.variant = sdr.profile->variant;
+    sdr_logf("SunSDR profile selected: %s (ctrl=%d stream=%d magic=0x%02X rxRate=%.4f)\n",
+        sdr.profile->name, sdr.ctrlPort, sdr.streamPort, (unsigned)sdr.profile->magic0, sdr.profile->rxNativeRate);
     sdr.currentRxAntenna = 1;
     sdr.currentTxAntenna = 1;
     sunsdr_set_identity_defaults();
@@ -2550,10 +2729,10 @@ int SunSDRInit(const char* radioIP, int ctrlPort, int streamPort)
     memset(&localAddr, 0, sizeof(localAddr));
     localAddr.sin_family = AF_INET;
     localAddr.sin_addr.s_addr = INADDR_ANY;
-    localAddr.sin_port = htons((u_short)ctrlPort);
+    localAddr.sin_port = htons((u_short)sdr.ctrlPort);
 
     if (bind(sdr.ctrlSock, (struct sockaddr*)&localAddr, sizeof(localAddr)) == SOCKET_ERROR) {
-        printf("SunSDR: failed to bind control socket to port %d\n", ctrlPort);
+        printf("SunSDR: failed to bind control socket to port %d\n", sdr.ctrlPort);
         closesocket(sdr.ctrlSock);
         sdr.ctrlSock = INVALID_SOCKET;
         return -2;
@@ -2575,10 +2754,10 @@ int SunSDRInit(const char* radioIP, int ctrlPort, int streamPort)
     memset(&localAddr, 0, sizeof(localAddr));
     localAddr.sin_family = AF_INET;
     localAddr.sin_addr.s_addr = INADDR_ANY;
-    localAddr.sin_port = htons((u_short)streamPort);
+    localAddr.sin_port = htons((u_short)sdr.streamPort);
 
     if (bind(sdr.streamSock, (struct sockaddr*)&localAddr, sizeof(localAddr)) == SOCKET_ERROR) {
-        printf("SunSDR: failed to bind stream socket to port %d\n", streamPort);
+        printf("SunSDR: failed to bind stream socket to port %d\n", sdr.streamPort);
         closesocket(sdr.ctrlSock);
         closesocket(sdr.streamSock);
         sdr.streamSock = INVALID_SOCKET;
@@ -2769,6 +2948,10 @@ int SunSDRPowerOn(void)
     sdr.txPrevI = 0.0;
     sdr.txPrevQ = 0.0;
     sdr.txAccumCount = 0;
+
+    /* PRO still uses the legacy RX upsample stage; clear its phase when a
+     * session starts so stale interpolation state cannot bleed across runs. */
+    memset(resampler, 0, sizeof(resampler));
 
     /* Dump audio state BEFORE any fixes */
     sunsdr_dump_audio_state("before-fix");
@@ -3712,9 +3895,9 @@ DWORD WINAPI SunSDRReadThread(LPVOID param)
      * whenever packets aren't arriving fast enough. This keeps WDSP's input rate constant.
      */
     int rx_stream_id = inid(0, 0);
-    int rx_resample_outsize = SUNSDR_IQ_COMPLEX_PER_PKT;  /* 200, native packet size (no resample) */
+    int rx_resample_outsize = sunsdr_rx_router_feed_size();
     double* rx_silence_buf = (double*)calloc(2 * rx_resample_outsize, sizeof(double));
-    double rx_feed_rate_target = 1562.5; /* expected packets/sec */
+    double rx_feed_rate_target = sunsdr_rx_packet_rate();
     double rx_silence_accum = 0.0;
     int prev_ptt_state = 0;
     ULONGLONG last_rx_pkt_tick = 0;
@@ -4003,7 +4186,7 @@ DWORD WINAPI SunSDRReadThread(LPVOID param)
         }
 
         /* Verify magic */
-        if (n < 4 || pktbuf[0] != SUNSDR_MAGIC_0 || pktbuf[1] != SUNSDR_MAGIC_1) {
+        if (n < 4 || pktbuf[0] != sunsdr_magic0() || pktbuf[1] != SUNSDR_MAGIC_1) {
             timeout_count++;
             continue;
         }
@@ -4179,32 +4362,39 @@ DWORD WINAPI SunSDRReadThread(LPVOID param)
 
         for (i = 0, k = 0; i < SUNSDR_IQ_COMPLEX_PER_PKT; i++, k += SUNSDR_IQ_BYTES_PER_IQ) {
             /* SunSDR 24-bit LE: byte[0]=LSB, byte[1]=MID, byte[2]=MSB */
-            /* Convert to 32-bit signed (MSB-aligned) then normalize to double */
-            /* NOTE: SunSDR sends Q first, I second (opposite of HPSDR) */
+            /* RX wire order on the observed DX/PRO stream is Q first, I second. */
             sdr.rxBuf[2 * i + 0] = NORM *
                 (double)((int)(payload[k + 5] << 24 |
                                payload[k + 4] << 16 |
-                               payload[k + 3] << 8));     /* I (from bytes 3-5) */
+                               payload[k + 3] << 8));     /* I (bytes 3-5) */
 
             sdr.rxBuf[2 * i + 1] = NORM *
                 (double)((int)(payload[k + 2] << 24 |
                                payload[k + 1] << 16 |
-                               payload[k + 0] << 8));     /* Q (from bytes 0-2) */
+                               payload[k + 0] << 8));     /* Q (bytes 0-2) */
         }
 
-        /* Feed native 312.5 kHz IQ directly to Thetis DSP pipeline (no resample) */
+        /* DX feeds WDSP natively at 312.5 kHz; PRO keeps the legacy
+         * resample step to 384 kHz. */
         {
             int active_sources = pktbuf[8];
             int source = 0;
+            int out_n = SUNSDR_IQ_COMPLEX_PER_PKT;
+            double* feed_buf = sdr.rxBuf;
 
             if (active_sources >= 2 && pktbuf[9] < 2)
                 source = pktbuf[9];
 
+            if (!sunsdr_rx_uses_native_router_rate()) {
+                out_n = sunsdr_resample(source, sdr.rxBuf, SUNSDR_IQ_COMPLEX_PER_PKT);
+                feed_buf = resampler[source].out;
+            }
+
             /* WDSP-ready gate: drop IQ dispatch until C# has configured
              * the WDSP RX channel (see SunSDRSetRxWdspReady). */
-            if (InterlockedAnd(&sdr.rxWdspReady, 0xffffffff)) {
+            if (out_n > 0 && InterlockedAnd(&sdr.rxWdspReady, 0xffffffff)) {
                 __try {
-                    xrouter(NULL, 0, source, SUNSDR_IQ_COMPLEX_PER_PKT, sdr.rxBuf);
+                    xrouter(NULL, 0, source, out_n, feed_buf);
                     if (source == 0) {
                         last_rx_pkt_tick = GetTickCount64();
                         dbg_xrouter_real_feeds++;
@@ -4217,15 +4407,15 @@ DWORD WINAPI SunSDRReadThread(LPVOID param)
                         }
                     }
                 } __except(EXCEPTION_EXECUTE_HANDLER) {
-                    sdr_logf("CRASH in xrouter at pkt %d (source=%d)! Exception=0x%08X\n",
-                        pkt_count, source, GetExceptionCode());
+                    sdr_logf("CRASH in xrouter at pkt %d (source=%d, out_n=%d)! Exception=0x%08X\n",
+                        pkt_count, source, out_n, GetExceptionCode());
                     Sleep(1000);
                     continue;
                 }
             }
             if (pkt_count == 1 || pkt_count == 100 || pkt_count % 5000 == 0)
                 sdr_logf("IQ pkts=%d, source=%d/%d, feed=%d samples, tx_sent=%d (HaveSync=%d)\n",
-                    pkt_count, source, active_sources, SUNSDR_IQ_COMPLEX_PER_PKT, sdr.txSeq, HaveSync);
+                    pkt_count, source, active_sources, out_n, sdr.txSeq, HaveSync);
         }
         pkt_count++;
 
@@ -4259,6 +4449,7 @@ static void sunsdr_probe_identity_query(void)
     if (len <= 0) {
         return;
     }
+    sunsdr_patch_magic(pkt, len);
 
     sunsdr_drain_control_socket("pre_probe");
     sunsdr_set_ctrl_trace_label("identity_probe");
@@ -4360,6 +4551,7 @@ static void sunsdr_query_firmware_manager_version(void)
     if (len <= 0) {
         return;
     }
+    sunsdr_patch_magic(pkt, len);
 
     sunsdr_drain_control_socket("pre_fwmgr");
     sunsdr_set_ctrl_trace_label("fwmgr_version");
@@ -4375,7 +4567,7 @@ static void sunsdr_query_firmware_manager_version(void)
     sdr_logf("FWMGR query reply: len=%d hex=%s\n", n, hexbuf);
 
     if (n >= 26 &&
-        reply[0] == 0x32 &&
+        reply[0] == sunsdr_magic0() &&
         reply[1] == 0xFF &&
         reply[2] == 0x1A &&
         reply[4] == 0x20 &&

@@ -325,7 +325,10 @@ namespace Thetis
                             //}
                         }
 
-                        int rowIndex = grid.Rows.Add(false, radio.DeviceType.ToString(), radio.IpAddress.ToString(), port.ToString(), radio.IsCustom ? "Custom" : radio.MacAddress, protocol, version);
+                        string hardware = !string.IsNullOrWhiteSpace(radio.DisplayName)
+                            ? radio.DisplayName
+                            : radio.DeviceType.ToString();
+                        int rowIndex = grid.Rows.Add(false, hardware, radio.IpAddress.ToString(), port.ToString(), radio.IsCustom ? "Custom" : radio.MacAddress, protocol, version);
                         DataGridViewRow row = grid.Rows[rowIndex];
 
                         RowRef rr = new RowRef();

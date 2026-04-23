@@ -102,16 +102,16 @@ int nativeInitMetis(char* netaddr, int port, char* localaddr, int localport, int
 
 	/* SunSDR native protocol — bypass HPSDR socket setup entirely.
 	 *
-	 * Honour the radio's configured control port (from the Setup
-	 * `Fixed listen port` field or the discovered RadioInfo) so
-	 * operators who changed the port from the 50001 default can
-	 * still connect. Stream port is control port + 1, matching
-	 * the SunSDR2 DX 50001/50002 pairing convention.
-	 * Closes issue #15. */
+	 * Prefer the explicit UI-selected model when choosing defaults so DX
+	 * and PRO each get their own bootstrap profile. If the operator (or
+	 * discovery result) provides a control port, honour it and derive the
+	 * stream port from that runtime port pair. */
 	if (protocol == SUNSDR) {
-		int sunsdr_ctrl = (port > 0) ? port : SUNSDR_CONTROL_PORT;
-		int sunsdr_stream = (port > 0) ? (port + 1) : SUNSDR_STREAM_PORT;
-		return SunSDRInit(netaddr, sunsdr_ctrl, sunsdr_stream);
+		int default_ctrl = (model_id == HPSDRModel_SUNSDR2PRO) ? 50002 : SUNSDR_CONTROL_PORT;
+		int default_stream = (model_id == HPSDRModel_SUNSDR2PRO) ? 50003 : SUNSDR_STREAM_PORT;
+		int sunsdr_ctrl = (port > 0) ? port : default_ctrl;
+		int sunsdr_stream = (port > 0) ? (port + 1) : default_stream;
+		return SunSDRInit(netaddr, sunsdr_ctrl, sunsdr_stream, model_id);
 	}
 
 	prn->base_outbound_port = port;
@@ -1521,7 +1521,7 @@ DWORD WINAPI KeepAliveMain(LPVOID n) {
 
 PORT int nativeSunSDRInit(char* radioIP, int ctrlPort, int streamPort)
 {
-	return SunSDRInit(radioIP, ctrlPort, streamPort);
+	return SunSDRInit(radioIP, ctrlPort, streamPort, HPSDRModel);
 }
 
 PORT void nativeSunSDRDestroy(void)

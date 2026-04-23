@@ -513,6 +513,7 @@ namespace Thetis
         public IPAddress IpAddress { get; set; }
         public string MacAddress { get; set; }
         public HPSDRHW DeviceType { get; set; }
+        public string DisplayName { get; set; }
         public byte CodeVersion { get; set; }
         public byte BetaVersion { get; set; }
         public byte Protocol2Supported { get; set; }

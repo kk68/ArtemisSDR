@@ -128,6 +128,7 @@ namespace Thetis
         HERMESLITE,     //MI0BOT
         REDPITAYA,      //DH1KLM
         SUNSDR2DX,      // SunSDR2 DX native
+        SUNSDR2PRO,     // SunSDR2 PRO native
         LAST
     }
 

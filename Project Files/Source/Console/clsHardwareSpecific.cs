@@ -67,6 +67,16 @@ namespace Thetis
             _old_hardware = HPSDRHW.Unknown;
         }
 
+        public static bool IsSunSDRModel(HPSDRModel model)
+        {
+            return model == HPSDRModel.SUNSDR2DX || model == HPSDRModel.SUNSDR2PRO;
+        }
+
+        public static bool IsCurrentSunSDRModel
+        {
+            get { return IsSunSDRModel(_model); }
+        }
+
         #region MODEL
         // model
         public static HPSDRModel Model
@@ -183,6 +193,7 @@ namespace Thetis
                         HardwareSpecific.Hardware = HPSDRHW.OrionMKII;
                         break;
                     case HPSDRModel.SUNSDR2DX:
+                    case HPSDRModel.SUNSDR2PRO:
                         NetworkIO.SetRxADC(1);
                         NetworkIO.SetMKIIBPF(0);
                         cmaster.SetADCSupply(0, 33);
@@ -354,6 +365,8 @@ namespace Thetis
                     return HPSDRModel.REDPITAYA;
                 case "SUNSDR2-DX":
                     return HPSDRModel.SUNSDR2DX;
+                case "SUNSDR2-PRO":
+                    return HPSDRModel.SUNSDR2PRO;
                 default:
                     return HPSDRModel.HERMES;
             }
@@ -392,6 +405,8 @@ namespace Thetis
                     return "RED-PITAYA";
                 case HPSDRModel.SUNSDR2DX:
                     return "SUNSDR2-DX";
+                case HPSDRModel.SUNSDR2PRO:
+                    return "SUNSDR2-PRO";
                 default:
                     return "HERMES";
             }
@@ -435,6 +450,17 @@ namespace Thetis
                     //     + rx_meter_cal_offset_by_radio array)
                     //   - memory/project_smeter_reference_20260422.md
                     return 18.98f;
+                case HPSDRModel.SUNSDR2PRO:
+                    // Experimental anchor from @Tort1k558's PR #30 initial
+                    // SunSDR2 PRO bring-up — direct comparison against
+                    // ExpertSDR3 in Signal mode on 40 m at +10 dB preamp
+                    // landed on ~+7 dB over the generic fall-through. Not
+                    // yet cross-validated against EESDR3 the same way DX
+                    // was at -94.5 dBm / S6 + ¼, so treat this value as
+                    // a starting point; PRO users should fine-tune via
+                    // Setup → Tests → Level Cal once they have a known
+                    // reference signal.
+                    return 6.98f;
                 default:
                     return 0.98f;
             }
@@ -653,6 +679,7 @@ namespace Thetis
                     return gains;
 
                 case HPSDRModel.SUNSDR2DX:
+                case HPSDRModel.SUNSDR2PRO:
                     /*
                      * SunSDR2 DX uses the native TX path rather than the HPSDR DAC/output
                      * chain. In practice it needs a materially lower PA attenuation baseline
