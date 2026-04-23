@@ -38,7 +38,7 @@ beyond the upstream Thetis source:
 - `Project Files/Source/Console/clsDiscord.cs` (wholesale rewrite as a no-op
   stub replacing upstream's Discord bot integration)
 - `Build-ArtemisSDR.ps1` (at repo parent level — build script)
-- `LICENSE-DUAL-LICENSING-K0KOZ` (dual-licensing statement for K0KOZ's own
+- `DUAL-LICENSING-K0KOZ.md` (dual-licensing statement for K0KOZ's own
   contributions)
 - `MODIFICATIONS.md` (this file)
 - `THIRD_PARTY_LICENSES.md`

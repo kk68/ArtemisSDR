@@ -15,7 +15,7 @@ work. Code authored by others — including upstream Thetis contributions by Ric
 Samphire (MW0LGE) and earlier OpenHPSDR / PowerSDR contributors — remains licensed under
 its original terms and is not affected by this dual-licensing statement in any way.
 
-See also LICENSE-DUAL-LICENSING for Richard Samphire's corresponding statement covering
+See also DUAL-LICENSING-MW0LGE.md for Richard Samphire's corresponding statement covering
 his upstream Thetis contributions.
 
 Kosta Kanchev can be reached by email at :  K0KOZ@philibe.com

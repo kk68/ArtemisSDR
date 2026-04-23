@@ -9,10 +9,10 @@ The ArtemisSDR codebase itself (the SunSDR2 DX native protocol implementation
 in `Project Files/Source/ChannelMaster/sunsdr.c` / `sunsdr.h`, the ArtemisSDR
 rebrand, and related integration work authored by Kosta Kanchev K0KOZ) is
 covered by `LICENSE` (GPL v2) plus the dual-licensing statement in
-`LICENSE-DUAL-LICENSING-K0KOZ`.
+`DUAL-LICENSING-K0KOZ.md`.
 
 Upstream Thetis contributions by Richard Samphire (MW0LGE) are covered by
-`LICENSE` (GPL v2) plus the dual-licensing statement in `LICENSE-DUAL-LICENSING`.
+`LICENSE` (GPL v2) plus the dual-licensing statement in `DUAL-LICENSING-MW0LGE.md`.
 
 ---
 

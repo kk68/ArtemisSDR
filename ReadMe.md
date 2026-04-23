@@ -179,8 +179,8 @@ The SunSDR native protocol implementation (`sunsdr.c`, `sunsdr.h`) is original w
 
 **Dual-licensing statements** — both present in the repo:
 
-- [LICENSE-DUAL-LICENSING](LICENSE-DUAL-LICENSING) — Richard Samphire (MW0LGE) reserves the right to also offer his own Thetis contributions under different licensing terms, in addition to GPL v2.
-- [LICENSE-DUAL-LICENSING-K0KOZ](LICENSE-DUAL-LICENSING-K0KOZ) — Kosta Kanchev (K0KOZ) makes the corresponding reservation for his own original ArtemisSDR contributions (SunSDR2 DX native protocol, rebrand, integration work), also in addition to GPL v2.
+- [DUAL-LICENSING-MW0LGE.md](DUAL-LICENSING-MW0LGE.md) — Richard Samphire (MW0LGE) reserves the right to also offer his own Thetis contributions under different licensing terms, in addition to GPL v2.
+- [DUAL-LICENSING-K0KOZ.md](DUAL-LICENSING-K0KOZ.md) — Kosta Kanchev (K0KOZ) makes the corresponding reservation for his own original ArtemisSDR contributions (SunSDR2 DX native protocol, rebrand, integration work), also in addition to GPL v2.
 
 Neither dual-licensing statement restricts anyone's rights under GPL v2. ArtemisSDR in this repository is and will remain freely distributable under GPL v2.
 
