@@ -740,7 +740,12 @@ namespace Thetis
             }
             LogTool.AddLogEntry("Directories ok");
 
-            Splash.ShowSplashScreen("ArtemisSDR " + Common.GetVerNum(true, true), splash_screen_folder);							// Start splash screen with version number
+            // Splash: show just "ArtemisSDR <version>" — no radio-model
+            // suffix. BUILD_NAME was "SunSDR2 DX" which stops being true
+            // once PRO support ships. The About dialog still surfaces the
+            // build name per-radio; the splash is a brand line, not a
+            // model label.
+            Splash.ShowSplashScreen("ArtemisSDR " + Common.GetVerNum(true, false), splash_screen_folder);
 
             LogTool.AddLogEntry("Splash screen shown");
 
