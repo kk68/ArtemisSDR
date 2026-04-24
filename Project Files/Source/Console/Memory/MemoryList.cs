@@ -90,22 +90,60 @@ namespace Thetis
 
 
         //======================================================================================================================
+        // Atomic write: serialise to `<file_name>.tmp`, then rename over
+        // the real file. If the app crashes mid-serialise, the .tmp gets
+        // discarded and the previous valid `file_name` remains intact.
+        // Same failure mode as database.xml pre-hardening — non-atomic
+        // writes left a partially-serialised XML that the next load
+        // would parse as valid but produce an object graph with missing
+        // fields, leading to managed-layer crashes downstream. Since
+        // MemoryList already has an explicit _bak fallback in Restore()
+        // this is belt-and-suspenders, but it removes the write-side
+        // corruption window entirely.
         private void Save(string file_name)
         {
-        TextWriter writer = new StreamWriter(file_name);
+            string tmp = file_name + ".tmp";
+
+            // Clean up any orphan .tmp from a prior interrupted write.
+            if (File.Exists(tmp))
+            {
+                try { File.Delete(tmp); } catch { /* best effort */ }
+            }
 
             try
             {
-                XmlSerializer ser = new XmlSerializer(typeof(MemoryList),
-                    new Type[] { typeof(MemoryRecord), typeof(SortableBindingList<MemoryRecord>), typeof(int) });
-                ser.Serialize(writer, this);
+                using (TextWriter writer = new StreamWriter(tmp))
+                {
+                    XmlSerializer ser = new XmlSerializer(typeof(MemoryList),
+                        new Type[] { typeof(MemoryRecord), typeof(SortableBindingList<MemoryRecord>), typeof(int) });
+                    ser.Serialize(writer, this);
+                } // using flushes + closes before rename
+
+                if (File.Exists(file_name))
+                {
+                    try { File.Replace(tmp, file_name, null); }
+                    catch (IOException)
+                    {
+                        // Fallback for the rare case where File.Replace
+                        // fails (antivirus / OneDrive holding the handle).
+                        try { File.Delete(file_name); } catch { /* best effort */ }
+                        File.Move(tmp, file_name);
+                    }
+                }
+                else
+                {
+                    File.Move(tmp, file_name);
+                }
             }
             catch (Exception ex)
             {
                 Debug.WriteLine(ex.Message);
+                // Don't leave a stale .tmp around.
+                if (File.Exists(tmp))
+                {
+                    try { File.Delete(tmp); } catch { /* best effort */ }
+                }
             }
-
-            writer.Close();
         }
  
         

@@ -9473,11 +9473,46 @@ namespace Thetis
         }
 
         //-W2PA Write specific dataset to a file 
+        // Atomic write: serialise the DataSet to <fn>.tmp, then rename
+        // over the real file. If the app crashes mid-serialise, the
+        // .tmp is discarded on next startup and the previous valid fn
+        // remains intact. Previously dsIN.WriteXml(fn, ...) truncated
+        // fn and wrote in-place; a crash mid-write left a partially-
+        // serialised XML that the next load parsed as valid but
+        // produced a dataset with missing rows/columns, which
+        // manifested downstream as a CLR null-deref crash at startup
+        // that bricked the install until the user wiped
+        // %AppData%\ArtemisSDR. This removes the write-side corruption
+        // window entirely. File.Replace is atomic on NTFS; the
+        // IOException fallback covers the rare case where AV/OneDrive
+        // is holding an exclusive handle on fn.
         public static bool WriteDB(string fn, DataSet dsIN)
         {
             try
             {
-                dsIN.WriteXml(fn, XmlWriteMode.WriteSchema);
+                string tmp = fn + ".tmp";
+                if (File.Exists(tmp))
+                {
+                    try { File.Delete(tmp); } catch { /* best effort */ }
+                }
+
+                dsIN.WriteXml(tmp, XmlWriteMode.WriteSchema);
+
+                if (File.Exists(fn))
+                {
+                    string bak = fn + ".bak";
+                    try { File.Replace(tmp, fn, bak); }
+                    catch (IOException)
+                    {
+                        try { File.Delete(fn); } catch { /* best effort */ }
+                        File.Move(tmp, fn);
+                    }
+                }
+                else
+                {
+                    File.Move(tmp, fn);
+                }
+
                 DBMan.DBWritten();
             }
             catch (Exception ex)

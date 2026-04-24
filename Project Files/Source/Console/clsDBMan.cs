@@ -363,25 +363,6 @@ namespace Thetis
 
                     if (ok)
                     {
-                        bool did_backup = false;
-                        //check for backup at startup
-                        try
-                        {
-                            string json_file = _db_data_path + _dbman_settings.ActiveDB_GUID.ToString() + "\\dbman.json";
-                            if (File.Exists(json_file))
-                            {
-                                string jsonString = File.ReadAllText(json_file);
-                                DatabaseInfo di = JsonConvert.DeserializeObject<DatabaseInfo>(jsonString);
-                                if (di.BackupOnStartup)
-                                {
-                                    did_backup = true;
-                                    TakeBackup(Guid.Empty, "Startup", true);
-                                }
-                            }
-                        }
-                        catch { }
-                        //
-
                         DB.FileName = db_xml_file;
                         _ignore_written = true;
                         ok = DB.Init();
@@ -390,8 +371,34 @@ namespace Thetis
                         //check version
                         if(ok) checkVersion(made_new, ctrl_key_force_update);
 
-                        if(ok) // note, the TakeBackup above will not prune, as the DB has not been recovered for the flag PruneBackups
+                        // Startup backup intentionally moved to AFTER
+                        // DB.Init(). Previously the backup fired BEFORE the
+                        // DB was validated — so if the DB on disk was
+                        // corrupt (e.g. from a prior interrupted write)
+                        // we happily copied the corruption into the backup
+                        // folder instead of capturing a known-good state.
+                        // Worse, the resulting backup was useless as a
+                        // recovery point. Only back up what we've just
+                        // successfully loaded.
+                        bool did_backup = false;
+                        if (ok)
                         {
+                            try
+                            {
+                                string json_file = _db_data_path + _dbman_settings.ActiveDB_GUID.ToString() + "\\dbman.json";
+                                if (File.Exists(json_file))
+                                {
+                                    string jsonString = File.ReadAllText(json_file);
+                                    DatabaseInfo di = JsonConvert.DeserializeObject<DatabaseInfo>(jsonString);
+                                    if (di.BackupOnStartup)
+                                    {
+                                        did_backup = true;
+                                        TakeBackup(Guid.Empty, "Startup", true);
+                                    }
+                                }
+                            }
+                            catch { }
+
                             // prune
                             Dictionary<string, string> vals = DB.GetVarsDictionary("State");
                             bool prune = false;
