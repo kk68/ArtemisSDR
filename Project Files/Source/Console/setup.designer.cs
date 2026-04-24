@@ -8638,7 +8638,8 @@
             this.comboRadioModel.Font = new System.Drawing.Font("Segoe UI", 9F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
             this.comboRadioModel.FormattingEnabled = true;
             this.comboRadioModel.Items.AddRange(new object[] {
-            "SUNSDR2-DX"});
+            "SUNSDR2-DX",
+            "SUNSDR2-PRO"});
             this.comboRadioModel.Location = new System.Drawing.Point(6, 19);
             this.comboRadioModel.Name = "comboRadioModel";
             this.comboRadioModel.Size = new System.Drawing.Size(136, 23);

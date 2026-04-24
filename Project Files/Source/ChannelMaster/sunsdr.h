@@ -1,6 +1,6 @@
 /*  sunsdr.h
 
-SunSDR2 DX native protocol support for Thetis.
+SunSDR2 native protocol support for Thetis.
 
 This file is part of a program that implements a Software-Defined Radio.
 
@@ -110,6 +110,31 @@ of the License, or (at your option) any later version.
 
 /* ---------- State ---------- */
 
+typedef enum _sunsdr_variant
+{
+    SUNSDR_VARIANT_DX = 0,
+    SUNSDR_VARIANT_PRO = 1
+} sunsdr_variant_t;
+
+typedef struct _sunsdr_macro_step
+{
+    const char* hex;
+    int len;
+    int delay_us; /* microseconds */
+} sunsdr_macro_step_t;
+
+typedef struct _sunsdr_profile
+{
+    sunsdr_variant_t variant;
+    const char* name;
+    int defaultCtrlPort;
+    int defaultStreamPort;
+    unsigned char magic0;
+    double rxNativeRate;
+    int macroStartIqValue;
+    int macroMicSourceValue; /* <0 => use UI-selected source */
+} sunsdr_profile_t;
+
 typedef struct _sunsdr_state
 {
     /* Sockets */
@@ -121,6 +146,8 @@ typedef struct _sunsdr_state
     char radioIP[64];
     int ctrlPort;
     int streamPort;
+    sunsdr_variant_t variant;
+    const sunsdr_profile_t* profile;
 
     /* Thread handles */
     HANDLE hReadThread;
@@ -196,7 +223,7 @@ typedef struct _sunsdr_state
 /* ---------- Exported functions ---------- */
 
 /* Lifecycle */
-int  SunSDRInit(const char* radioIP, int ctrlPort, int streamPort);
+int  SunSDRInit(const char* radioIP, int ctrlPort, int streamPort, int modelId);
 void SunSDRDestroy(void);
 int  SunSDRPowerOn(void);
 void SunSDRPowerOff(void);

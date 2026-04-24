@@ -864,9 +864,11 @@ namespace Thetis
 
             int[] p1_rates = include_extra_p1_rate ? new int[] { 48000, 96000, 192000, 384000 } : new int[] { 48000, 96000, 192000 };
             int[] p2_rates = { 48000, 96000, 192000, 384000, 768000, 1536000 };
-            int[] sunsdr_rates = { 312500 }; // SunSDR2 DX: native 312.5 kHz rate, no resample stage
+            int[] sunsdr_dx_rates = { 312500 }; // DX: native 312.5 kHz router path
+            int[] sunsdr_pro_rates = { 312500 }; // PRO uses the same native 312.5 kHz router path as DX
 
-            int[] rates = HardwareSpecific.Model == HPSDRModel.SUNSDR2DX ? sunsdr_rates :
+            int[] rates = HardwareSpecific.Model == HPSDRModel.SUNSDR2DX ? sunsdr_dx_rates :
+                          HardwareSpecific.Model == HPSDRModel.SUNSDR2PRO ? sunsdr_pro_rates :
                           NetworkIO.CurrentRadioProtocol == RadioProtocol.ETH ? p2_rates : p1_rates;
 
             foreach (int rate in rates)
@@ -23690,9 +23692,9 @@ namespace Thetis
              * Treat that legacy all-100 state as "uninitialized" for SunSDR and
              * fall back to the model defaults until the user recalibrates.
              */
-            if (HardwareSpecific.Model == HPSDRModel.SUNSDR2DX && gain >= 99.0f)
+            if (HardwareSpecific.IsCurrentSunSDRModel && gain >= 99.0f)
             {
-                float[] defaults = HardwareSpecific.DefaultPAGainsForBands(HPSDRModel.SUNSDR2DX);
+                float[] defaults = HardwareSpecific.DefaultPAGainsForBands(HardwareSpecific.Model);
                 if ((int)b > (int)Band.FIRST && (int)b < (int)Band.LAST)
                     gain = defaults[(int)b] - GetSunSDRDefaultAdjust(nDriveValue);
             }
@@ -23704,7 +23706,7 @@ namespace Thetis
              * legacy baseline to the current SunSDR defaults until the operator
              * recalibrates the profile.
              */
-            if (HardwareSpecific.Model == HPSDRModel.SUNSDR2DX &&
+            if (HardwareSpecific.IsCurrentSunSDRModel &&
                 (int)b > (int)Band.FIRST && (int)b < (int)Band.LAST)
             {
                 float[] legacy = new float[(int)Band.LAST];
@@ -23722,7 +23724,7 @@ namespace Thetis
 
                 if (Math.Abs(gain - legacy[(int)b]) < 0.2f)
                 {
-                    float[] defaults = HardwareSpecific.DefaultPAGainsForBands(HPSDRModel.SUNSDR2DX);
+                    float[] defaults = HardwareSpecific.DefaultPAGainsForBands(HardwareSpecific.Model);
                     gain = defaults[(int)b] - GetSunSDRDefaultAdjust(nDriveValue);
                 }
             }
@@ -23734,13 +23736,13 @@ namespace Thetis
              * no-offset SunSDR profile shape as legacy too and map it to the
              * current SunSDR defaults plus the built-in low-power compensation.
              */
-            if (HardwareSpecific.Model == HPSDRModel.SUNSDR2DX &&
+            if (HardwareSpecific.IsCurrentSunSDRModel &&
                 zero_adjust_curve &&
                 (int)b > (int)Band.FIRST && (int)b < (int)Band.LAST)
             {
                 if (Math.Abs(gain - sunsdrCurrent[(int)b]) < 0.2f)
                 {
-                    float[] defaults = HardwareSpecific.DefaultPAGainsForBands(HPSDRModel.SUNSDR2DX);
+                    float[] defaults = HardwareSpecific.DefaultPAGainsForBands(HardwareSpecific.Model);
                     gain = defaults[(int)b] - GetSunSDRDefaultAdjust(nDriveValue);
                 }
             }
@@ -36387,7 +36389,7 @@ namespace Thetis
                  * IP:port (e.g. 10.0.3.50:40001) — the parser honours the
                  * port and network.c passes it through to SunSDRInit
                  * (fix for issue #15). */
-                if (HardwareSpecific.Model == HPSDRModel.SUNSDR2DX)
+                if (HardwareSpecific.IsCurrentSunSDRModel)
                 {
                     SunSDRDiscoveryService sunsdrSvc = new SunSDRDiscoveryService();
                     foreach (NicRadioScanResult nic in discovered)
@@ -36591,6 +36593,47 @@ namespace Thetis
                 default:
                     NetworkIO.SelectedRadioProtocol = RadioProtocol.ETH; //eek
                     break;
+            }
+
+            // Auto-sync the Radio Model dropdown to match the selected
+            // discovered radio's family, so a user who picked the wrong
+            // model from the dropdown before running Discovery doesn't
+            // end up talking to the radio with the wrong protocol.
+            //
+            // Example of the bug this closes: pick "SUNSDR2-PRO" from the
+            // dropdown → click Discover → the multi-family probe finds a
+            // SunSDR2 DX → user selects it in the list → without this
+            // sync, Model stays on "SUNSDR2-PRO" and Artemis tries to
+            // drive a DX with the PRO wire profile, which fails.
+            //
+            // Discovery result is the source of truth when Discovery is
+            // used; the dropdown is the fallback for manual entry. We
+            // only touch the dropdown if the selected discovered radio
+            // clearly belongs to a different model than what's chosen.
+            RadioInfo details = ucRadioList_Radios.SelectedRadioDetails;
+            if (details != null && !string.IsNullOrWhiteSpace(details.DisplayName))
+            {
+                string dn = details.DisplayName;
+                string targetModel = null;
+                if (dn.IndexOf("PRO", StringComparison.OrdinalIgnoreCase) >= 0
+                    && dn.IndexOf("SunSDR", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    targetModel = "SUNSDR2-PRO";
+                }
+                else if (dn.IndexOf("DX", StringComparison.OrdinalIgnoreCase) >= 0
+                         && dn.IndexOf("SunSDR", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    targetModel = "SUNSDR2-DX";
+                }
+
+                if (targetModel != null
+                    && comboRadioModel.Items.Contains(targetModel)
+                    && !string.Equals(comboRadioModel.Text, targetModel, StringComparison.OrdinalIgnoreCase))
+                {
+                    // Setting .Text cascades through comboRadioModel_SelectedIndexChanged
+                    // -> HardwareSpecific.Model update -> initHPSDR -> all downstream UI.
+                    comboRadioModel.Text = targetModel;
+                }
             }
 
             UpdateDDCTab();

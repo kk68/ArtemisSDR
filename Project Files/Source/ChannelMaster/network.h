@@ -422,7 +422,7 @@ enum HPSDRHW
 	HermesLite = 6,  // MI0BOT: HL2 allocated number
 	Saturn = 10,     // ANAN-G2: added G8NJJ
 	SaturnMKII = 11, // ANAN-G2: MKII board
-	SunSDR = 20      // SunSDR2 DX
+	SunSDR = 20      // SunSDR2 DX/PRO native
 };
 
 enum _HPSDRModel //from enums.cs
@@ -443,7 +443,8 @@ enum _HPSDRModel //from enums.cs
 	HPSDRModel_ANVELINAPRO3 = 13,
 	HPSDRModel_HERMESLITE = 14,
 	HPSDRModel_REDPITAYA = 15,
-	HPSDRModel_SUNSDR2DX = 16
+	HPSDRModel_SUNSDR2DX = 16,
+	HPSDRModel_SUNSDR2PRO = 17
 } HPSDRModel;
 
 enum _RadioProtocol

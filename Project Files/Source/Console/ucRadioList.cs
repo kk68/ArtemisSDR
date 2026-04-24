@@ -360,11 +360,17 @@ HPSDRHW hw = (HPSDRHW)0;
                     }
                     catch
                     {
-                        hw = (HPSDRHW)0;
+                        hw = model.StartsWith("SunSDR", StringComparison.OrdinalIgnoreCase) ? HPSDRHW.SunSDR : (HPSDRHW)0;
                     }
                 }
 
                 info.DeviceType = hw;
+                // Propagate the discovery-time DisplayName ("SunSDR2 DX" /
+                // "SunSDR2 PRO" / etc.) out to callers so they can auto-sync
+                // the Radio Model dropdown to match the selected discovered
+                // radio. Without this, HPSDRHW.SunSDR doesn't distinguish DX
+                // from PRO — the specific model only lives in the string.
+                info.DisplayName = model;
 
                 info.CodeVersion = item.RadioCodeVersion;
                 info.BetaVersion = item.RadioBetaVersion;
@@ -632,7 +638,7 @@ HPSDRHW hw = (HPSDRHW)0;
             item.NicStatus = nic.NicStatus;
             item.NicMtu = nic.Mtu;
 
-            item.RadioModel = radio.DeviceType.ToString();
+            item.RadioModel = string.IsNullOrWhiteSpace(radio.DisplayName) ? radio.DeviceType.ToString() : radio.DisplayName;
             item.RadioIp = (radioIp != null) ? radioIp.ToString() : "";
             item.RadioPort = port;
             item.RadioProtocol = radio.Protocol;

@@ -107,7 +107,7 @@ namespace Thetis
             // the setup form's `initializing` flag during DB restore, so
             // without this explicit call the router is never SUNSDR-aware
             // and the first IQ packets feed the wrong WDSP inputs.
-            if (HardwareSpecific.Model == HPSDRModel.SUNSDR2DX)
+            if (HardwareSpecific.IsCurrentSunSDRModel)
             {
                 protocol = (int)RadioProtocol.SUNSDR;
                 CurrentRadioProtocol = RadioProtocol.SUNSDR;

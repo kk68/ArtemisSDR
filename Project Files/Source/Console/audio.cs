@@ -1344,34 +1344,29 @@ namespace Thetis
             }
         }
 
+        private static int ComputeOutCount(int inputBlockSize, int inputRate, int outputRate)
+        {
+            if (inputBlockSize <= 0 || inputRate <= 0 || outputRate <= 0)
+                return inputBlockSize;
+
+            long scaled = (long)inputBlockSize * outputRate;
+            int count = (int)((scaled + (inputRate / 2L)) / inputRate); // round to nearest
+            return count > 0 ? count : 1;
+        }
+
         private static void SetOutCount()
         {
-            if (out_rate >= sample_rate1)
-                OutCount = block_size1 * (out_rate / sample_rate1);
-            else
-                OutCount = block_size1 / (sample_rate1 / out_rate);
+            OutCount = ComputeOutCount(block_size1, sample_rate1, out_rate);
         }
 
         private static void SetOutCountRX2()
         {
-            if (out_rate_rx2 >= sample_rate_rx2)
-                OutCountRX2 = block_size_rx2 * (out_rate_rx2 / sample_rate_rx2);
-            else
-                OutCountRX2 = block_size_rx2 / (sample_rate_rx2 / out_rate_rx2);
+            OutCountRX2 = ComputeOutCount(block_size_rx2, sample_rate_rx2, out_rate_rx2);
         }
 
         private static void SetOutCountTX()
         {
-            //if (out_rate_tx >= sample_rate_tx)
-            //    OutCountTX = block_size1 * (out_rate_tx / sample_rate_tx);
-            //else
-            //    OutCountTX = block_size1 / (sample_rate_tx / out_rate_tx);
-
-            //[2.10.3.4]MW0LGE changed to use tx block size
-            if (out_rate_tx >= sample_rate_tx)
-                OutCountTX = block_size_tx * (out_rate_tx / sample_rate_tx);
-            else
-                OutCountTX = block_size_tx / (sample_rate_tx / out_rate_tx);
+            OutCountTX = ComputeOutCount(block_size_tx, sample_rate_tx, out_rate_tx);
         }
 
         private static int out_count = 1024;

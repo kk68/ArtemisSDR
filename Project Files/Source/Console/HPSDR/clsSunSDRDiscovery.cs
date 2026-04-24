@@ -1,12 +1,13 @@
 /*  clsSunSDRDiscovery.cs
 
-SunSDR2 DX native-protocol discovery for Artemis.
+SunSDR native-protocol discovery for Artemis.
 
 The SunSDR2 DX does NOT answer HPSDR-style `effeeffe...` broadcasts. Its
 discovery path is a separate 24-byte UDP broadcast to port 50001 with
-header `32 ff 00 1a`. The radio replies with a 24-byte packet starting
-with `32 ff 01 1a` that carries the radio IP (bytes 10-13 big-endian)
-and the control port (bytes 18-19 little-endian, = 0xc351 = 50001).
+header `32 ff 00 1a`. SunSDR2 PRO uses the same packet layout but
+answers the `01 ff 00 1a` probe. The radio replies with a 24-byte packet
+starting with `XX ff 01 1a` that carries the radio IP (bytes 10-13
+big-endian) and the control port (bytes 18-19 little-endian).
 
 Wire layout confirmed from capture `20260311_151107_sunsdr2dx_discovery`:
   offset 0-3  : 32 ff 01 1a
@@ -35,17 +36,26 @@ namespace Thetis
         public const int DefaultControlPort = 50001;
         private const int QueryPacketLength = 24;
 
-        // Query magic: `32 ff 00 1a`. The `1a` byte is understood to be a
-        // model-family selector (confirmed 1a == SunSDR2 DX). Older SunSDR2
-        // variants may honour other values here; we broadcast the DX family
-        // query for now because that's the one we know is accepted.
-        private static readonly byte[] QueryMagic = new byte[] { 0x32, 0xff, 0x00, 0x1a };
-        // Reply magic: `32 ff 01 XX`. We only require the first 3 bytes to
-        // match — the XX model byte varies by radio family (SunSDR2 DX = 0x1a
-        // from our captures; SunSDR2 classic / PRO / QRP likely different).
-        // Accepting any fourth byte lets older SunSDR2 variants appear in
-        // the Discover list so we at least know they're on the wire.
-        private static readonly byte[] ReplyMagic = new byte[] { 0x32, 0xff, 0x01 };
+        // Query magic: the original DX-only path used `32 ff 00 1a`.
+        // The `1a` byte is understood to be a model-family selector
+        // (confirmed 1a == SunSDR2 DX). ExpertSDR3 probes several SunSDR
+        // families by varying byte 0 while keeping bytes 1..3 as `ff 00 1a`.
+        // Confirmed:
+        //   0x32 = SunSDR2 DX
+        //   0x01 = SunSDR2 PRO
+        // Additional family bytes are probed so older SunSDR2 variants can
+        // at least appear in the Discover list if they respond on the wire.
+        private static readonly byte[] QueryFamilyBytes = new byte[] { 0x32, 0x01, 0x42, 0x22, 0x12, 0x03 };
+
+        private static string getDisplayName(byte familyByte)
+        {
+            switch (familyByte)
+            {
+                case 0x32: return "SunSDR2 DX";
+                case 0x01: return "SunSDR2 PRO";
+                default:   return "SunSDR";
+            }
+        }
 
         public List<RadioInfo> Probe(IPAddress localIp, int timeoutMs)
         {
@@ -70,9 +80,12 @@ namespace Thetis
                 sock.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
                 sock.Bind(new IPEndPoint(localIp, 0));
 
-                byte[] query = buildQueryPacket();
                 IPEndPoint dest = new IPEndPoint(IPAddress.Broadcast, targetPort);
-                sock.SendTo(query, dest);
+                foreach (byte family in QueryFamilyBytes)
+                {
+                    byte[] query = buildQueryPacket(family);
+                    sock.SendTo(query, dest);
+                }
 
                 byte[] rxBuf = new byte[1500];
                 DateTime deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
@@ -98,7 +111,7 @@ namespace Thetis
                     }
 
                     if (n < QueryPacketLength) continue;
-                    if (!matchesMagic(rxBuf, ReplyMagic)) continue;
+                    if (!isSunSDRDiscoveryReply(rxBuf)) continue;
 
                     IPEndPoint src = from as IPEndPoint;
                     if (src == null) continue;
@@ -106,13 +119,18 @@ namespace Thetis
                      * responds from its listen port which equals our target. */
                     if (src.Port != targetPort) continue;
 
-                    // Byte 3 is the model-family selector (0x1a confirmed
-                    // == SunSDR2 DX). Surface it via Debug so we can tell
-                    // what models are being discovered on different setups.
+                    // Byte 0 is the family byte we varied in the query.
+                    // Byte 3 remains the model-family selector (0x1a confirmed
+                    // == SunSDR2 DX/PRO discovery family). Surface both via
+                    // Debug so we can tell what models are being discovered
+                    // on different setups.
+                    byte familyByte = rxBuf[0];
                     byte modelByte = rxBuf[3];
                     System.Diagnostics.Debug.WriteLine(
                         "[SunSDRDiscovery] Reply from " + src.Address +
-                        ":" + src.Port + " modelByte=0x" + modelByte.ToString("x2"));
+                        ":" + src.Port +
+                        " familyByte=0x" + familyByte.ToString("x2") +
+                        " modelByte=0x" + modelByte.ToString("x2"));
 
                     IPAddress radioIp = parseIpBE(rxBuf, 10);
                     int port = rxBuf[18] | (rxBuf[19] << 8);
@@ -127,6 +145,7 @@ namespace Thetis
                         IpAddress = radioIp,
                         MacAddress = "",
                         DeviceType = HPSDRHW.SunSDR,
+                        DisplayName = getDisplayName(familyByte),
                         CodeVersion = 0,
                         BetaVersion = 0,
                         Protocol2Supported = 0,
@@ -155,10 +174,13 @@ namespace Thetis
             return found;
         }
 
-        private static byte[] buildQueryPacket()
+        private static byte[] buildQueryPacket(byte familyByte)
         {
             byte[] pkt = new byte[QueryPacketLength];
-            Buffer.BlockCopy(QueryMagic, 0, pkt, 0, QueryMagic.Length);
+            pkt[0] = familyByte;
+            pkt[1] = 0xff;
+            pkt[2] = 0x00;
+            pkt[3] = 0x1a;
             // Middle bytes 4..21 stay zero. Checksum at 22-23: sum of 16-bit LE
             // words over bytes 0..21, one's complement. Radios accept zero
             // checksum in practice, but compute it in case firmware gets stricter.
@@ -175,12 +197,17 @@ namespace Thetis
             return pkt;
         }
 
-        private static bool matchesMagic(byte[] buf, byte[] magic)
+        private static bool isSunSDRDiscoveryReply(byte[] buf)
         {
-            if (buf == null || buf.Length < magic.Length) return false;
-            for (int i = 0; i < magic.Length; i++)
-                if (buf[i] != magic[i]) return false;
-            return true;
+            // Reply magic: `XX ff 01 1a`. The original DX path only required
+            // `32 ff 01` because the fourth model byte could vary by radio
+            // family. For multi-family probing, accept any byte 0 but keep the
+            // common `ff 01 1a` signature.
+            return buf != null &&
+                   buf.Length >= QueryPacketLength &&
+                   buf[1] == 0xff &&
+                   buf[2] == 0x01 &&
+                   buf[3] == 0x1a;
         }
 
         private static IPAddress parseIpBE(byte[] buf, int offset)
