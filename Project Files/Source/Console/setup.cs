@@ -865,7 +865,7 @@ namespace Thetis
             int[] p1_rates = include_extra_p1_rate ? new int[] { 48000, 96000, 192000, 384000 } : new int[] { 48000, 96000, 192000 };
             int[] p2_rates = { 48000, 96000, 192000, 384000, 768000, 1536000 };
             int[] sunsdr_dx_rates = { 312500 }; // DX: native 312.5 kHz router path
-            int[] sunsdr_pro_rates = { 384000 }; // PRO: 39.0625 -> 384 kHz upsample path
+            int[] sunsdr_pro_rates = { 312500 }; // PRO uses the same native 312.5 kHz router path as DX
 
             int[] rates = HardwareSpecific.Model == HPSDRModel.SUNSDR2DX ? sunsdr_dx_rates :
                           HardwareSpecific.Model == HPSDRModel.SUNSDR2PRO ? sunsdr_pro_rates :

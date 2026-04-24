@@ -20500,11 +20500,17 @@ namespace Thetis
 
         private int sample_rate_rx1 = 0; //[2.10.2.3]MW0LGE change to 0 so that comboAudioSampleRate1_SelectedIndexChanged will do its thing is system is shutdown with 48000 selected
         private int m_nOldSampleRateRX1 = 0;
+        private static int ClampSunSDRSampleRate(int rate)
+        {
+            return HardwareSpecific.IsCurrentSunSDRModel ? 312500 : rate;
+        }
+
         public int SampleRateRX1
         {
             get { return sample_rate_rx1; }
             set
             {
+                value = ClampSunSDRSampleRate(value);
                 m_nOldSampleRateRX1 = sample_rate_rx1;
 
                 sample_rate_rx1 = value;
@@ -20546,6 +20552,7 @@ namespace Thetis
             get { return sample_rate_rx2; }
             set
             {
+                value = ClampSunSDRSampleRate(value);
                 m_nOldSampleRateRX2 = sample_rate_rx2;
 
                 sample_rate_rx2 = value;

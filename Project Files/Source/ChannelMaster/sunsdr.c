@@ -1126,9 +1126,9 @@ static void sunsdr_cache_identity_candidate(const unsigned char* data, int len, 
 /* ========== Resampler: 39.0625 kHz packet IQ → Thetis RX rate ========== */
 
 /* DX now feeds xrouter natively at 312.5 kHz (upstream v2.0.8 path).
- * PRO still needs the older 39.0625 kHz -> 384 kHz upsample stage to
- * keep FM audio correct. Keep the resampler only for non-native-rate
- * profiles. */
+ * PRO shares the same wire-IQ packet format and display path, so it must
+ * use the same native router rate. Keep the resampler only for any future
+ * non-native profile. */
 #define SUNSDR_TARGET_RATE   384000.0
 #define SUNSDR_RESAMPLE_MAX  2048 /* 200 * 384000 / 39062.5 = 1966.08 */
 
@@ -2211,7 +2211,7 @@ static const char* SUNSDR_STATE_SYNC_TEMPLATE_HEX =
     "32ff01003200000000000100000000000000320000003200000032000000320000003200000032000000320000003200000000000000010003000300322af87f000028f8";
 
 static const char* SUNSDR_PRO_STATE_SYNC_TEMPLATE_HEX =
-    "32ff01003200000000000100000000000000140000001400000014000000140000001400000014000000140000001400000000000000010000000000a23cfc7f00008859";
+    "32ff01003200000000000100000000000000140000001400000014000000140000001400000014000000140000001400000000000000010003000300a23cfc7f00008859";
 
 static const char* SUNSDR_CONFIG_BLOCK_TEMPLATE_HEX =
     "32ff20003400000000000100000000000000010000000100000000000000000000006400000000000000000000001e000000bc02000007000000640000002c01000064000000";
@@ -2460,7 +2460,7 @@ static const sunsdr_macro_step_t power_on_macro_pro[] = {
     {"32ff1800040000000000010000000000000000000000", 22, 300},
     {"32ff19000400000000000100000000000000ff000000", 22, 300},
     {"32ff2100040000000000010000000000000000000000", 22, 300},
-    {"32ff01003200000000000100000000000000140000001400000014000000140000001400000014000000140000001400000000000000010000000000a23cfc7f00008859", 68, 300},
+    {"32ff01003200000000000100000000000000140000001400000014000000140000001400000014000000140000001400000000000000010003000300a23cfc7f00008859", 68, 300},
     {"32ff0900080000000000010000000000000060fd4d0400000000", 26, 300},
     {"32ff0800080000000000010000000000000098f35b0400000000", 26, 300},
     {"32ff08000800010000000100000000000000c058510400000000", 26, 300},
@@ -2472,7 +2472,7 @@ static const sunsdr_profile_t sunsdr_profile_dx = {
 };
 
 static const sunsdr_profile_t sunsdr_profile_pro = {
-    SUNSDR_VARIANT_PRO, "SunSDR2 PRO", 50002, 50003, 0x01, 39062.5, 0, 0
+    SUNSDR_VARIANT_PRO, "SunSDR2 PRO", 50002, 50003, 0x01, 312500.0, 0, 0
 };
 
 static const sunsdr_profile_t* sunsdr_profile_from_model(int modelId)
@@ -2949,8 +2949,8 @@ int SunSDRPowerOn(void)
     sdr.txPrevQ = 0.0;
     sdr.txAccumCount = 0;
 
-    /* PRO still uses the legacy RX upsample stage; clear its phase when a
-     * session starts so stale interpolation state cannot bleed across runs. */
+    /* Clear resampler state when a session starts so stale interpolation
+     * history cannot bleed across runs. */
     memset(resampler, 0, sizeof(resampler));
 
     /* Dump audio state BEFORE any fixes */
@@ -4374,8 +4374,7 @@ DWORD WINAPI SunSDRReadThread(LPVOID param)
                                payload[k + 0] << 8));     /* Q (bytes 0-2) */
         }
 
-        /* DX feeds WDSP natively at 312.5 kHz; PRO keeps the legacy
-         * resample step to 384 kHz. */
+        /* DX/PRO both feed WDSP natively at 312.5 kHz. */
         {
             int active_sources = pktbuf[8];
             int source = 0;
