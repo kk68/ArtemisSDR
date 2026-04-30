@@ -62,7 +62,7 @@ static void sunsdr_dbg_note_tx_packet(unsigned int seq);
 /* sunsdr_debug.log writer (sdr_logf path) and per-attempt IQ dumps.
  * Both disabled in production. Flip to 1 only when actively
  * diagnosing the TX/RX path. */
-#define SUNSDR_DEBUG_LOG_ENABLED 0
+#define SUNSDR_DEBUG_LOG_ENABLED 1
 #define SUNSDR_IQ_DUMP_ENABLED 0
 
 /* Global SunSDR session state — moved above the iq_dump / tx_pace
@@ -1671,6 +1671,23 @@ static void sunsdr_tx_outbound(int id, int nsamples, double* buff)
             double out_I = sdr.txAccumBoxI / (double)sdr.txAccumBoxN;
             double out_Q = sdr.txAccumBoxQ / (double)sdr.txAccumBoxN;
             sunsdr_queue_tx_packet_locked(out_I, out_Q);
+
+            /* PS-A feedback ring tap: capture the 39 kHz TX baseband
+             * sample we just emitted to the wire. Paired and dispatched
+             * to xrouter source=2 by the RX read thread when the matching
+             * radio->host 0xFD packet arrives. The tap is unconditional
+             * (no PS-enabled check here) — cheap and lets the ring stay
+             * primed if PS-A gets enabled mid-MOX. The reader skips
+             * dispatch when the controlword has PS off, so writing
+             * unconditionally is harmless. */
+            {
+                LONG head = InterlockedExchangeAdd(&sdr.psTxRingHeadCount, 0);
+                int idx = head & SUNSDR_PS_RING_MASK;
+                sdr.psTxRingI[idx] = out_I;
+                sdr.psTxRingQ[idx] = out_Q;
+                /* Publish AFTER write (release semantics via Interlocked). */
+                InterlockedIncrement(&sdr.psTxRingHeadCount);
+            }
 
             sdr.txAccumBoxI = 0.0;
             sdr.txAccumBoxQ = 0.0;
@@ -3425,6 +3442,15 @@ void SunSDRSetPTT(int ptt)
              * (user-visible as "radio in TX but no tone"). Resetting seq
              * here ensures each session starts seq=0 matching EESDR. */
             sdr.txSeq = 0;
+            /* PS-A feedback ring: clear at every PTT-on so the writer (TX
+             * callback) and reader (RX thread on radio->host 0xFD) start
+             * from a known empty state. Without this, samples from a prior
+             * TX session would remain in the ring and get paired with
+             * RX feedback from the new session — wrong content, would
+             * confuse pscc's correlation alignment for the first ~20
+             * packets until the ring drains. */
+            InterlockedExchange(&sdr.psTxRingHeadCount, 0);
+            InterlockedExchange(&sdr.psTxRingTailCount, 0);
             attempt_id = InterlockedIncrement(&sunsdr_dbg_attempt_seq);
             InterlockedExchange(&sunsdr_dbg_tx_attempt_id, attempt_id);
             sunsdr_dbg_reset_tx_attempt_locked(attempt_id);
@@ -4000,7 +4026,7 @@ DWORD WINAPI SunSDRReadThread(LPVOID param)
                         sdr.currentPTT, sdr.currentTune);
                 }
             }
-            sdr_logf("IQ status: pkts=%d, timeouts=%d, keepRunning=%d, HaveSync=%d txAttempt=%ld ptt=%d tune=%d txIqGate=%ld txFeed=%u keepaliveFE=%u keepaliveRace=%u rxSilence=%u realFE=%u realFD=%u xrouterReal=%u xrouterTotal=%u rxAccum=%.3f txPackets=%u activeFD=%ld seqGaps=%ld feDuringTx=%ld keepaliveRaces=%ld iqGateSkips=%ld firstFdBefore0x06=%ld\n",
+            sdr_logf("IQ status: pkts=%d, timeouts=%d, keepRunning=%d, HaveSync=%d txAttempt=%ld ptt=%d tune=%d txIqGate=%ld txFeed=%u keepaliveFE=%u keepaliveRace=%u rxSilence=%u realFE=%u realFD=%u xrouterReal=%u xrouterTotal=%u rxAccum=%.3f txPackets=%u activeFD=%ld seqGaps=%ld feDuringTx=%ld keepaliveRaces=%ld iqGateSkips=%ld firstFdBefore0x06=%ld psDispatch=%ld psUnderflow=%ld psRingDepth=%ld\n",
                 pkt_count,
                 timeout_count,
                 sdr.keepRunning,
@@ -4024,7 +4050,11 @@ DWORD WINAPI SunSDRReadThread(LPVOID param)
                 sunsdr_dbg_idle_fe_during_tx,
                 sunsdr_dbg_keepalive_tx_races,
                 sunsdr_dbg_tx_iq_gate_skips,
-                sunsdr_dbg_first_fd_before_cmd);
+                sunsdr_dbg_first_fd_before_cmd,
+                InterlockedExchangeAdd(&sdr.psDispatchCount, 0),
+                InterlockedExchangeAdd(&sdr.psRingUnderflowCount, 0),
+                InterlockedExchangeAdd(&sdr.psTxRingHeadCount, 0)
+                    - InterlockedExchangeAdd(&sdr.psTxRingTailCount, 0));
             last_log_time = now;
             timeout_count = 0;
             dbg_tx_feed_buffers = 0;
@@ -4382,6 +4412,102 @@ DWORD WINAPI SunSDRReadThread(LPVOID param)
                             if (rx_silence_accum < 0.0) {
                                 rx_silence_accum = 0.0;
                             }
+                        }
+                    }
+
+                    /* PS-A feedback dispatch.
+                     *
+                     * During MOX the radio sends 0xFD packets back at 195 pps
+                     * carrying RX-antenna IQ — i.e. T/R relay leakage of our
+                     * own TX signal observed by the configured RX path. Pair
+                     * each one with the matching TX baseband samples we sent
+                     * (drained from psTxRing) and dispatch as an interleaved
+                     * 2-stream block to xrouter source=2. The router config
+                     * (cmaster.cs SUNSDR case) gates this block via the
+                     * MOX+PS controlword bits — when PS is off, source=2 is
+                     * a no-op (function=0); when MOX+PS, function=2 fires
+                     * pscc() with [RX_feedback, TX_baseband] interleaved.
+                     *
+                     * Stream layout (per router.c case 2):
+                     *   data[0,1]   = sample 0 of stream 0 (RX feedback)
+                     *   data[2,3]   = sample 0 of stream 1 (TX baseband)
+                     *   data[4,5]   = sample 1 of stream 0
+                     *   ... (repeating for SUNSDR_IQ_COMPLEX_PER_PKT samples)
+                     *
+                     * SetPSRxIdx(0,0) + SetPSTxIdx(0,1) in cmaster.cs map
+                     * stream 0 -> ps_rx_idx (PA output observation) and
+                     * stream 1 -> ps_tx_idx (predistorter input reference).
+                     */
+                    if (pktbuf[2] == 0xFD && sdr.currentPTT) {
+                        LONG head = InterlockedExchangeAdd(&sdr.psTxRingHeadCount, 0);
+                        LONG tail = InterlockedExchangeAdd(&sdr.psTxRingTailCount, 0);
+                        LONG avail = head - tail;  /* signed sub handles wrap */
+
+                        /* Bounded-buffer alignment.
+                         *
+                         * Goal: pair each radio->host 0xFD packet with TX
+                         * baseband samples from a small, constant time offset
+                         * (so pscc's correlation step sees a stable offset
+                         * inside its search window).
+                         *
+                         * Approach:
+                         *   - Consume exactly SUNSDR_IQ_COMPLEX_PER_PKT (200)
+                         *     TX samples per RX FD packet.
+                         *   - Cap the buffer depth at PS_TX_RING_MAX_LAG.
+                         *     If avail > PS_TX_RING_MAX_LAG, the writer (WDSP
+                         *     TX callback) outpaced the reader and stale
+                         *     samples are accumulating; skip tail forward
+                         *     to head - PS_TX_RING_MAX_LAG to drop the
+                         *     stalest samples and keep paired offset bounded.
+                         *
+                         * Why this beats the prior two attempts:
+                         *   - "Oldest first, no cap" (original): buffer grew
+                         *     with every clock-skew tick; offset drifted
+                         *     outside pscc's correlation window.
+                         *   - "Jump tail to head-200" (alignment fix v1):
+                         *     consumed avail in one shot, so any small
+                         *     WDSP-vs-radio cadence jitter caused
+                         *     near-immediate underflow on next RX FD.
+                         *   - This (cap + 200-per-consume): keeps offset
+                         *     bounded but maintains a constant 200-sample
+                         *     reservoir for jitter absorption.
+                         *
+                         * Lag bound 600 samples = 15.4 ms at 39 kHz — well
+                         * within pscc's residual search window for IM3-IM5
+                         * SSB content.
+                         */
+                        #define PS_TX_RING_MAX_LAG 600
+                        if (avail > PS_TX_RING_MAX_LAG) {
+                            tail = head - PS_TX_RING_MAX_LAG;
+                            avail = PS_TX_RING_MAX_LAG;
+                        }
+
+                        if (avail >= SUNSDR_IQ_COMPLEX_PER_PKT) {
+                            int j;
+                            LONG t = tail;
+                            const double fb_scale = SUNSDR_PS_FB_SCALE;
+                            for (j = 0; j < SUNSDR_IQ_COMPLEX_PER_PKT; j++) {
+                                int ring_idx = t & SUNSDR_PS_RING_MASK;
+                                /* Stream 0: RX feedback (PA output observation).
+                                 * Scaled in software to bring peak into PS-A's
+                                 * target range (SetPk=0.2899). The hardware
+                                 * Auto-Attenuate path doesn't reach SunSDR's
+                                 * preamp/ATT control, so we attenuate here. */
+                                sdr.psFeedbackBuf[4*j + 0] = sdr.rxBuf[2*j + 0] * fb_scale;
+                                sdr.psFeedbackBuf[4*j + 1] = sdr.rxBuf[2*j + 1] * fb_scale;
+                                /* Stream 1: TX baseband (predistorter reference) */
+                                sdr.psFeedbackBuf[4*j + 2] = sdr.psTxRingI[ring_idx];
+                                sdr.psFeedbackBuf[4*j + 3] = sdr.psTxRingQ[ring_idx];
+                                t++;
+                            }
+                            InterlockedExchange(&sdr.psTxRingTailCount, t);
+                            /* nsamples = 400 because nstreams=2, sps=200 per stream */
+                            xrouter(NULL, 0, 2,
+                                    SUNSDR_IQ_COMPLEX_PER_PKT * 2,
+                                    sdr.psFeedbackBuf);
+                            InterlockedIncrement(&sdr.psDispatchCount);
+                        } else {
+                            InterlockedIncrement(&sdr.psRingUnderflowCount);
                         }
                     }
                 } __except(EXCEPTION_EXECUTE_HANDLER) {

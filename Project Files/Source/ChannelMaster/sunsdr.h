@@ -108,6 +108,44 @@ of the License, or (at your option) any later version.
 /* Control packet header size */
 #define SUNSDR_CTL_HDR_SIZE     18
 
+/* PureSignal feedback ring depth.
+ * Stores 39 kHz-decimated TX baseband samples that get paired with the
+ * radio->host 0xFD packets arriving during MOX. Sized for ~21 packet-times
+ * worth (4096 samples / 200 per pkt = 20.48 packets ~= 105 ms at 195 pps),
+ * comfortably above the worst-case round-trip delay between sending a TX
+ * 0xFD packet and receiving its corresponding feedback 0xFD packet. */
+#define SUNSDR_PS_RING_SIZE     4096
+#define SUNSDR_PS_RING_MASK     (SUNSDR_PS_RING_SIZE - 1)  /* must be power-of-2 minus 1 */
+
+/* PS-A wire feedback rate. 195.3125 packets/sec * 200 samples = 39062.5 Hz.
+ * This is what we tell WDSP's PS algorithm via SetPSFeedbackRate. The PS
+ * correlation/regression step is rate-agnostic in the algorithmic sense
+ * but uses this value to size internal delay structures correctly. */
+#define SUNSDR_PS_FEEDBACK_RATE 39062
+
+/* Software feedback-level scaling.
+ *
+ * The radio->host 0xFD payload during MOX delivers RX-antenna IQ at a
+ * gain that doesn't track the user's ATT button — wire-confirmed
+ * 2026-04-30: changed ATT +10 -> 0 produced zero change in GetPk.
+ * The feedback path bypasses the normal RX preamp.
+ *
+ * PS-A's algorithm target peak (set via SetPSHWPeak): 0.2899.
+ * Observed feedback peak on barefoot SUNSDR2DX + Acom 1010 at 14W drive: ~1.11.
+ * Ratio 1.11 / 0.2899 = 3.83  ->  scale factor 0.26 brings peaks into target range.
+ *
+ * Anan radios bring this ratio in via Auto-Attenuate stepping the on-board
+ * 0-31 dB step attenuator. SunSDR has no such control reachable from PS-A,
+ * so we scale in software here. PSCC's amplitude correction is ratio-based,
+ * so a constant scale factor on the feedback channel just folds into the
+ * LUT and has no effect on predistortion accuracy.
+ *
+ * Tune empirically: too high -> GetPk > 1 -> samples rejected as clipping.
+ * Too low -> algorithm reports "feedback level too low" warning. Aim for
+ * peaks around SetPk = 0.29.
+ */
+#define SUNSDR_PS_FB_SCALE 0.26
+
 /* ---------- State ---------- */
 
 typedef struct _sunsdr_state
@@ -200,6 +238,47 @@ typedef struct _sunsdr_state
     int rxBufSize;
     double txAccumBuf[SUNSDR_IQ_COMPLEX_PER_PKT * 2];
     CRITICAL_SECTION txLock;
+
+    /* ===== PureSignal (PS-A) feedback path =====
+     * Two streams must be delivered to WDSP's pscc() correlate function in
+     * lockstep: the predistorted TX baseband we sent (input reference) and
+     * the actual PA output sample observed via the configured RX antenna's
+     * T/R relay leakage (output observation). Both arrive at the wire at
+     * 39 kHz; we pair them packet-by-packet and dispatch as an interleaved
+     * 2-stream block to xrouter source 2.
+     *
+     * Writer (sunsdr_tx_outbound, runs on WDSP TX thread):
+     *   for each 39 kHz output sample emitted to wire, also push to ring.
+     *
+     * Reader (RX read thread, on radio->host 0xFD packet arrival during MOX):
+     *   drain SUNSDR_IQ_COMPLEX_PER_PKT samples, interleave with freshly
+     *   decoded RX feedback IQ, dispatch via xrouter(NULL, 0, 2, 400, buf).
+     *
+     * If reader runs ahead of writer (TX ring underflow), we skip dispatch
+     * for that packet — pscc handles intermittent gaps gracefully. If writer
+     * laps reader (extreme overrun), the older samples get overwritten,
+     * which is also harmless: pscc re-correlates on the next packet.
+     */
+    double psTxRingI[SUNSDR_PS_RING_SIZE];
+    double psTxRingQ[SUNSDR_PS_RING_SIZE];
+    /* Monotonic counters: writer increments after writing, reader increments
+     * after reading. Available = (head - tail). Ring index = count & MASK
+     * where MASK = SUNSDR_PS_RING_SIZE - 1 (size must be power of 2).
+     * Two's-complement subtraction handles 32-bit wraparound correctly. */
+    volatile LONG psTxRingHeadCount;
+    volatile LONG psTxRingTailCount;
+
+    /* Interleaved buffer for xrouter dispatch. Layout per router.c case 2:
+     *   [RX_I, RX_Q, TX_I, TX_Q] x SUNSDR_IQ_COMPLEX_PER_PKT
+     *   = 4 doubles per complex-sample-pair x 200 = 800 doubles.
+     * Stream 0 of the dispatch = RX feedback (PA output observation).
+     * Stream 1 of the dispatch = TX baseband (predistorter input reference).
+     * Mapping enforced by SetPSRxIdx(0,0) + SetPSTxIdx(0,1) in cmaster.cs. */
+    double psFeedbackBuf[SUNSDR_IQ_COMPLEX_PER_PKT * 4];
+
+    /* Diagnostic counters (drained periodically to sdr_log) */
+    volatile LONG psDispatchCount;       /* successful xrouter source=2 dispatches */
+    volatile LONG psRingUnderflowCount;  /* RX FD arrived but TX ring < 200 samples */
 
 } sunsdr_state_t;
 

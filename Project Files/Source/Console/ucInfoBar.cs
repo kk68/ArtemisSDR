@@ -836,28 +836,26 @@ namespace Thetis
             }
         }
 
-        // ─── SunSDR ADC-overload (OVL) repurpose of the PS labels ───────────
-        // PS-A is hardware-dead on SunSDR (no ADC feedback path), so the FB /
-        // Pure-Signal2 labels in the upper-right of the InfoBar are dead real
-        // estate. We reuse lblPS as the ADC-overload indicator: bold red "OVL"
-        // when overload active, hidden otherwise. lblFB is hidden permanently.
+        // ─── SunSDR ADC-overload (OVL) lamp ─────────────────────────────────
+        // PS-A is now wired for SunSDR via the wire-protocol feedback path, so
+        // lblFB / lblPS go back to their PS-A roles. The OVL warning moves to
+        // the middle of the InfoBar via lblWarning, used as a persistent lamp
+        // (bypasses the Warning() timer-based auto-clear). EnterSunSDROvlMode
+        // is kept as the entry point — caller is console.ApplySunSDRSpecificUI.
         private bool _sunsdrOvlMode = false;
         private bool _sunsdrOverload = false;
 
         public void EnterSunSDROvlMode()
         {
             _sunsdrOvlMode = true;
-            _psEnabled = false;
-            // Hide PureSignal/Feedback labels — the radio has no PS-A path.
-            lblFB.Visible = false;
-            // Repurpose lblPS as the ADC-Overload lamp.
-            lblPS.Text = "ADC-Overload";
-            lblPS.Font = new Font(lblPS.Font.FontFamily, 9f, FontStyle.Bold);
-            lblPS.ForeColor = Color.White;
-            lblPS.BackColor = Color.FromArgb(255, Color.DarkRed);
-            lblPS.TextAlign = ContentAlignment.MiddleCenter;
-            toolTip1.SetToolTip(lblPS, "ADC-Overload — strong signal saturating front end. Reduce ATT (try 0 dB or -10 dB).");
-            lblPS.Visible = false; // hidden until overload is detected
+            // lblFB and lblPS are NOT touched here — PS-A logic owns them.
+            // Just configure the persistent lamp styling on lblWarning. We
+            // leave it hidden until overload is detected. Timer-based
+            // Warning() messages will still work (they overwrite styling
+            // when invoked); after each Warning() expires, if overload is
+            // still active the next pollAdcOverload tick re-asserts our
+            // styling via the Overload setter below.
+            toolTip1.SetToolTip(lblWarning, "ADC-Overload — strong signal saturating front end. Reduce ATT (try 0 dB or -10 dB).");
         }
 
         public bool Overload
@@ -867,13 +865,27 @@ namespace Thetis
                 if (!_sunsdrOvlMode) return;
                 if (_sunsdrOverload == value) return;
                 _sunsdrOverload = value;
-                lblPS.Visible = value;
+                if (value)
+                {
+                    // Stop any auto-clearing timer-based Warning() message
+                    // that might be running so our persistent OVL lamp
+                    // isn't auto-hidden by it.
+                    if (_warningTimer != null) _warningTimer.Stop();
+                    lblWarning.Text = "ADC-Overload";
+                    lblWarning.ForeColor = Color.White;
+                    lblWarning.BackColor = Color.FromArgb(255, Color.DarkRed);
+                    lblWarning.Visible = true;
+                }
+                else
+                {
+                    lblWarning.Visible = false;
+                    lblWarning.BackColor = Color.Transparent;
+                }
             }
         }
 
         private void updatePSDisplay()
         {
-            if (_sunsdrOvlMode) return; // OVL mode owns lblPS — don't overwrite
             if (!_psEnabled)
             {
                 lblFB.BackColor = Color.FromArgb(255, Color.DimGray);

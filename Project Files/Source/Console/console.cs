@@ -6646,13 +6646,25 @@ namespace Thetis
 
             // ─── SunSDR family-wide UI hardening (any SunSDR radio) ──────────
 
-            // PS-A: PureSignal pre-distorter is Anan-only (requires the radio's
-            // bidirectional ADC feedback path); SunSDR wire protocol has no
-            // equivalent. Hide entirely on any SunSDR.
-            if (chkFWCATUBypass.Checked)
-                chkFWCATUBypass.Checked = false;
-            chkFWCATUBypass.Enabled = false;
-            chkFWCATUBypass.Visible = false;
+            // PS-A: enabled for SunSDR via the wire-protocol feedback path
+            // (radio->host 0xFD packets during MOX carry RX-antenna IQ
+            // observation; sunsdr.c interleaves with TX baseband and feeds
+            // xrouter source=2; cmaster.cs SUNSDR routing dispatches to
+            // pscc() when MOX+PS controlword bits are set). Default-off
+            // on first run; user opts in via the chkFWCATUBypass button.
+            // Operates as "barefoot" PS-A: feedback comes from T/R relay
+            // leakage of own TX into the configured RX antenna — same
+            // model as DL1YCF's HL2 PureSignal experiments.
+            //
+            // Explicit Show()+Enabled re-assert here because earlier builds
+            // hid these buttons for SunSDR; without an explicit re-show the
+            // form retains the hidden state across rebuilds even after the
+            // hide code is removed.
+            chkFWCATUBypass.Visible = true;
+            chkFWCATUBypass.Enabled = true;
+            chk2TONE.Visible = true;
+            // chk2TONE.Enabled is governed by RX-only / TX-inhibit /
+            // power-state code paths elsewhere; just expose visibility here.
 
             // ATT-on-TX: Anan/HPSDR Alex-board 0-31 dB step attenuator that
             // SunSDR doesn't have. Without this clear, the main-UI ATT
@@ -6661,16 +6673,6 @@ namespace Thetis
             // re-enabling on SunSDR, so this is a one-shot clear that
             // also handles a saved-DB state where ATTOnTX was true.
             ATTOnTX = false;
-            if (psform != null)
-            {
-                psform.AutoCalEnabled = false;
-                psform.PSEnabled = false;
-            }
-            // 2TON: requires PS-A path; not supported on any SunSDR.
-            if (chk2TONE.Checked)
-                chk2TONE.Checked = false;
-            chk2TONE.Enabled = false;
-            chk2TONE.Visible = false;
             // MON: TX-monitor audio path is broken on SunSDR — silent on
             // VAC paths, robotic on cmASIO. Long-standing, not a recent
             // regression. Architectural issue with the SunSDR-specific
@@ -6694,13 +6696,19 @@ namespace Thetis
             chkRX2SR.Enabled = false;
             chkRX2SR.Visible = false;
 
-            // With 2TON/DUP/PS-A hidden, compact the panelOptions button stack:
-            //   row 1 (y=7)  MON | TUN          (unchanged)
-            //   row 2 (y=30) MOX | xPA          (xPA moved up from y=76)
-            //   row 3 (y=53) REC | PLAY         (moved up from y=99)
-            chkExternalPA.Location = new System.Drawing.Point(59, 30);
-            ckQuickRec.Location   = new System.Drawing.Point(8,  53);
-            ckQuickPlay.Location  = new System.Drawing.Point(59, 53);
+            // Layout: PS-A and 2-TONE are now active for SunSDR (see PS-A
+            // feedback wiring in sunsdr.c + cmaster.cs SUNSDR routing), so
+            // restore the original panelOptions button stack from console.resx:
+            //   row 1 (y=7)   MON  | TUN
+            //   row 2 (y=30)  MOX  | 2-TONE       (chk2TONE)
+            //   row 3 (y=53)  PS-A | DUP          (chkFWCATUBypass | chkRX2SR-hidden)
+            //   row 4 (y=76)  ---  | xPA          (chkExternalPA at resx default)
+            //   row 5 (y=99)  REC  | PLAY         (ckQuickRec | ckQuickPlay at resx defaults)
+            // DUP (chkRX2SR) stays hidden on SunSDR (RX-LO-shutdown-during-MOX);
+            // its slot at (8, 53) sits empty — acceptable.
+            chkExternalPA.Location = new System.Drawing.Point(59, 76);
+            ckQuickRec.Location   = new System.Drawing.Point(8,  99);
+            ckQuickPlay.Location  = new System.Drawing.Point(59, 99);
 
             // Hide Anan-only Hardware Options (Mic Tip/Ring, Bias, XLR/3.5mm,
             // Alex matrix, Apollo). PTT Off/On stays visible — reserved for
@@ -15480,16 +15488,15 @@ namespace Thetis
             if (!IsSetupFormNull && HardwareSpecific.OldModel != HardwareSpecific.Model)
                 txtVFOAFreq_LostFocus(this, EventArgs.Empty);
 
-            // SUNSDR: PureSignal is not supported on this protocol. Force the
-            // PS-A UI unchecked and the internal PS state to disabled whenever
-            // the selected radio is SUNSDR2DX, so no PS-A code path can arm.
-            // 2-Tone test is part of the PS-A IMD calibration flow, so
-            // disable it too — on SunSDR it has no useful function without
-            // the matched feedback-loop sampling path.
-            // DUP button (chkRX2SR) is also inert on SunSDR — the radio's
-            // MOX path shuts down the RX LO during TX, so duplex receive
-            // cannot be supported structurally. See memory
-            // project_dup_behavior_sunsdr.md for the analysis.
+            // SUNSDR-specific UI hardening lives in ApplySunSDRSpecificUI:
+            //   - ATTOnTX disabled (Anan-only step attenuator concept)
+            //   - MON disabled (audio path issues on SunSDR; see memory
+            //     project_mon_disabled_v2_0_14.md)
+            //   - DUP inert (RX LO shuts down during MOX; see memory
+            //     project_dup_behavior_sunsdr.md)
+            // PS-A and 2TONE are now ENABLED on SunSDR — feedback path
+            // wired via radio->host 0xFD packets during MOX (see memory
+            // project_ps_a_sunsdr_feasibility.md).
             ApplySunSDRSpecificUI();
 
             cmaster.CMSetTXOutputLevelRun();
@@ -15921,7 +15928,7 @@ namespace Thetis
                     chkPower.Checked)
                     chkMOX.Enabled = !_rx_only;
                 chkTUN.Enabled = !_rx_only;
-                chk2TONE.Enabled = !_rx_only && HardwareSpecific.Model != HPSDRModel.SUNSDR2DX; // MW0LGE_21a — 2TONE is PS-A-only, not supported on SunSDR
+                chk2TONE.Enabled = !_rx_only;
                 chkVOX.Enabled = !_rx_only;
                 if (_rx_only && chkMOX.Checked)
                     chkMOX.Checked = false;
@@ -15952,7 +15959,7 @@ namespace Thetis
                     chkMOX.Enabled = !_tx_inhibit;
 
                 chkTUN.Enabled = !_tx_inhibit;
-                chk2TONE.Enabled = !_tx_inhibit && HardwareSpecific.Model != HPSDRModel.SUNSDR2DX; //MW0LGE_21a — 2TONE is PS-A-only, not supported on SunSDR
+                chk2TONE.Enabled = !_tx_inhibit;
                 chkVOX.Enabled = !_tx_inhibit;
 
                 if ((_rx1_dsp_mode == DSPMode.CWL ||
@@ -28293,7 +28300,7 @@ namespace Thetis
                 {
                     chkMOX.Enabled = true;
                     chkTUN.Enabled = true;
-                    chk2TONE.Enabled = HardwareSpecific.Model != HPSDRModel.SUNSDR2DX; //MW0LGE_21a — 2TONE is PS-A-only, not supported on SunSDR
+                    chk2TONE.Enabled = true;
                 }
                 chkVFOLock.Enabled = true;
                 chkVFOBLock.Enabled = true;
@@ -45329,25 +45336,9 @@ namespace Thetis
         }
 
         private bool _puresignal_auto_old_state = false;
-        private bool _ps_sunsdr_checkbox_forced_off_logged = false;
         private void chkFWCATUBypass_CheckedChanged(object sender, EventArgs e)
         {
             //PS-A button
-
-            // SUNSDR: PureSignal is hard-disabled. If the user managed to tick
-            // this while SUNSDR is active, force it back off (will re-enter this
-            // handler once from the programmatic uncheck). Never allow PS-A
-            // AutoCal or feedback state to arm for SUNSDR.
-            if (NetworkIO.CurrentRadioProtocol == RadioProtocol.SUNSDR && chkFWCATUBypass.Checked)
-            {
-                if (!_ps_sunsdr_checkbox_forced_off_logged)
-                {
-                    _ps_sunsdr_checkbox_forced_off_logged = true;
-                    System.Diagnostics.Debug.Print("PS_GATE_CHECKBOX_SUNSDR_FORCE_OFF: forcing chkFWCATUBypass unchecked for SUNSDR protocol");
-                }
-                chkFWCATUBypass.Checked = false;
-                return;
-            }
 
             bool oldState = psform.AutoCalEnabled;
             psform.AutoCalEnabled = chkFWCATUBypass.Checked;

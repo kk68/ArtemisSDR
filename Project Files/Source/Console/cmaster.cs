@@ -910,23 +910,56 @@ namespace Thetis
                     }
                     break;
                 case RadioProtocol.SUNSDR:
-                    int[] SunSDR_Function = new int[16]
+                    // SunSDR routing — three sources:
+                    //   source 0 (RX1):    Inbound (function=1) always
+                    //   source 1 (RX2):    Inbound (function=1) always
+                    //   source 2 (PS-A):   InboundBlock id=1 (function=2) only when MOX+PS;
+                    //                      no-op (function=0) otherwise
+                    //
+                    // 8 entries per source = 8 controlword combinations.
+                    // Controlword bits = { bit0:MOX, bit1:Diversity, bit2:PSEnabled }.
+                    // Index 5 (101) = MOX+PS-on, no Diversity   -> activate PS source.
+                    // Index 7 (111) = MOX+PS-on with Diversity  -> activate PS source.
+                    // (Mirrors the Anan FIVE_DDC pattern at the source-row level.)
+                    //
+                    // Source 2 carries 2 streams interleaved per packet:
+                    //   stream 0 = RX feedback (PA output observation)  -> ps_rx_idx=0
+                    //   stream 1 = TX baseband (predistorter reference) -> ps_tx_idx=1
+                    // The interleaved buffer is built and dispatched by sunsdr.c
+                    // whenever a radio->host 0xFD packet arrives during MOX.
+                    int[] SunSDR_Function = new int[24]
                         {
-                        1, 1, 1, 1, 1, 1, 1, 1,     // source 0 -> RX1 inbound
-                        1, 1, 1, 1, 1, 1, 1, 1      // source 1 -> RX2 inbound
+                        1, 1, 1, 1, 1, 1, 1, 1,     // source 0 -> RX1 inbound (always)
+                        1, 1, 1, 1, 1, 1, 1, 1,     // source 1 -> RX2 inbound (always)
+                        0, 0, 0, 0, 0, 2, 0, 2      // source 2 -> PS InboundBlock when MOX+PS only
                         };
-                    int[] SunSDR_Callid = new int[16]
+                    int[] SunSDR_Callid = new int[24]
                         {
                         0, 0, 0, 0, 0, 0, 0, 0,     // source 0: RX1
-                        1, 1, 1, 1, 1, 1, 1, 1      // source 1: RX2
+                        1, 1, 1, 1, 1, 1, 1, 1,     // source 1: RX2
+                        0, 0, 0, 0, 0, 1, 0, 1      // source 2: pscc() (callid=1 -> InboundBlock id=1)
                         };
-                    int[] SunSDR_nstreams = new int[2]
+                    int[] SunSDR_nstreams = new int[3]
                         {
-                        1,                           // source 0 carries one RX IQ stream
-                        1                            // source 1 carries one RX IQ stream
+                        1,                           // source 0: 1 stream
+                        1,                           // source 1: 1 stream
+                        2                            // source 2: 2 streams (RX feedback + TX baseband)
                         };
                     fixed (int* pstreams = &SunSDR_nstreams[0], pfunction = &SunSDR_Function[0], pcallid = &SunSDR_Callid[0])
-                        LoadRouterAll((void*)0, 0, 2, 1, 8, pstreams, pfunction, pcallid);
+                        LoadRouterAll((void*)0, 0, 3, 1, 8, pstreams, pfunction, pcallid);
+
+                    // PS feedback rate for SunSDR is the wire rate (39 kHz),
+                    // not the default 192 kHz. Tells WDSP's PS algorithm to
+                    // size its internal delay structures for 39 kHz samples.
+                    // Must be re-asserted here because CMLoadRouterAll runs
+                    // every model change; PSrate property setter only takes
+                    // effect at this call site.
+                    {
+                        int ps_txinid = cmaster.inid(1, 0);
+                        int ps_txch = cmaster.chid(ps_txinid, 0);
+                        puresignal.SetPSFeedbackRate(ps_txch, 39062);
+                        ps_rate = 39062;
+                    }
                     break;
             }
         }
