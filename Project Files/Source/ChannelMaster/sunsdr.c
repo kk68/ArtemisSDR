@@ -4472,11 +4472,21 @@ DWORD WINAPI SunSDRReadThread(LPVOID param)
                          *     bounded but maintains a constant 200-sample
                          *     reservoir for jitter absorption.
                          *
-                         * Lag bound 600 samples = 15.4 ms at 39 kHz — well
-                         * within pscc's residual search window for IM3-IM5
-                         * SSB content.
+                         * Lag bound: pscc has NO correlation search window
+                         * (verified by reading calcc.c) — it pairs TX[i]
+                         * with RX[i] at the same buffer index, assuming
+                         * pre-aligned input. Any offset between paired
+                         * samples on a continuously-varying envelope
+                         * (two-tone beat) maps env_TX vs env_RX into a
+                         * Lissajous-like scatter, the cm polynomial fit
+                         * oscillates wildly, and scheck rejects (binfo[6]
+                         * |= 0x04 / 0x10 / 0x40). Diagnosed 2026-05-01.
+                         *
+                         * Tightened from 600 to 250 (~6.4 ms at 39 kHz =
+                         * one packet's worth) so paired TX/RX are within
+                         * one wire-frame of each other in time.
                          */
-                        #define PS_TX_RING_MAX_LAG 600
+                        #define PS_TX_RING_MAX_LAG 250
                         if (avail > PS_TX_RING_MAX_LAG) {
                             tail = head - PS_TX_RING_MAX_LAG;
                             avail = PS_TX_RING_MAX_LAG;
@@ -4485,19 +4495,23 @@ DWORD WINAPI SunSDRReadThread(LPVOID param)
                         if (avail >= SUNSDR_IQ_COMPLEX_PER_PKT) {
                             int j;
                             LONG t = tail;
+                            const double tx_scale = SUNSDR_PS_TX_SCALE;
                             const double fb_scale = SUNSDR_PS_FB_SCALE;
                             for (j = 0; j < SUNSDR_IQ_COMPLEX_PER_PKT; j++) {
                                 int ring_idx = t & SUNSDR_PS_RING_MASK;
                                 /* Stream 0: RX feedback (PA output observation).
-                                 * Scaled in software to bring peak into PS-A's
-                                 * target range (SetPk=0.2899). The hardware
-                                 * Auto-Attenuate path doesn't reach SunSDR's
-                                 * preamp/ATT control, so we attenuate here. */
+                                 * Both streams scaled by SUNSDR_PS_*_SCALE to
+                                 * land in PSCC's Anan-design-point input range
+                                 * (~0..0.30 peak) so the polynomial-fit sanity
+                                 * checks (rxscheck/scheck) don't reject every
+                                 * cycle for "out > 1.0". Uniform scaling on
+                                 * both channels is transparent to PSCC's
+                                 * amplitude-ratio LUT. */
                                 sdr.psFeedbackBuf[4*j + 0] = sdr.rxBuf[2*j + 0] * fb_scale;
                                 sdr.psFeedbackBuf[4*j + 1] = sdr.rxBuf[2*j + 1] * fb_scale;
                                 /* Stream 1: TX baseband (predistorter reference) */
-                                sdr.psFeedbackBuf[4*j + 2] = sdr.psTxRingI[ring_idx];
-                                sdr.psFeedbackBuf[4*j + 3] = sdr.psTxRingQ[ring_idx];
+                                sdr.psFeedbackBuf[4*j + 2] = sdr.psTxRingI[ring_idx] * tx_scale;
+                                sdr.psFeedbackBuf[4*j + 3] = sdr.psTxRingQ[ring_idx] * tx_scale;
                                 t++;
                             }
                             InterlockedExchange(&sdr.psTxRingTailCount, t);

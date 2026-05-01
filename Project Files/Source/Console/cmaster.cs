@@ -959,6 +959,24 @@ namespace Thetis
                         int ps_txch = cmaster.chid(ps_txinid, 0);
                         puresignal.SetPSFeedbackRate(ps_txch, 39062);
                         ps_rate = 39062;
+                        // SetPSHWPeak: keep at the Anan default 0.2899 because
+                        // sunsdr.c now scales BOTH the TX baseband and RX
+                        // feedback streams by SUNSDR_PS_TX_SCALE / FB_SCALE
+                        // (~0.29 each) before delivering them to PSCC. This
+                        // matches the Anan-design-point input range
+                        // (env in 0..0.30 peak) that PSCC's curve-fit and
+                        // sanity-check routines (xbuilder, rxscheck, scheck)
+                        // were tuned for.
+                        //
+                        // History note: an earlier attempt set peak=1.10 to
+                        // accept TX samples up to 1.10 unscaled. That fixed
+                        // the TX gate but the curve-fit polynomials still
+                        // produced values >1.0 at peak amplitudes which
+                        // tripped rxscheck (bit 0x0004), driving scOK=false
+                        // and forcing LRESET cycles every ~0.5s. Symptom:
+                        // GetPk visibly cycling 0<->peak each cycle. The
+                        // uniform pre-scaling now mimics Anan exactly.
+                        puresignal.SetPSHWPeak(ps_txch, 0.2899);
                     }
                     break;
             }

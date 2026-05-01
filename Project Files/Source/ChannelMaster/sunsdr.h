@@ -123,28 +123,44 @@ of the License, or (at your option) any later version.
  * but uses this value to size internal delay structures correctly. */
 #define SUNSDR_PS_FEEDBACK_RATE 39062
 
-/* Software feedback-level scaling.
+/* PS-A stream scaling — match Anan-design-point input range to PSCC.
  *
- * The radio->host 0xFD payload during MOX delivers RX-antenna IQ at a
- * gain that doesn't track the user's ATT button — wire-confirmed
- * 2026-04-30: changed ATT +10 -> 0 produced zero change in GetPk.
- * The feedback path bypasses the normal RX preamp.
+ * PSCC's algorithm was designed around Anan-family radios where the
+ * TX-baseband-to-RX-feedback relationship sits at ~0.2899 ratio (i.e.,
+ * when TX baseband is at 1.0 normalized, RX2 feedback ADC reads ~0.29
+ * due to internal PA + RX gain stages). The algorithm's curve-fitting
+ * routines (xbuilder / rxscheck / scheck) are tuned for samples in that
+ * compressed range; outside it, the polynomial fits go above 1.0 and
+ * trigger sanity-check rejections (binfo[7] |= 0x0004), which sets
+ * scOK=false and bails the cycle to LRESET. Symptom: cor.cnt climbs
+ * but bldr.* never populate, GetPk visibly cycles to 0 (env_maxtx reset
+ * in LRESET state) every half second.
  *
- * PS-A's algorithm target peak (set via SetPSHWPeak): 0.2899.
- * Observed feedback peak on barefoot SUNSDR2DX + Acom 1010 at 14W drive: ~1.11.
- * Ratio 1.11 / 0.2899 = 3.83  ->  scale factor 0.26 brings peaks into target range.
- *
- * Anan radios bring this ratio in via Auto-Attenuate stepping the on-board
- * 0-31 dB step attenuator. SunSDR has no such control reachable from PS-A,
- * so we scale in software here. PSCC's amplitude correction is ratio-based,
- * so a constant scale factor on the feedback channel just folds into the
- * LUT and has no effect on predistortion accuracy.
- *
- * Tune empirically: too high -> GetPk > 1 -> samples rejected as clipping.
- * Too low -> algorithm reports "feedback level too low" warning. Aim for
- * peaks around SetPk = 0.29.
+ * SunSDR's wire-protocol radio->host 0xFD path delivers TX and RX both
+ * at ~1.0 peaks. Scaling BOTH streams by ~0.29 before handing to PSCC
+ * mimics the Anan input range exactly. Predistortion accuracy is
+ * preserved because the LUT is amplitude-ratio based and a uniform
+ * scale on both channels is mathematically transparent to the fit.
  */
-#define SUNSDR_PS_FB_SCALE 0.26
+/* Scaling factor — there are TWO competing constraints:
+ *   (1) Peak samples shouldn't get gate-rejected: peak_TX_raw * SCALE <= 0.2899
+ *   (2) Peak samples MUST reach pscc's bin 15 (env_post_scale >= 0.94)
+ *       so full_ints == ints fires and LCALC actually runs. Otherwise
+ *       LCOLLECT never exits and cor.cnt stays at 0.
+ *
+ * For TX_raw peak ~1.045: bin-15-fill requires SCALE >= 0.261;
+ *                          gate-no-reject requires SCALE <= 0.277.
+ *
+ * 0.25 was too low (bin 15 never reached, LCOLLECT stuck, cor.cnt=0).
+ * 0.27 satisfies both for typical peaks: bin 15 fills, cor.cnt climbs to ~100/30s.
+ * Some peaks (when TX_raw spikes to 1.12) get gate-rejected at 0.27, but
+ * mid-range samples still cover bin 15. Trade-off that keeps cycles running.
+ *
+ * Same factor on both streams keeps the TX/RX ratio uniform — the LUT
+ * is amplitude-ratio based, so this is mathematically transparent to
+ * predistortion accuracy. */
+#define SUNSDR_PS_TX_SCALE 0.27
+#define SUNSDR_PS_FB_SCALE 0.27
 
 /* ---------- State ---------- */
 

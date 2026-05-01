@@ -566,7 +566,16 @@ namespace Thetis
                 lblPSInfo3.Text = puresignal.Info[3].ToString();
                 lblPSfb2.Text = puresignal.FeedbackLevel.ToString();
                 lblPSInfo5.Text = puresignal.CalibrationCount.ToString();
-                lblPSInfo6.Text = puresignal.Info[6].ToString();
+                // SunSDR PS-A bring-up diagnostic: show binfo[6]/binfo[7] together.
+                // binfo[7] = rxscheck flag (rejected if non-zero), normally hidden.
+                // bit meanings (calcc.c rxscheck):
+                //   0x0001 NaN in coefficients
+                //   0x0002 all-zero coefficient set (no samples in some bin)
+                //   0x0004 polynomial fit value exceeds 1.0 at sample point
+                //   0x0008 extrapolated value exceeds 1.07
+                //   0x0010 polynomial fit value goes negative
+                //   0x0020 extrapolated value goes negative
+                lblPSInfo6.Text = puresignal.Info[6].ToString("X") + "/" + puresignal.Info[7].ToString("X");
                 lblPSInfo13.Text = puresignal.Info[13].ToString();
                 lblPSInfo15.Text = puresignal.Info[15].ToString();
             }
