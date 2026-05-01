@@ -63,7 +63,7 @@ static void sunsdr_dbg_note_tx_packet(unsigned int seq);
  * Both disabled in production. Flip to 1 only when actively
  * diagnosing the TX/RX path. */
 #define SUNSDR_DEBUG_LOG_ENABLED 1
-#define SUNSDR_IQ_DUMP_ENABLED 0
+#define SUNSDR_IQ_DUMP_ENABLED 1
 
 /* Global SunSDR session state — moved above the iq_dump / tx_pace
  * helpers which need sdr.currentPTT, sdr.streamSock, sdr.txSeq, etc. */
@@ -507,6 +507,39 @@ static DWORD WINAPI tx_pace_thread_proc(LPVOID lp)
                          * happens at very first tick post-PTT-on before
                          * the producer has delivered anything. */
                         continue;
+                    }
+                }
+
+                /* PSA diag: log bytes about to be sent for the FIRST 5 LOUD
+                 * packets seen in the pacing thread. Compare with PSA_DIAG_BUILD
+                 * postwrite for same seq number to detect corruption between
+                 * build and sendto. */
+                {
+                    static int psa_diag_pace_logged = 0;
+                    if (psa_diag_pace_logged < 5 && had_packet) {
+                        unsigned int dseq = (unsigned int)pkt_to_send[6] |
+                                            ((unsigned int)pkt_to_send[7] << 8);
+                        int kk;
+                        int found = -1;
+                        for (kk = 0; kk < SUNSDR_IQ_COMPLEX_PER_PKT; kk++) {
+                            int kp = SUNSDR_IQ_HDR_SIZE + kk * SUNSDR_IQ_BYTES_PER_IQ;
+                            int u0 = pkt_to_send[kp+0] | (pkt_to_send[kp+1]<<8) | (pkt_to_send[kp+2]<<16);
+                            int u1 = pkt_to_send[kp+3] | (pkt_to_send[kp+4]<<8) | (pkt_to_send[kp+5]<<16);
+                            int v0 = (u0 & 0x800000) ? u0 - 0x1000000 : u0;
+                            int v1 = (u1 & 0x800000) ? u1 - 0x1000000 : u1;
+                            if (abs(v0) > 500000 || abs(v1) > 500000) {
+                                found = kk;
+                                break;
+                            }
+                        }
+                        if (found >= 0) {
+                            int kp = SUNSDR_IQ_HDR_SIZE + found * SUNSDR_IQ_BYTES_PER_IQ;
+                            sdr_logf("PSA_DIAG_PACE pre_sendto seq=%u sample_idx=%d offset=%d bytes: %02x %02x %02x %02x %02x %02x\n",
+                                dseq, found, kp,
+                                pkt_to_send[kp+0], pkt_to_send[kp+1], pkt_to_send[kp+2],
+                                pkt_to_send[kp+3], pkt_to_send[kp+4], pkt_to_send[kp+5]);
+                            psa_diag_pace_logged++;
+                        }
                     }
                 }
 
@@ -1489,6 +1522,76 @@ static void sunsdr_build_tx_packet(unsigned char* buf, unsigned int seq, const d
      */
     sunsdr_build_iq_header(buf, SUNSDR_OP_IQ_TX_ACTIVE, seq, 0x02, 0x01);
 
+    /* PSA diag: log first 5 (I, Q) pairs of the FIRST packet built per
+     * MOX session, plus the per-second peak across all subsequent packets.
+     * Tells us exactly what data sunsdr_build_tx_packet sees, AND whether
+     * I==Q at the same sample index (collapse to real). */
+    {
+        static ULONGLONG psa_diag_build_last = 0;
+        static double psa_diag_build_peakI = 0.0;
+        static double psa_diag_build_peakQ = 0.0;
+        static double psa_diag_build_max_diff = 0.0;
+        static long psa_diag_build_eq_count = 0;
+        static long psa_diag_build_total = 0;
+        static long psa_diag_build_pkts = 0;
+        static int psa_diag_build_first_logged = 0;
+        static int psa_diag_build_loud_logged = 0;
+        ULONGLONG now_t = GetTickCount64();
+        int kk;
+        if (!psa_diag_build_first_logged && sdr.currentPTT) {
+            sdr_logf("PSA_DIAG_BUILD first pkt seq=%u iqPtr=%p sdr.txAccumBufPtr=%p\n",
+                seq, (void*)iq, (void*)sdr.txAccumBuf);
+            for (kk = 0; kk < 5; kk++) {
+                sdr_logf("  PSA_DIAG_BUILD sample[%d] I=iq[%d]=%.6f  Q=iq[%d]=%.6f\n",
+                    kk, 2*kk, iq[2*kk], 2*kk+1, iq[2*kk+1]);
+            }
+            psa_diag_build_first_logged = 1;
+        }
+        for (kk = 0; kk < SUNSDR_IQ_COMPLEX_PER_PKT; kk++) {
+            double vI = iq[2*kk + 0];
+            double vQ = iq[2*kk + 1];
+            double aI = fabs(vI);
+            double aQ = fabs(vQ);
+            double diff = fabs(vI - vQ);
+            if (aI > psa_diag_build_peakI) psa_diag_build_peakI = aI;
+            if (aQ > psa_diag_build_peakQ) psa_diag_build_peakQ = aQ;
+            if (diff > psa_diag_build_max_diff) psa_diag_build_max_diff = diff;
+            if (vI == vQ) psa_diag_build_eq_count++;
+            psa_diag_build_total++;
+        }
+        /* Once per session: log a loud-packet sample dump when peak |IQ| exceeds 0.5 */
+        if (!psa_diag_build_loud_logged && sdr.currentPTT) {
+            for (kk = 0; kk < SUNSDR_IQ_COMPLEX_PER_PKT; kk++) {
+                if (fabs(iq[2*kk]) > 0.5 || fabs(iq[2*kk+1]) > 0.5) {
+                    int kk2;
+                    sdr_logf("PSA_DIAG_BUILD loud_pkt seq=%u sample_idx=%d (within pkt):\n", seq, kk);
+                    for (kk2 = kk; kk2 < kk + 5 && kk2 < SUNSDR_IQ_COMPLEX_PER_PKT; kk2++) {
+                        sdr_logf("  PSA_DIAG_BUILD loud[%d] I=iq[%d]=%.6f  Q=iq[%d]=%.6f  diff=%.6f\n",
+                            kk2, 2*kk2, iq[2*kk2], 2*kk2+1, iq[2*kk2+1],
+                            iq[2*kk2] - iq[2*kk2+1]);
+                    }
+                    psa_diag_build_loud_logged = 1;
+                    break;
+                }
+            }
+        }
+        psa_diag_build_pkts++;
+        if (psa_diag_build_last == 0) psa_diag_build_last = now_t;
+        else if (now_t - psa_diag_build_last >= 1000) {
+            sdr_logf("PSA_DIAG_BUILD per_sec peakI=%.6f peakQ=%.6f maxDiff=%.6f eqFrac=%.4f pkts=%ld\n",
+                psa_diag_build_peakI, psa_diag_build_peakQ, psa_diag_build_max_diff,
+                psa_diag_build_total > 0 ? (double)psa_diag_build_eq_count / (double)psa_diag_build_total : 0.0,
+                psa_diag_build_pkts);
+            psa_diag_build_peakI = 0.0;
+            psa_diag_build_peakQ = 0.0;
+            psa_diag_build_max_diff = 0.0;
+            psa_diag_build_eq_count = 0;
+            psa_diag_build_total = 0;
+            psa_diag_build_pkts = 0;
+            psa_diag_build_last = now_t;
+        }
+    }
+
     for (i = 0; i < SUNSDR_IQ_COMPLEX_PER_PKT; i++) {
         int I = sunsdr_quantize24(iq[2 * i + 0]);
         int Q = sunsdr_quantize24(iq[2 * i + 1]);
@@ -1510,6 +1613,47 @@ static void sunsdr_build_tx_packet(unsigned char* buf, unsigned int seq, const d
         payload[k + 3] = (unsigned char)(I & 0xFF);
         payload[k + 4] = (unsigned char)((I >> 8) & 0xFF);
         payload[k + 5] = (unsigned char)((I >> 16) & 0xFF);
+    }
+
+    /* PSA diag: log the actual bytes written to the buffer for the FIRST
+     * loud packet, AT THE END of the encode loop. Compare with wire bytes
+     * for the same seq to detect post-encode overwrite. */
+    {
+        static int psa_diag_buf_logged = 0;
+        if (!psa_diag_buf_logged && sdr.currentPTT) {
+            int kk;
+            int found = -1;
+            /* Find a sample where |I| or |Q| > 0.5 in the source iq buffer. */
+            for (kk = 0; kk < SUNSDR_IQ_COMPLEX_PER_PKT; kk++) {
+                if (fabs(iq[2*kk]) > 0.5 || fabs(iq[2*kk+1]) > 0.5) {
+                    found = kk;
+                    break;
+                }
+            }
+            if (found >= 0) {
+                int kpay = found * SUNSDR_IQ_BYTES_PER_IQ;
+                sdr_logf("PSA_DIAG_BUILD postwrite seq=%u sample_idx=%d payload_offset=%d:\n",
+                    seq, found, kpay);
+                sdr_logf("  PSA_DIAG_BUILD postwrite source iq[%d]=%.6f iq[%d]=%.6f\n",
+                    2*found, iq[2*found], 2*found+1, iq[2*found+1]);
+                sdr_logf("  PSA_DIAG_BUILD postwrite written bytes [%d..%d]: %02x %02x %02x %02x %02x %02x\n",
+                    kpay, kpay+5,
+                    payload[kpay+0], payload[kpay+1], payload[kpay+2],
+                    payload[kpay+3], payload[kpay+4], payload[kpay+5]);
+                /* Also log next 4 sample pairs */
+                {
+                    int kk2;
+                    for (kk2 = found+1; kk2 < found+5 && kk2 < SUNSDR_IQ_COMPLEX_PER_PKT; kk2++) {
+                        int kp2 = kk2 * SUNSDR_IQ_BYTES_PER_IQ;
+                        sdr_logf("  PSA_DIAG_BUILD postwrite [%d] iq=(%.6f, %.6f) bytes: %02x %02x %02x %02x %02x %02x\n",
+                            kk2, iq[2*kk2], iq[2*kk2+1],
+                            payload[kp2+0], payload[kp2+1], payload[kp2+2],
+                            payload[kp2+3], payload[kp2+4], payload[kp2+5]);
+                    }
+                }
+                psa_diag_buf_logged = 1;
+            }
+        }
     }
 }
 
@@ -1670,6 +1814,35 @@ static void sunsdr_tx_outbound(int id, int nsamples, double* buff)
         if (sdr.txPhase >= 1.0) {
             double out_I = sdr.txAccumBoxI / (double)sdr.txAccumBoxN;
             double out_Q = sdr.txAccumBoxQ / (double)sdr.txAccumBoxN;
+            /* PSA diag: track post-resample envelope peak and accumulate RMS so
+             * we can compare with pre-resample (cur_I/Q) and isolate any loss
+             * inside the boxcar. Reported once per second (~7800 outputs/sec). */
+            {
+                static ULONGLONG psa_diag_post_last = 0;
+                static double psa_diag_post_peak = 0.0;
+                static double psa_diag_post_sumsq = 0.0;
+                static long psa_diag_post_n = 0;
+                static double psa_diag_pre_peak = 0.0;
+                ULONGLONG now_t = GetTickCount64();
+                double mag_post = sqrt(out_I * out_I + out_Q * out_Q);
+                double mag_pre = sqrt(cur_I * cur_I + cur_Q * cur_Q);
+                if (mag_post > psa_diag_post_peak) psa_diag_post_peak = mag_post;
+                if (mag_pre > psa_diag_pre_peak) psa_diag_pre_peak = mag_pre;
+                psa_diag_post_sumsq += out_I * out_I + out_Q * out_Q;
+                psa_diag_post_n++;
+                if (psa_diag_post_last == 0) psa_diag_post_last = now_t;
+                else if (now_t - psa_diag_post_last >= 1000) {
+                    double rms_post = (psa_diag_post_n > 0)
+                        ? sqrt(psa_diag_post_sumsq / (2.0 * psa_diag_post_n)) : 0.0;
+                    sdr_logf("PSA_DIAG_POSTRESAMPLE prePeakLastSamp=%.6f postPeak=%.6f postRms=%.6f outs=%ld\n",
+                        psa_diag_pre_peak, psa_diag_post_peak, rms_post, psa_diag_post_n);
+                    psa_diag_post_peak = 0.0;
+                    psa_diag_pre_peak = 0.0;
+                    psa_diag_post_sumsq = 0.0;
+                    psa_diag_post_n = 0;
+                    psa_diag_post_last = now_t;
+                }
+            }
             sunsdr_queue_tx_packet_locked(out_I, out_Q);
 
             /* PS-A feedback ring tap: capture the 39 kHz TX baseband

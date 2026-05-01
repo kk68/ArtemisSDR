@@ -178,6 +178,31 @@ void asioIN(double* in_tx)
 		xrmatchOUT(pcma->rmatchIN, in_tx);
 		combinebuff(pcma->tx_size, in_tx, in_tx);
 	}
+	/* PSA diag: peak |sample| from cmASIO mic into TX stream, summarised once
+	 * per second. Tells us whether PC mic is actually reaching WDSP TXA when
+	 * voice doesn't appear in the wire 0xFD packets. */
+	{
+		static ULONGLONG psa_diag_last_tick = 0;
+		static double psa_diag_peak = 0.0;
+		static long psa_diag_calls = 0;
+		ULONGLONG now = GetTickCount64();
+		int k;
+		for (k = 0; k < pcma->tx_size; k++) {
+			double mi = fabs(in_tx[2*k]);
+			double mq = fabs(in_tx[2*k+1]);
+			if (mi > psa_diag_peak) psa_diag_peak = mi;
+			if (mq > psa_diag_peak) psa_diag_peak = mq;
+		}
+		psa_diag_calls++;
+		if (psa_diag_last_tick == 0) psa_diag_last_tick = now;
+		else if (now - psa_diag_last_tick >= 1000) {
+			sdr_logf("PSA_DIAG_ASIOIN peak=%.6f calls=%ld lockMode=%d underflow_in=%ld\n",
+				psa_diag_peak, psa_diag_calls, pcma->lockMode, pcma->underFlowsIn);
+			psa_diag_peak = 0.0;
+			psa_diag_calls = 0;
+			psa_diag_last_tick = now;
+		}
+	}
 }
 
 void asioOUT(int id, int nsamples, double* buff)
