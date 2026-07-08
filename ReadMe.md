@@ -2,7 +2,7 @@
 
 *Open source. Native protocol. Dedicated to Artemis II.*
 
-**Current version: v2.1.8**
+**Current version: v2.1.9**
 
 ⬇️ [**Download Latest Release**](https://github.com/kk68/ArtemisSDR/releases/latest)  ·  📘 [**Quick Start Guide**](START_HERE.md)  ·  📝 [What's new](https://github.com/kk68/ArtemisSDR/releases/latest)  ·  💬 [Discussions](https://github.com/kk68/ArtemisSDR/discussions)  ·  🐛 [Issues](https://github.com/kk68/ArtemisSDR/issues)
 
@@ -12,7 +12,19 @@
 
 ArtemisSDR is maintained by Kosta Kanchev (K0KOZ). It is a fork of [Thetis](https://github.com/ramdor/Thetis) by Richard Samphire (MW0LGE), which itself descends from OpenHPSDR (Doug Wigley, W5WC) and PowerSDR (FlexRadio Systems). Specialized for the SunSDR2 family (DX + PRO) and released under GPL v2.
 
-### What's new in v2.1.8
+### What's new in v2.1.9
+
+**SunSDR2 PRO RX lifted to native 312.5 kHz — done properly this time (issue #47 / #46).** After v2.1.7's PRO native-rate attempt broke RX audio and was reverted in v2.1.8, Jeff N0GQ picked up the trail on his own bench with a real SunSDR2 PRO, captured ExpertSDR3 stepping the radio through all four IQ rates, and posted the ground truth to issue #47. His finding: v2.1.7 wrote to the wrong field entirely. The eight per-channel `0x14` words in the PRO state-sync template are **fixed formatting** on the PRO — they carry the same value at every rate. The actual rate selector is a `uint16 LE` at STATE_SYNC bytes 56 AND 58 (redundant copies), and Jeff's capture confirmed the field cycled 0→1→2→3→0 in exact lockstep as EESDR3 walked the rate 39→78→156→312→39 kHz. Values: `0 = 39062.5 Hz`, `1 = 78125`, `2 = 156250`, `3 = 312500`.
+
+v2.1.9 writes index 3 at STATE_SYNC bytes 56/58, leaves the eight `0x14` formatting words alone, and bumps `sunsdr_profile_pro.rxNativeRate` to 312500.0. With that single rate value flipped, the existing `sunsdr_rx_uses_native_router_rate()` dispatch fork automatically routes PRO to the same native-312500 xrouter path the DX has been on since v2.0.8 — no resampler, no upsample stage, same code path as DX. Panadapter span widens from ~20 kHz (v2.1.8) to ~150 kHz (matching what DX and EESDR3 provide), and the whole downstream WDSP chain is a proven one.
+
+**Full credit to Jeff N0GQ** for the wire captures, the protocol decode, and independently verifying it works on his own PRO client (FT8 decoded cleanly at 312500). His writeup — which also covers reference clock (`0x1D`), telemetry field map, TX bring-up sequence, RX2 STATE_SYNC field, DDC offset, and other PRO findings — lives at [https://github.com/jfrancis42/solsdr/blob/main/ARTEMISSDR.md](https://github.com/jfrancis42/solsdr/blob/main/ARTEMISSDR.md). Those additional findings are noted for future Artemis releases and are NOT in scope for v2.1.9; this release does one thing and one thing only.
+
+**Rate context for both radios.** ArtemisSDR feeds WDSP at 312500 Hz native on both DX and PRO after v2.1.9. There is no runtime resampler on the shipping RX path for either radio — the IQ goes wire → xrouter → WDSP at 312500. WDSP handles everything downstream to the audio sample rate internally. The 39062.5 → 384 kHz upsample helper is retained in source as an unreachable fallback but is not executed at 312500.
+
+**PRO testers — please install and confirm.** Bernie F6Bernie, Jim W4JEA, Pedro EA5CCY, SQ5OMO, Jeff N0GQ — anyone with a PRO on their bench, please install v2.1.9 and confirm the wider panadapter span and clean RX audio at 312500. If anything misbehaves the revert is one commit back to v2.1.8. No DX behaviour changes — DX code path is byte-for-byte unchanged from v2.1.8.
+
+### What was new in v2.1.8
 
 **Hotfix release: reverts the v2.1.7 PRO native-rate change (issue #47).** The v2.1.7 attempt to lift SunSDR2 PRO RX from 39,062.5 Hz to 312,500 Hz by reusing the DX state-sync rate code (`0x32`) broke RX audio on multiple PRO testers — Bernie F6Bernie, Jim W4JEA, Pedro EA5CCY, and SQ5OMO all reported no audio, slow/garbled panadapter, or program crashes after upgrading. Pedro's observation that "the sample rate it's ok but I haven't sound" was the diagnostic clue: the radio accepted the rate-set command (spectrum rendered wider) but downstream audio could not keep up. The most likely explanation is that the rate-code lookup table differs between DX and PRO — the `0x32` value that produces 312500 Hz on the DX appears to command a substantially higher rate on the PRO. We don't have a verified wire capture of EESDR3 commanding the PRO at 312500 to ground-truth the correct rate code, so the safe path is to put the PRO back where it was and try again later with capture data in hand.
 

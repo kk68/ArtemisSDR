@@ -1125,17 +1125,20 @@ static void sunsdr_cache_identity_candidate(const unsigned char* data, int len, 
     }
 }
 
-/* ========== Resampler: 39.0625 kHz packet IQ → Thetis RX rate ========== */
+/* ========== Legacy 39.0625 kHz → 384 kHz upsample path ========== */
 
-/* DX feeds xrouter natively at 312.5 kHz (upstream v2.0.8 path). PRO
- * uses this 39062.5 → 384 kHz upsample stage to feed WDSP, since the
- * profile's rxNativeRate is 39062.5 (the lowest of the four PRO IQ
- * rates) and we don't yet have a verified wire-protocol way to
- * command PRO at one of the higher rates. v2.1.7 attempted to set
- * PRO to 312500 by reusing the DX rate code (`0x32`); that broke RX
- * audio on multiple testers (issue #47) and was reverted in v2.1.8.
- * See SUNSDR_PRO_STATE_SYNC_TEMPLATE_HEX for the revert details and
- * what would be needed to try again safely. */
+/* Both DX and PRO feed xrouter natively at 312.5 kHz — DX since
+ * v2.0.8, and PRO since v2.1.9 after Jeff N0GQ ground-truthed the
+ * SunSDR2 PRO rate-selector field from live wire captures (see
+ * SUNSDR_PRO_STATE_SYNC_TEMPLATE_HEX for the field-level details and
+ * credit). The dispatch fork at sunsdr_rx_uses_native_router_rate()
+ * gates on rxNativeRate == 312500, so with both profiles at 312500
+ * the sunsdr_resample() helper below is unreachable from the
+ * shipping RX path.
+ *
+ * Kept in place because it's cheap dead weight and provides a
+ * fallback if a future profile ever needs to run at a non-native
+ * rate below 312500. */
 #define SUNSDR_TARGET_RATE   384000.0
 #define SUNSDR_RESAMPLE_MAX  2048 /* 200 * 384000 / 39062.5 = 1966.08 */
 
@@ -2412,33 +2415,50 @@ static void sunsdr_send_zero_cmd(int opcode)
 static const char* SUNSDR_STATE_SYNC_TEMPLATE_HEX =
     "32ff01003200000000000100000000000000320000003200000032000000320000003200000032000000320000003200000000000000010003000300322af87f000028f8";
 
-/* PRO state-sync template — reverted in v2.1.8 back to the original
- * Dmitry @Tort1k558 capture from PR #30 after the v2.1.7 "lift PRO
- * to native 312500" attempt broke RX audio on multiple PRO testers
- * (issue #47 — Bernie F6Bernie, Jim W4JEA, Pedro EA5CCY, SQ5OMO).
+/* PRO state-sync template — v2.1.9 lifts PRO to 312500 Hz native RX
+ * using the correct field, after Jeff N0GQ (N0GQ) contributed
+ * ground-truth wire captures on a real PRO stepping ExpertSDR3
+ * through all four IQ rates. See issue #47 discussion and Jeff's
+ * writeup at:
+ *   https://github.com/jfrancis42/solsdr/blob/main/ARTEMISSDR.md
  *
- * v2.1.7 changed the eight per-channel rate codes from `0x14` to
- * `0x32` (matching the DX template) on the assumption that the rate
- * code lookup table is identical between DX and PRO. It is not. The
- * radio accepted the command and the spectrum did render wider (Pedro
- * confirmed "sample rate it's ok"), but downstream audio was either
- * silent, garbled, or crashed the program. The most likely explanation
- * is that `0x32` on PRO commands a substantially higher rate (the
- * SunSDR2 PRO is documented to support up to 1.25 MHz native) — the
- * downstream WDSP RX channel was configured for 312500 Hz and could
- * not keep up with the actual incoming sample stream.
+ * Why v2.1.7 broke: v2.1.7 assumed the DX and PRO shared a common
+ * rate-code lookup and swapped the eight per-channel rate-code words
+ * from `0x14` to the DX's `0x32`. They do not share that lookup, and
+ * on the PRO the eight `0x14` words are actually **fixed formatting**
+ * — they carry the same value at every rate. v2.1.7 therefore
+ * corrupted the state-sync template without ever changing the rate,
+ * which is exactly what Bernie F6Bernie / Jim W4JEA / Pedro EA5CCY /
+ * SQ5OMO reported: "sample rate is OK / spectrum wider" (radio saw a
+ * bad state sync) plus "no sound / super-slow panafall / crashes"
+ * (downstream WDSP channel had no coherent stream to lock onto).
  *
- * Reverted to the original `0x14` codes so PRO sits at 39062.5 Hz
- * native again, with the 39062.5 → 384 kHz upsample stage handling
- * the WDSP feed. Panadapter is narrower (~20 kHz span) but RX audio
- * works, which is the priority.
+ * The real rate selector on the PRO is a `uint16` LE at STATE_SYNC
+ * bytes 56 AND 58 (Jeff captured EESDR3 stepping the PRO rate
+ * 39→78→156→312→39 kHz and the value at bytes 56/58 cycled
+ * 0→1→2→3→0 in exact lockstep while the eight `0x14` words never
+ * moved). Values:
  *
- * Long-term: a proper rate lift requires a wire capture of EESDR3
- * commanding PRO at 312500 to see the actual rate-code byte the
- * radio expects, OR a published rate-code table. Until then, leave
- * this alone. */
+ *     index | rate
+ *     ------+----------
+ *       0   | 39062.5 Hz
+ *       1   | 78125 Hz
+ *       2   | 156250 Hz
+ *       3   | 312500 Hz
+ *
+ * v2.1.9 writes index 3 at bytes 56/58, leaves the eight `0x14`
+ * words alone, and bumps sunsdr_profile_pro.rxNativeRate to 312500.0
+ * so the RX dispatch at sunsdr_rx_uses_native_router_rate() steers
+ * PRO to the same native-312500 xrouter path DX has used since
+ * v2.0.8. No resampler is used on the shipping RX path for either
+ * radio at 312500. The ~8× wider panadapter span (compared to the
+ * v2.1.8 fallback at 39062.5) was the original goal of issue #46.
+ *
+ * Full credit to Jeff N0GQ for the wire capture, the protocol
+ * decode, and independent verification (FT8 decodes cleanly at
+ * 312500 in his own PRO client). */
 static const char* SUNSDR_PRO_STATE_SYNC_TEMPLATE_HEX =
-    "32ff01003200000000000100000000000000140000001400000014000000140000001400000014000000140000001400000000000000010000000000a23cfc7f00008859";
+    "32ff01003200000000000100000000000000140000001400000014000000140000001400000014000000140000001400000000000000010003000300a23cfc7f00008859";
 
 static const char* SUNSDR_CONFIG_BLOCK_TEMPLATE_HEX =
     "32ff20003400000000000100000000000000010000000100000000000000000000006400000000000000000000001e000000bc02000007000000640000002c01000064000000";
@@ -2709,14 +2729,16 @@ static const sunsdr_profile_t sunsdr_profile_dx = {
     SUNSDR_VARIANT_DX, "SunSDR2 DX", 50001, 50002, 0x32, 312500.0, -1, -1
 };
 
-/* PRO at 39,062.5 Hz native (the lowest of the four IQ rates the PRO
- * supports), with the 39062.5 → 384 kHz upsample stage downstream
- * handling the WDSP feed. Reverted to this baseline in v2.1.8 after
- * the v2.1.7 attempt to lift PRO to 312500 broke RX audio (issue #47).
- * See SUNSDR_PRO_STATE_SYNC_TEMPLATE_HEX above for the revert
- * rationale. */
+/* PRO at 312500 Hz native RX — lifted from 39062.5 Hz in v2.1.9
+ * using rate-selector index 3 in the STATE_SYNC template, after
+ * Jeff N0GQ ground-truthed the correct field via wire captures on a
+ * real PRO. See SUNSDR_PRO_STATE_SYNC_TEMPLATE_HEX above for the
+ * field-level details and credit. With rxNativeRate = 312500,
+ * sunsdr_rx_uses_native_router_rate() routes PRO to the same
+ * native-312500 xrouter path DX has used since v2.0.8 — no
+ * resampler on the shipping RX path. */
 static const sunsdr_profile_t sunsdr_profile_pro = {
-    SUNSDR_VARIANT_PRO, "SunSDR2 PRO", 50002, 50003, 0x01, 39062.5, 0, 0
+    SUNSDR_VARIANT_PRO, "SunSDR2 PRO", 50002, 50003, 0x01, 312500.0, 0, 0
 };
 
 static const sunsdr_profile_t* sunsdr_profile_from_model(int modelId)
