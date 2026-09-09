@@ -190,7 +190,7 @@ void osc(SIDETONE a)
 	return;
 }
 
-void xsidetone(int id)
+void xsidetone(int id, double* monitor)
 {
 	SIDETONE a = psidetone[id];
 	int i;
@@ -283,7 +283,7 @@ void xsidetone(int id)
 			LeaveCriticalSection(&a->update);
 		}
 	}
-	if (!a->run_st && (a->out_st != a->in)) memcpy (a->out_st, a->in, a->size * sizeof(complex));
+	if (!a->run_st) memcpy(a->out_st, monitor, a->size * sizeof(complex));
 	if (!a->run_tx && (a->out_tx != a->in)) memcpy (a->out_tx, a->in, a->size * sizeof(complex));
 }
 

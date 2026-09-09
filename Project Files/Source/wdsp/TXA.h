@@ -73,6 +73,13 @@ struct _txa
 	double* inbuff;
 	double* outbuff;
 	double* midbuff;
+	// Local monitor audio, before modulation, at the TX output sample rate.
+	double* monbuff;
+	double* monout;
+	double* moninput;
+	RESAMPLE monresamp;
+	RESAMPLE monpresamp;
+	int mon_pre;
 	int mode;
 	double f_low;
 	double f_high;
@@ -185,6 +192,8 @@ extern void setDSPBuffsize_txa (int channel);
 // TXA Properties
 
 extern __declspec (dllexport) void SetTXAMode (int channel, int mode);
+
+extern __declspec(dllexport) void SetTXAMonitorPre(int channel, int pre);
 
 extern void TXAResCheck (int channel);
 

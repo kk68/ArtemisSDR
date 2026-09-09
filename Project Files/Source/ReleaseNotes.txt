@@ -6,6 +6,22 @@ Report issues at: https://github.com/kk68/ArtemisSDR/issues
 
 ---
 
+## v2.1.10 - MON PRE/POST audio and VAC monitor fixes
+
+- MON is enabled for SunSDR2 DX and PRO. Click to cycle Off -> PRE -> POST -> Off.
+- PRE monitors the selected input before MIC gain, EQ, leveler, compression and ALC.
+  POST monitors processed audio before RF modulation. TX AF controls monitor volume.
+- CW retains on/off sidetone monitoring.
+- Fixed TX monitor block timing, synchronized WDSP monitor taps, VAC routing,
+  receive return, and monitor gain retention across buffer/sample-rate changes.
+- Added six missing managed runtime DLLs to the MSI and corrected its Start menu
+  shortcut registry key. The Visual C++ runtime is included.
+- Initial SunSDR2 DX/VAC listening reported working. Automated audio tests pass;
+  broader PRO, cmASIO and TCI listening checks remain to be completed.
+- First launch may take about 10 minutes if FFT plans need rebuilding.
+
+---
+
 ## Beta v1.0.4 — Skins fix
 
 **Recommended upgrade for everyone — skin downloading was broken in v1.0.3 and earlier.**

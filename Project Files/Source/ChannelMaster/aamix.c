@@ -29,7 +29,7 @@ warren@wpratt.com
 #define MAX_EXT_AAMIX	(4)									// maximum number of AAMIXs called from outside wdsp
 __declspec (align (16)) AAMIX paamix[MAX_EXT_AAMIX];		// array of pointers for AAMIXs used EXTERNAL to wdsp
 
-void mix_main (void *pargs)
+unsigned __stdcall mix_main (void *pargs)
 {
 	DWORD taskIndex = 0;
 	HANDLE hTask = AvSetMmThreadCharacteristics(TEXT("Pro Audio"), &taskIndex);
@@ -41,17 +41,29 @@ void mix_main (void *pargs)
 	while (_InterlockedAnd (&a->run, 1))
 	{
 		WaitForMultipleObjects (a->nactive, a->Aready, TRUE, INFINITE);
+		if (!_InterlockedAnd(&a->run, 1)) break;
 		xaamix (a);
 		(*a->Outbound)(a->outbound_id, a->outsize, a->out);
 		// WriteAudio (30.0, 48000, a->outsize, a->out, 3);
 	}
-	_endthread();
+	if (hTask != 0) AvRevertMmThreadCharacteristics(hTask);
+	return 0;
 }
 
 void start_mixthread (AAMIX a)
 {
-	HANDLE handle = (HANDLE) _beginthread(mix_main, 0, (void *)a);
+	a->thread = (HANDLE)_beginthreadex(NULL, 0, mix_main, a, 0, NULL);
 	//SetThreadPriority (handle, THREAD_PRIORITY_HIGHEST);
+}
+
+static void join_mixthread(AAMIX a)
+{
+	if (a->thread)
+	{
+		WaitForSingleObject(a->thread, INFINITE);
+		CloseHandle(a->thread);
+		a->thread = NULL;
+	}
 }
 
 enum _slew
@@ -215,7 +227,7 @@ void destroy_aamix (void* ptr, int id)
 	InterlockedBitTestAndReset (&a->run, 0);
 	for (i = 0; i < a->ninputs; i++)
 		ReleaseSemaphore (a->Ready[i], 1, 0);
-	Sleep (2);
+	join_mixthread(a);
 	DeleteCriticalSection (&a->cs_out);
 	for (i = 0; i < a->ninputs; i++)
 	{
@@ -236,7 +248,12 @@ void destroy_aamix (void* ptr, int id)
 // loads data from a buffer into an audio mixer ring
 void xMixAudio (void* ptr, int id, int stream, double* data)
 {
-	int first, second, n;
+	xMixAudioSized (ptr, id, stream, -1, data);
+}
+
+void xMixAudioSized (void* ptr, int id, int stream, int size, double* data)
+{
+	int first, second, n, count, chunk, configured_size;
 	double* indata;
 	AAMIX a;
 	if (ptr == 0)	a = paamix[id];
@@ -244,35 +261,48 @@ void xMixAudio (void* ptr, int id, int stream, double* data)
 	if (_InterlockedAnd (&a->accept[stream], 1))
 	{
 		EnterCriticalSection (&a->cs_in[stream]);
-		if (a->rsmp[stream]->run)
+		configured_size = a->rsmp[stream]->size;
+		if (size < 0) size = configured_size;
+		// Resample only samples actually supplied. SunSDR TX supplies 256
+		// samples at 192 kHz (64 at 48 kHz), while RX/mixer blocks contain
+		// 96 at 48 kHz. Reading the configured 384 here used stale TX data
+		// and advanced the monitor clock 50% too fast. Keep the resampler's
+		// phase/history across calls; only complete output blocks wake it.
+		while (size > 0)
 		{
-			a->rsmp[stream]->in = data;
-			indata = a->resampbuff[stream];
-			xresample (a->rsmp[stream]);
-		}
-		else
-			indata = data;
-		if (a->ringinsize > (a->rsize - a->inidx[stream]))
-		{
-			first = a->rsize - a->inidx[stream];
-			second = a->ringinsize - first;
-		}
-		else
-		{
-			first = a->ringinsize;
-			second = 0;
-		}
-		memcpy (a->ring[stream] + 2 * a->inidx[stream], indata,             first  * sizeof (complex));
-		memcpy (a->ring[stream],						indata + 2 * first, second * sizeof (complex));
+			// Bound each resampler output by its allocated ringinsize buffer.
+			chunk = size < configured_size ? size : configured_size;
+			if (a->rsmp[stream]->run)
+			{
+				a->rsmp[stream]->size = chunk;
+				a->rsmp[stream]->in = data;
+				indata = a->resampbuff[stream];
+				count = xresample (a->rsmp[stream]);
+			}
+			else
+			{
+				indata = data;
+				count = chunk;
+			}
+			first = count;
+			if (first > a->rsize - a->inidx[stream])
+				first = a->rsize - a->inidx[stream];
+			second = count - first;
+			memcpy (a->ring[stream] + 2 * a->inidx[stream], indata, first * sizeof (complex));
+			memcpy (a->ring[stream], indata + 2 * first, second * sizeof (complex));
 
-		if ((a->unqueuedsamps[stream] += a->ringinsize) >= a->outsize)
-		{
-			n = a->unqueuedsamps[stream] / a->outsize;
-			ReleaseSemaphore (a->Ready[stream], n, 0);
-			a->unqueuedsamps[stream] -= n * a->outsize;
+			if ((a->unqueuedsamps[stream] += count) >= a->outsize)
+			{
+				n = a->unqueuedsamps[stream] / a->outsize;
+				ReleaseSemaphore (a->Ready[stream], n, 0);
+				a->unqueuedsamps[stream] -= n * a->outsize;
+			}
+			if ((a->inidx[stream] += count) >= a->rsize)
+				a->inidx[stream] -= a->rsize;
+			data += 2 * chunk;
+			size -= chunk;
 		}
-		if ((a->inidx[stream] += a->ringinsize) >= a->rsize)
-			a->inidx[stream] -= a->rsize;
+		a->rsmp[stream]->size = configured_size;
 		LeaveCriticalSection (&a->cs_in[stream]);
 	}
 }
@@ -428,7 +458,6 @@ void xaamix (AAMIX a)
 	if (!_InterlockedAnd (&a->run, 1)) 
 	{
 		LeaveCriticalSection (&a->cs_out);
-		_endthread();
 		return; //MW0LGE_21j
 	}
 	memset (a->out, 0, a->outsize * sizeof (complex));
@@ -480,12 +509,11 @@ void close_mixer (AAMIX a)
 	for (i = 0; i < a->ninputs; i++)
 		EnterCriticalSection (&a->cs_in[i]);			// wait until the current infusions are all finished
 	EnterCriticalSection (&a->cs_out);					// block the mixer thread at the beginning of xaamix()
-	Sleep (25);											// wait for thread to arrive at the top of the main() loop
 	InterlockedBitTestAndReset(&a->run, 0);				// set a trap for the mixer thread
 	for (i = 0; i < a->ninputs; i++)
 		ReleaseSemaphore(a->Ready[i], 1, 0);			// be sure the mixer thread can pass WaitForMultipleObjects in main()
 	LeaveCriticalSection (&a->cs_out);					// let the thread pass to the trap in xaamix()
-	Sleep (2);											// wait for the mixer thread to die
+	join_mixthread(a); // wait for the worker before flushing/restarting
 	for (i = 0; i < a->ninputs; i++)
 		flush_mix_ring (a, i);							// restore rings to pristine condition
 }

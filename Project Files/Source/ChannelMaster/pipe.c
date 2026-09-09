@@ -26,10 +26,6 @@ warren@wpratt.com
 
 #include "cmcomm.h"
 
-extern int RadioProtocol;
-#ifndef SUNSDR
-#define SUNSDR 2
-#endif
 
 pipe pip  = {0};
 PIPE ppip = &pip;
@@ -236,9 +232,8 @@ void xpipe (int stream, int pos, double** buffs)
 			break;
 		case 1: // IQ data
 		{
-			// SunSDR TX monitor should use the real TX audio path; other protocols keep
-			// using the traditional sidetone/monitor buffer.
-			double* tx_monitor = (RadioProtocol == SUNSDR) ? buffs[0] : buffs[2];
+			// Selected PRE/POST audio, or CW sidetone including local RX keying.
+			double* tx_monitor = buffs[2];
 			xscope(0, 1, tx_monitor);															// scope
 			xvacOUT(0, 2, tx_monitor);															// data to VAC 0
 			xvacOUT(1, 2, tx_monitor);															// data to VAC 1

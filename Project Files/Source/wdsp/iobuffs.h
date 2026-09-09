@@ -40,11 +40,13 @@ typedef struct _iobf
 	int   r2_active_buffsize;					// size of output pseudo-ring (in complex samples)
 	
 	double* r1_baseptr;							// pointer to input pseudo-ring
+	double* r1_monptr;                           // raw TX input before VOX/DEXP
 	int   r1_inidx;								// in 'double', actual index into the buffer is 2 times this
 	int   r1_outidx;							// in 'double', actual index into the buffer is 2 times this
 	int   r1_unqueuedsamps;						// number of input samples not yet queued/released for execution
 
 	double* r2_baseptr;							// pointer to output pseudo-ring
+	double* r2_monptr;                           // TX audio companion, same indices and clock
 	int   r2_inidx;								// in 'double', actual index into the buffer is 2 times this
 	int   r2_outidx;							// in 'double', actual index into the buffer is 2 times this
 	int   r2_havesamps;							// number of processed samples in output pseudo-ring
@@ -88,6 +90,8 @@ extern void flush_iobuffs (int channel);
 
 PORT	// double, interleaved I/Q
 void fexchange0 (int channel, double* in, double* out, int* error);	
+
+extern __declspec(dllexport) void fexchange0WithMonitor(int channel, double* in, double* out, double* pre, double* monitor, int* error);
 
 PORT	// separate I/Q buffers
 extern void fexchange2 (int channel, INREAL *Iin, INREAL *Qin, OUTREAL *Iout, OUTREAL *Qout, int* error);

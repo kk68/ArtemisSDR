@@ -78,6 +78,7 @@ typedef struct _ivac
 	int vac_combine_input;
 	double vac_preamp;
 	double vac_rx_scale;
+	double vac_af_gain;
 	double vac_mon_scale;		// MW0LGE_21k9d the volume level of the vac mon
 	int INforce;				// force var ratio for rmatchIN
 	double INfvar;				// var value when forced for rmatchIN

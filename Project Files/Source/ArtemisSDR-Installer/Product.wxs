@@ -24,6 +24,11 @@
 <?define FilesPath = "..\..\Bin\$(var.Platform)\$(var.Configuration)\" ?>
 <?endif ?>
 
+<!-- Allow the packager to select the runtime matching the native build toolset. -->
+<?ifndef VCRuntimeMergeModule ?>
+<?define VCRuntimeMergeModule = "$(var.VC145)" ?>
+<?endif ?>
+
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi"
       xmlns:fire="http://schemas.microsoft.com/wix/FirewallExtension">
 
@@ -67,7 +72,7 @@
       <ComponentRef Id="DesktopShortcut" />
     </Feature>
 
-    <Feature Id="VC145Redist" Title="Visual C++ 14.5 Runtime" AllowAdvertise="no" Display="hidden" Level="1">
+    <Feature Id="VC145Redist" Title="Visual C++ Runtime" AllowAdvertise="no" Display="hidden" Level="1">
       <MergeRef Id="VC145Redist"/>
     </Feature>
 
@@ -114,7 +119,7 @@
 
   <Fragment>
     <Directory Id="TARGETDIR" Name="SourceDir">
-      <Merge Id="VC145Redist" SourceFile="$(var.VC145)" DiskId="1" Language="0"/>
+      <Merge Id="VC145Redist" SourceFile="$(var.VCRuntimeMergeModule)" DiskId="1" Language="0"/>
 
       <Directory Id="$(var.PlatformProgramFilesFolder)">
         <Directory Id="INSTALLFOLDER" Name="ArtemisSDR">
@@ -175,7 +180,7 @@
                   />
         <RemoveFolder Id="RemoveShortcutsDir" On="uninstall" />
 
-        <RegistryValue Root="HKLM"
+        <RegistryValue Root="HKCU"
                      Key="SOFTWARE\ArtemisSDR\$(var.ThetisName)"
                      Name="installed"
                      Type="integer"
@@ -523,6 +528,38 @@
 		<!-- 
 		Additional end
 		-->
+
+        <!-- Runtime dependencies referenced by the current Console project. -->
+        <Component Guid="*">
+            <File Id="Microsoft.Bcl.HashCodeDLL"
+                  Source="$(var.FilesPath)Microsoft.Bcl.HashCode.dll"
+                  KeyPath="yes" />
+        </Component>
+        <Component Guid="*">
+            <File Id="Microsoft.Bcl.MemoryDLL"
+                  Source="$(var.FilesPath)Microsoft.Bcl.Memory.dll"
+                  KeyPath="yes" />
+        </Component>
+        <Component Guid="*">
+            <File Id="Microsoft.NET.StringToolsDLL"
+                  Source="$(var.FilesPath)Microsoft.NET.StringTools.dll"
+                  KeyPath="yes" />
+        </Component>
+        <Component Guid="*">
+            <File Id="System.Formats.NrbfDLL"
+                  Source="$(var.FilesPath)System.Formats.Nrbf.dll"
+                  KeyPath="yes" />
+        </Component>
+        <Component Guid="*">
+            <File Id="System.Linq.AsyncEnumerableDLL"
+                  Source="$(var.FilesPath)System.Linq.AsyncEnumerable.dll"
+                  KeyPath="yes" />
+        </Component>
+        <Component Guid="*">
+            <File Id="System.Resources.ExtensionsDLL"
+                  Source="$(var.FilesPath)System.Resources.Extensions.dll"
+                  KeyPath="yes" />
+        </Component>
 
 		<!--
 		Binding Redirects in ArtemisSDR.exe.config

@@ -28,6 +28,57 @@ warren@wpratt.com
 
 struct _txa txa[MAX_CHANNELS];
 
+static void create_txmon(int channel)
+{
+	struct _txa* a = &txa[channel];
+	a->monbuff = (double*)malloc0(ch[channel].dsp_size * sizeof(complex));
+	a->monout = (double*)malloc0(ch[channel].dsp_outsize * sizeof(complex));
+	a->moninput = (double*)malloc0(ch[channel].dsp_insize * sizeof(complex));
+	a->monpresamp = create_resample(ch[channel].in_rate != ch[channel].out_rate,
+		ch[channel].dsp_insize, a->moninput, a->monout,
+		ch[channel].in_rate, ch[channel].out_rate, 0.0, 0, 1.0);
+	a->monresamp = create_resample(ch[channel].dsp_rate != ch[channel].out_rate,
+		ch[channel].dsp_size, a->monbuff, a->monout,
+		ch[channel].dsp_rate, ch[channel].out_rate, 0.0, 0, 1.0);
+}
+
+static void destroy_txmon(int channel)
+{
+	destroy_resample(txa[channel].monresamp);
+	destroy_resample(txa[channel].monpresamp);
+	_aligned_free(txa[channel].moninput);
+	_aligned_free(txa[channel].monout);
+	_aligned_free(txa[channel].monbuff);
+}
+
+static void capture_txmon(int channel)
+{
+	int i;
+	struct _txa* a = &txa[channel];
+	// An analytic SSB signal is not stereo audio: use its real component
+	// in both ears. CW continues to use ChannelMaster's keyed sidetone.
+	for (i = 0; i < ch[channel].dsp_size; ++i)
+	{
+		double sample = (a->mode == TXA_CWL || a->mode == TXA_CWU)
+			? 0.0 : a->midbuff[2 * i];
+		a->monbuff[2 * i] = a->monbuff[2 * i + 1] = sample;
+	}
+}
+
+PORT void SetTXAMonitorPre(int channel, int pre)
+{
+	EnterCriticalSection(&ch[channel].csDSP);
+	if (txa[channel].mon_pre != (pre != 0))
+	{
+		txa[channel].mon_pre = pre != 0;
+		// A tap may have been idle for minutes. Do not replay its old
+		// resampler history when switching back to it.
+		flush_resample(txa[channel].monpresamp);
+		flush_resample(txa[channel].monresamp);
+	}
+	LeaveCriticalSection(&ch[channel].csDSP);
+}
+
 void create_txa (int channel)
 {
 	txa[channel].mode   = TXA_LSB;
@@ -36,6 +87,8 @@ void create_txa (int channel)
 	txa[channel].inbuff  = (double *) malloc0 (1 * ch[channel].dsp_insize  * sizeof (complex));
 	txa[channel].outbuff = (double *) malloc0 (1 * ch[channel].dsp_outsize * sizeof (complex));
 	txa[channel].midbuff = (double *) malloc0 (2 * ch[channel].dsp_size    * sizeof (complex));
+	txa[channel].mon_pre = 0;
+	create_txmon(channel);
 
 	txa[channel].rsmpin.p = create_resample (
 		0,											// run - will be turned on below if needed
@@ -480,6 +533,7 @@ void create_txa (int channel)
 
 void destroy_txa (int channel)
 {
+	destroy_txmon(channel);
 	// in reverse order, free each item we created
 	destroy_meter (txa[channel].outmeter.p);
 	destroy_resample (txa[channel].rsmpout.p);
@@ -519,6 +573,11 @@ void destroy_txa (int channel)
 
 void flush_txa (int channel)
 {
+	memset(txa[channel].monbuff, 0, ch[channel].dsp_size * sizeof(complex));
+	memset(txa[channel].monout, 0, ch[channel].dsp_outsize * sizeof(complex));
+	flush_resample(txa[channel].monresamp);
+	flush_resample(txa[channel].monpresamp);
+	memset(txa[channel].moninput, 0, ch[channel].dsp_insize * sizeof(complex));
 	memset (txa[channel].inbuff,  0, 1 * ch[channel].dsp_insize  * sizeof (complex));
 	memset (txa[channel].outbuff, 0, 1 * ch[channel].dsp_outsize * sizeof (complex));
 	memset (txa[channel].midbuff, 0, 2 * ch[channel].dsp_size    * sizeof (complex));
@@ -577,10 +636,29 @@ void xtxa (int channel)
 	xbandpass (txa[channel].bp2.p, 0);				// aux bandpass (runs if CESSB)
 	xmeter (txa[channel].compmeter.p);				// COMP meter
 	xwcpagc (txa[channel].alc.p);					// ALC
+	if (!txa[channel].mon_pre) capture_txmon(channel); // after ALC, before modulation
 	xammod (txa[channel].ammod.p);					// AM Modulator
 	xemphp (txa[channel].preemph.p, 1);				// FM pre-emphasis (second option)
 	xfmmod (txa[channel].fmmod.p);					// FM Modulator
 	xgen (txa[channel].gen1.p);						// output signal generator (TUN and Two-tone)
+	// Preserve local monitoring of generated TUNE/two-tone signals.
+	if (!txa[channel].mon_pre && txa[channel].gen1.p->run) capture_txmon(channel);
+	if (txa[channel].mon_pre)
+	{
+		int i;
+		// Raw selected input was copied before ChannelMaster's VOX/DEXP.
+		xresample(txa[channel].monpresamp);
+		for (i = 0; i < ch[channel].dsp_outsize; ++i)
+		{
+			double sample = (txa[channel].mode == TXA_CWL || txa[channel].mode == TXA_CWU)
+				? 0.0 : txa[channel].monout[2 * i];
+			txa[channel].monout[2 * i] = txa[channel].monout[2 * i + 1] = sample;
+		}
+	}
+	else
+	{
+		xresample(txa[channel].monresamp);
+	}
 	xuslew (txa[channel].uslew.p);					// up-slew for AM, FM, and gens
 	xmeter (txa[channel].alcmeter.p);				// ALC Meter
 	xsiphon (txa[channel].sip1.p, 0);				// siphon data for display
@@ -593,6 +671,8 @@ void xtxa (int channel)
 
 void setInputSamplerate_txa (int channel)
 {
+	destroy_txmon(channel);
+	create_txmon(channel);
 	// buffers
 	_aligned_free (txa[channel].inbuff);
 	txa[channel].inbuff = (double *)malloc0(1 * ch[channel].dsp_insize  * sizeof(complex));
@@ -605,6 +685,8 @@ void setInputSamplerate_txa (int channel)
 
 void setOutputSamplerate_txa (int channel)
 {
+	destroy_txmon(channel);
+	create_txmon(channel);
 	// buffers
 	_aligned_free (txa[channel].outbuff);
 	txa[channel].outbuff = (double *)malloc0(1 * ch[channel].dsp_outsize * sizeof(complex));
@@ -622,6 +704,8 @@ void setOutputSamplerate_txa (int channel)
 
 void setDSPSamplerate_txa (int channel)
 {
+	destroy_txmon(channel);
+	create_txmon(channel);
 	// buffers
 	_aligned_free (txa[channel].inbuff);
 	txa[channel].inbuff = (double *)malloc0(1 * ch[channel].dsp_insize  * sizeof(complex));
@@ -670,6 +754,8 @@ void setDSPSamplerate_txa (int channel)
 
 void setDSPBuffsize_txa (int channel)
 {
+	destroy_txmon(channel);
+	create_txmon(channel);
 	// buffers
 	_aligned_free (txa[channel].inbuff);
 	txa[channel].inbuff = (double *)malloc0(1 * ch[channel].dsp_insize  * sizeof(complex));

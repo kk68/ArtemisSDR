@@ -2,7 +2,7 @@
 
 *Open source. Native protocol. Dedicated to Artemis II.*
 
-**Current version: v2.1.9**
+**Current version: v2.1.10**
 
 ⬇️ [**Download Latest Release**](https://github.com/kk68/ArtemisSDR/releases/latest)  ·  📘 [**Quick Start Guide**](START_HERE.md)  ·  📝 [What's new](https://github.com/kk68/ArtemisSDR/releases/latest)  ·  💬 [Discussions](https://github.com/kk68/ArtemisSDR/discussions)  ·  🐛 [Issues](https://github.com/kk68/ArtemisSDR/issues)
 
@@ -12,7 +12,15 @@
 
 ArtemisSDR is maintained by Kosta Kanchev (K0KOZ). It is a fork of [Thetis](https://github.com/ramdor/Thetis) by Richard Samphire (MW0LGE), which itself descends from OpenHPSDR (Doug Wigley, W5WC) and PowerSDR (FlexRadio Systems). Specialized for the SunSDR2 family (DX + PRO) and released under GPL v2.
 
-### What's new in v2.1.9
+### What's new in v2.1.10
+
+**MON restored with selectable PRE/POST audio.** Click MON to cycle **Off → PRE → POST → Off**. PRE monitors the selected mic/VAC input before MIC gain, EQ, leveler, compression and ALC. POST monitors the processed audio before RF modulation. The button label shows the selected tap; TX AF controls monitor volume. CW retains its on/off sidetone control.
+
+**VAC monitor routing and audio timing fixed.** The monitor now follows the selected TX receiver, survives VAC buffer/rate changes, and returns to receive audio when PTT is released. The mixer handles the actual TX block length, and WDSP keeps monitor audio synchronized with the TX processing stream. The MSI also includes six previously omitted managed dependencies and a corrected Start menu shortcut registry key.
+
+The initial **SunSDR2 DX + VAC** listening check was reported working. Automated tests cover mixer timing, VAC transitions, PRE/POST gain response, AM/FM/TUNE, CW and rate changes. Further listening checks on PRO, cmASIO and TCI are welcome; see the [MON audio path and test guide](docs/MON_AUDIO_PATH.md). First launch may take about 10 minutes if FFT plans need rebuilding.
+
+### What was new in v2.1.9
 
 **SunSDR2 PRO RX lifted to native 312.5 kHz — done properly this time (issue #47 / #46).** After v2.1.7's PRO native-rate attempt broke RX audio and was reverted in v2.1.8, Jeff N0GQ picked up the trail on his own bench with a real SunSDR2 PRO, captured ExpertSDR3 stepping the radio through all four IQ rates, and posted the ground truth to issue #47. His finding: v2.1.7 wrote to the wrong field entirely. The eight per-channel `0x14` words in the PRO state-sync template are **fixed formatting** on the PRO — they carry the same value at every rate. The actual rate selector is a `uint16 LE` at STATE_SYNC bytes 56 AND 58 (redundant copies), and Jeff's capture confirmed the field cycled 0→1→2→3→0 in exact lockstep as EESDR3 walked the rate 39→78→156→312→39 kHz. Values: `0 = 39062.5 Hz`, `1 = 78125`, `2 = 156250`, `3 = 312500`.
 
@@ -322,7 +330,7 @@ Honest list of what's partially done or missing. None of these prevent normal op
 | **PS-A, 2-TONE, DUP** | Grayed out on SunSDR — the radio doesn't expose a feedback-loop path. Not a bug, a hardware-architecture constraint. The PS-A label area in the panadapter info strip is now repurposed as the ADC-Overload lamp. |
 | **ADC overload + analog front-end IMD ("ghost" spurs)** | Hardware limit of the radio, not Artemis. ADC clipping is now flagged by the ADC-Overload lamp; smaller "ghost" spurs near a strong carrier are analog-domain mixer products that no software can remove. Same behavior reproduces on ExpertSDR3 against the same radio. Cure is to reduce front-end gain (ATT). See [Strong-signal behavior, OVL, and "ghost" spurs](#strong-signal-behavior-ovl-and-ghost-spurs). |
 | **Diversity mode** | Unsupported. RX2 follows RX1's antenna selection; no independent per-receiver antenna path has been found. |
-| **MON button** | Grayed in v2.0.14. Long-standing TX-monitor routing issue on SunSDR — silent through VAC, robotic through cmASIO. RF TX is unaffected; only local monitor playback. Use a second receiver if you need to monitor your own transmission until we re-enable MON in a future release. |
+| **MON button** | Restored in v2.1.10 with Off → PRE → POST → Off selection. The initial DX/VAC listening check was reported working; broader hardware testing is pending. See [MON audio path and test guide](docs/MON_AUDIO_PATH.md). |
 | **Occasional post-TX raspy audio** | Intermittent; cycling VAC clears it. Tracked as a polish item. |
 | **Rare crash on app exit after band changes** | Heap corruption surfaces during teardown (`0xc0000374`). No data loss — settings, memories, and recordings are flushed atomically before exit. Under investigation. |
 | **MUT button on the front panel** | Does not mute. Long-standing inherited bug from upstream Thetis; predates ArtemisSDR. Use VAC mute or the audio device mute. |
@@ -371,7 +379,7 @@ On the local filesystem, ArtemisSDR creates and writes to:
 - `%AppData%\ArtemisSDR\` — all persistent state: the settings database, per-instance logs (`ErrorLog.txt` and, if the user enables native diagnostic logging, `sunsdr_debug.log`), installed skins, memory and DX memory lists, and the UI window-layout cache. Nothing in this folder is transmitted anywhere by ArtemisSDR.
 - Audio recording (opt-in, Setup → Audio → Recording) — WAV files land in `My Music\ArtemisSDR\` when the user explicitly records.
 - Windows Firewall — the installer registers inbound rules for `ArtemisSDR.exe` (TCP and UDP) so the radio can initiate connections to the host. These are standard rules named "ArtemisSDR (TCP In)" / "ArtemisSDR (UDP In)" and can be audited in Windows Defender Firewall at any time.
-- Windows Registry — install state lives under `HKLM\Software\ArtemisSDR\` (installer-owned) and cmASIO settings under `HKLM\SOFTWARE\ArtemisSDR\` (app-owned). Uninstalling removes the installer-owned keys.
+- Windows Registry — installer shortcut markers live under `HKCU\Software\ArtemisSDR\`; cmASIO settings live under `HKLM\SOFTWARE\ArtemisSDR\` (app-owned). Uninstalling removes the installer-owned markers.
 
 ArtemisSDR does **not** send any data to the author (K0KOZ), to kk68, or to any third party — including when an error occurs. If you hit a bug and want to send a log, you have to attach `ErrorLog.txt` to an email or GitHub issue yourself; the app will never do it for you.
 

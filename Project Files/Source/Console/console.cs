@@ -84,7 +84,7 @@ namespace Thetis
         //private float _full_auto_att_running_mag = 0;
         ////
 
-        public const bool CHECK_DEV_VERSION = true; // this will check github for dev versions, set to false when performing a release
+        public const bool CHECK_DEV_VERSION = false; // this will check github for dev versions, set to false when performing a release
 
         public const int MAX_FPS = 640;              
 
@@ -790,6 +790,8 @@ namespace Thetis
             LogTool.AddLogEntry("Initialising components...", "COMP");
 
             InitializeComponent();								// Windows Forms Generated Code
+            chkMON.AutoCheck = false;
+            chkMON.Click += chkMON_Click;
             Common.DoubleBufferAll(this, true);
 
             InitialiseAndromedaMenus();
@@ -6688,16 +6690,9 @@ namespace Thetis
                 chk2TONE.Checked = false;
             chk2TONE.Enabled = false;
             chk2TONE.Visible = false;
-            // MON: TX-monitor audio path is broken on SunSDR — silent on
-            // VAC paths, robotic on cmASIO. Long-standing, not a recent
-            // regression. Architectural issue with the SunSDR-specific
-            // audio routing (audio output forced through cmASIO; MON tap
-            // not re-clocked off WDSP TX's native cadence). RF TX is
-            // unaffected — only the local monitor playback. Grayed out
-            // until we root-cause the routing properly.
-            if (chkMON.Checked)
-                chkMON.Checked = false;
-            chkMON.Enabled = false;
+            // The native monitor now carries synchronized PRE/POST audio.
+            chkMON.Enabled = true;
+            UpdateMONButton();
             // PS-A is dead on SunSDR — repurpose the InfoBar's FB / Pure-Signal2
             // labels (top-right of the panadapter strip) as the ADC-overload (OVL)
             // lamp. lblFB is hidden, lblPS becomes the OVL display.
@@ -19303,6 +19298,7 @@ namespace Thetis
             get { return chkMON.Checked; }
             set 
             {
+                if (value && !chkMON.Checked) Audio.MonitorPre = false;
                 chkMON.Checked = value; 
             }
         }
@@ -30391,41 +30387,36 @@ namespace Thetis
                 ChangeTuneStepUp();
         }
 
+        private void UpdateMONButton()
+        {
+            bool cw = Audio.TXDSPMode == DSPMode.CWL || Audio.TXDSPMode == DSPMode.CWU;
+            chkMON.Text = !chkMON.Checked || cw ? "MON" : (Audio.MonitorPre ? "PRE" : "POST");
+            chkMON.AccessibleName = "Transmit monitor " + (!chkMON.Checked ? "off" : (cw ? "CW sidetone" : (Audio.MonitorPre ? "pre processing" : "post processing")));
+            toolTip1.SetToolTip(chkMON, "Transmit monitor: Off -> PRE -> POST -> Off.\nPRE: selected input before MIC gain, VOX/DEXP, EQ and compression.\nPOST: after TX processing and ALC, before modulation.\nCW: toggle sidetone. Use TX AF to set monitor volume.");
+        }
+
+        private void chkMON_Click(object sender, EventArgs e)
+        {
+            if (Audio.TXDSPMode == DSPMode.CWL || Audio.TXDSPMode == DSPMode.CWU)
+                chkMON.Checked = !chkMON.Checked;
+            else if (!chkMON.Checked)
+            {
+                Audio.MonitorPre = true;
+                chkMON.Checked = true;
+            }
+            else if (Audio.MonitorPre)
+                Audio.MonitorPre = false;
+            else
+                chkMON.Checked = false;
+            UpdateMONButton();
+        }
+
         private void chkMON_CheckedChanged(object sender, System.EventArgs e)
         {
-            // SUNSDR (DX + PRO): TX-monitor audio path is broken (silent on
-            // VAC, robotic on cmASIO). Long-standing, not a recent regression.
-            // Until we root-cause the routing, force MON off and hard-block
-            // the audio routing call — mode-switch handlers can still flip
-            // chkMON.Enabled back on, and if any of them set chkMON.Checked
-            // = true programmatically we don't want Audio.MON = true to fire
-            // and route broken audio.
-            //
-            // Earlier this only checked SUNSDR2DX, so on PRO the mode-switch
-            // re-enable + click would actually arm Audio.MON (issue #39,
-            // Bernie F6Bernie 2026-05-08). Expanded to the SunSDR family.
-            if (HardwareSpecific.IsCurrentSunSDRModel)
-            {
-                if (chkMON.Checked)
-                {
-                    // Bounce it back off without recursing through the side
-                    // effects (paint, BackColor, sidetone sync). Setting
-                    // Checked = false re-enters this handler — the Audio.MON
-                    // assignment below is the authoritative gate, so the
-                    // re-entry is harmless (Audio.MON is already false).
-                    chkMON.Checked = false;
-                }
-                // Re-assert disabled state so a mode-switch handler that
-                // re-enabled the button doesn't leave it visually clickable.
-                chkMON.Enabled = false;
-                Audio.MON = false;
-                chkMON.BackColor = SystemColors.Control;
-                return;
-            }
-
             bool oldMON = Audio.MON;
 
             Audio.MON = chkMON.Checked;
+            UpdateMONButton();
 
             if (chkMON.Checked)
                 chkMON.BackColor = button_selected_color;
@@ -35669,10 +35660,7 @@ namespace Thetis
                             // chkMON.Enabled = true;
                             chkBIN.Enabled = true;
                         }
-                        // SunSDR family (DX + PRO): MON is hard-disabled
-                        // — see ApplySunSDRSpecificUI / chkMON_CheckedChanged.
-                        if (!HardwareSpecific.IsCurrentSunSDRModel)
-                            chkMON.Enabled = true;
+                        chkMON.Enabled = true;
 
                         ptbMic_Scroll(this, EventArgs.Empty);
                     }
@@ -35690,8 +35678,7 @@ namespace Thetis
                         {
                             chkBIN.Enabled = true;
                         }
-                        if (!HardwareSpecific.IsCurrentSunSDRModel)
-                            chkMON.Enabled = true;
+                        chkMON.Enabled = true;
                     }
                     break;
                 case DSPMode.SAM:
@@ -35703,8 +35690,7 @@ namespace Thetis
                         {
                             chkBIN.Enabled = true;
                         }
-                        if (!HardwareSpecific.IsCurrentSunSDRModel)
-                            chkMON.Enabled = true;
+                        chkMON.Enabled = true;
                     }
                     break;
                 case DSPMode.SPEC:
@@ -35929,8 +35915,11 @@ namespace Thetis
                     {
                         if (!_rx_only && chkPower.Checked)
                             chkMOX.Enabled = true;
-                        chkMON.Checked = false;
-                        chkMON.Enabled = false;
+                        if (!HardwareSpecific.IsCurrentSunSDRModel)
+                        {
+                            chkMON.Checked = false;
+                            chkMON.Enabled = false;
+                        }
                         chkBIN.Checked = false;
                         chkBIN.Enabled = false;
                         SetTXFilters(new_mode, tx_filter_low, tx_filter_high);
@@ -36075,6 +36064,7 @@ namespace Thetis
             radFilterVar2.Text = rx1_filters[(int)new_mode].GetName(Filter.VAR2);
 
             _rx1_dsp_mode = new_mode;
+            UpdateMONButton();
 
             SelectModeDependentPanel(); //MW0LGE_21k9d
 
@@ -39366,8 +39356,7 @@ namespace Thetis
                             new_mode != DSPMode.SAM &&
                             new_mode != DSPMode.FM)
                         {
-                            // SunSDR family (DX + PRO): MON is hard-disabled.
-                            if (chkVFOBTX.Checked && !HardwareSpecific.IsCurrentSunSDRModel)
+                            if (chkVFOBTX.Checked)
                                 chkMON.Enabled = true;
 
                             chkRX2BIN.Enabled = true;
@@ -39391,7 +39380,7 @@ namespace Thetis
                             new_mode != DSPMode.SAM &&
                             new_mode != DSPMode.FM)
                         {
-                            if (chkVFOBTX.Checked && !HardwareSpecific.IsCurrentSunSDRModel)
+                            if (chkVFOBTX.Checked)
                                 chkMON.Enabled = true;
 
                             chkRX2BIN.Enabled = true;
@@ -39411,7 +39400,7 @@ namespace Thetis
                             new_mode != DSPMode.SAM &&
                             new_mode != DSPMode.FM)
                         {
-                            if (chkVFOBTX.Checked && !HardwareSpecific.IsCurrentSunSDRModel)
+                            if (chkVFOBTX.Checked)
                                 chkMON.Enabled = true;
 
                             chkRX2BIN.Enabled = true;
@@ -39560,8 +39549,11 @@ namespace Thetis
                             if (!_rx_only && chkPower.Checked)
                                 chkMOX.Enabled = true;
 
-                            chkMON.Checked = false;
-                            chkMON.Enabled = false;
+                            if (!HardwareSpecific.IsCurrentSunSDRModel)
+                            {
+                                chkMON.Checked = false;
+                                chkMON.Enabled = false;
+                            }
 
                             SetTXFilters(new_mode, tx_filter_low, tx_filter_high);
 
@@ -39580,8 +39572,11 @@ namespace Thetis
                         if (!_rx_only && chkPower.Checked)
                             chkMOX.Enabled = true;
 
-                        chkMON.Checked = false;
-                        chkMON.Enabled = false;
+                        if (!HardwareSpecific.IsCurrentSunSDRModel)
+                        {
+                            chkMON.Checked = false;
+                            chkMON.Enabled = false;
+                        }
 
                         SetTXFilters(new_mode, tx_filter_low, tx_filter_high);
 
@@ -39599,8 +39594,11 @@ namespace Thetis
                         if (!_rx_only && chkPower.Checked)
                             chkMOX.Enabled = true;
 
-                        chkMON.Checked = false;
-                        chkMON.Enabled = false;
+                        if (!HardwareSpecific.IsCurrentSunSDRModel)
+                        {
+                            chkMON.Checked = false;
+                            chkMON.Enabled = false;
+                        }
 
                         SetTXFilters(new_mode, tx_filter_low, tx_filter_high);
 
@@ -39684,6 +39682,7 @@ namespace Thetis
             radRX2FilterVar2.Text = rx2_filters[(int)new_mode].GetName(Filter.VAR2);
 
             _rx2_dsp_mode = new_mode;
+            UpdateMONButton();
             vfob_dsp_mode = new_mode;
 
             // With FM filter presets now populated (see InitFilterPresets),
@@ -53221,7 +53220,7 @@ namespace Thetis
             {
                 case OtherButtonId.POWER: PowerOn = !PowerOn; break;
                 case OtherButtonId.RX_2: RX2Enabled = !RX2Enabled; break;
-                case OtherButtonId.MON: MON = !MON; break;
+                case OtherButtonId.MON: chkMON_Click(this, EventArgs.Empty); break;
                 case OtherButtonId.TUN: TUN = !TUN; break;
                 case OtherButtonId.MOX: MOX = !MOX; break;
                 case OtherButtonId.TWOTON: TwoTone = !TwoTone; break;

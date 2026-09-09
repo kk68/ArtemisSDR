@@ -30,6 +30,39 @@ warren@wpratt.com
 
 __declspec (align (16))			IVAC pvac[MAX_EXT_VACS];
 
+static long vac_mix_active(IVAC a)
+{
+	// During TX the monitor clock supplies audio (or silence with MON off).
+	// During RX, require TX only for MON/CW sidetone. This also allows RX
+	// startup without waiting for the SunSDR TX keepalive to start.
+	return a->mox ? 2 : (a->mon ? 3 : 1);
+}
+
+static long vac_mix_what(IVAC a)
+{
+	return (a->mox ? 0 : 1) | (a->mon ? 2 : 0);
+}
+
+static void create_vac_mixer(int id, IVAC a)
+{
+	int inrate[2] = { a->audio_rate, a->txmon_rate };
+	a->mixer = create_aamix(-1, id, a->audio_size, a->audio_size, 2,
+		vac_mix_active(a), vac_mix_what(a), a->vac_rx_scale, 4096,
+		inrate, a->audio_rate, xvac_out, 0.0, 0.0, 0.0, 0.0);
+	SetAAudioMixVol(a->mixer, 0, 0, a->vac_af_gain);
+	SetAAudioMixVol(a->mixer, 0, 1, a->vac_mon_scale);
+}
+
+static void update_vac_mixer(IVAC a)
+{
+	long what = vac_mix_what(a);
+	// 'what' alone cannot enable a stream: inactive sources reject their
+	// samples in xMixAudio and are excluded by xaamix's active mask.
+	SetAAudioMixWhat(a->mixer, 0, 0, (what & 1) != 0);
+	SetAAudioMixWhat(a->mixer, 0, 1, (what & 2) != 0);
+	SetAAudioMixStates(a->mixer, 0, 3, vac_mix_active(a));
+}
+
 void create_resamps(IVAC a)
 {
 	a->INringsize = (int)(2 * a->mic_rate * a->in_latency);		// FROM VAC to mic
@@ -95,16 +128,16 @@ PORT void create_ivac(
 	a->initial_INvar = 1.0;
 	a->initial_OUTvar = 1.0;
 	a->swapIQout = 0;
+	a->vac_rx_scale = 1.0;
+	a->vac_af_gain = 1.0;
+	a->vac_mon_scale = 1.0;
 	a->exclusive_in = 0;
 	a->exclusive_out = 0;
 	a->mono_in_to_stereo_buffer = NULL;
 	a->mono_in_to_stereo_capacity = 0;
 	InitializeCriticalSectionAndSpinCount(&a->cs_ivac, 2500);
 	create_resamps(a);
-	{
-		int inrate[2] = { a->audio_rate, a->txmon_rate };
-		a->mixer = create_aamix(-1, id, a->audio_size, a->audio_size, 2, 3, 3, 1.0, 4096, inrate, a->audio_rate, xvac_out, 0.0, 0.0, 0.0, 0.0);
-	}
+	create_vac_mixer(id, a);
 	pvac[id] = a;
 }
 
@@ -121,6 +154,7 @@ void destroy_resamps(IVAC a)
 PORT void destroy_ivac(int id)
 {
 	IVAC a = pvac[id];
+	destroy_aamix(a->mixer, 0);
 	destroy_resamps(a);
 	DeleteCriticalSection(&a->cs_ivac);
 	free (a);
@@ -152,6 +186,7 @@ PORT void xvacOUT(int id, int stream, double* data)
 
 	if (a->run)
 	{
+		EnterCriticalSection(&a->cs_ivac);
 		/* Diagnostic: log the configuration the FIRST time we actually
 		 * dispatch a real audio sample (run=1) into IVAC for each
 		 * (id, stream). Lets us see what audio_size/audio_rate/vac_size
@@ -174,10 +209,11 @@ PORT void xvacOUT(int id, int stream, double* data)
 			if (stream == 1)
 				xMixAudio(a->mixer, -1, 0, data);
 			else if (stream == 2)
-				xMixAudio(a->mixer, -1, 1, data);
+				xMixAudioSized(a->mixer, -1, 1, a->txmon_size, data);
 		}
 		else if (stream == 0)
 			xrmatchIN (a->rmatchOUT, data);	// i-q data from RX stream
+		LeaveCriticalSection(&a->cs_ivac);
 	}
 }
 
@@ -453,10 +489,7 @@ PORT void SetIVACaudioRate(int id, int rate)
 	{
 		a->audio_rate = rate;
 		destroy_aamix(a->mixer, 0);
-		{
-			int inrate[2] = { a->audio_rate, a->txmon_rate };
-			a->mixer = create_aamix(-1, id, a->audio_size, a->audio_size, 2, 3, 3, 1.0, 4096, inrate, a->audio_rate, xvac_out, 0.0, 0.0, 0.0, 0.0);
-		}
+		create_vac_mixer(id, a);
 		destroy_resamps(a);
 		create_resamps(a);
 	}
@@ -471,10 +504,7 @@ void SetIVACtxmonRate(int id, int rate)
 	{
 		a->txmon_rate = rate;
 		destroy_aamix(a->mixer, 0);
-		{
-			int inrate[2] = { a->audio_rate, a->txmon_rate };
-			a->mixer = create_aamix(-1, id, a->audio_size, a->audio_size, 2, 3, 3, 1.0, 4096, inrate, a->audio_rate, xvac_out, 0.0, 0.0, 0.0, 0.0);
-		}
+		create_vac_mixer(id, a);
 	}
 	LeaveCriticalSection(&a->cs_ivac);
 }
@@ -528,20 +558,7 @@ PORT void SetIVACaudioSize(int id, int size)
 	EnterCriticalSection(&a->cs_ivac);
 	a->audio_size = (unsigned int)size;
 	destroy_aamix(a->mixer, 0);
-	{
-		int inrate[2] = { a->audio_rate, a->txmon_rate };
-		/* active=1 (was 3): only source 0 (RX audio) is REQUIRED to
-		 * unblock the mixer's WaitForMultipleObjects(...TRUE,INFINITE)
-		 * loop. With active=3 the mixer would deadlock if source 1
-		 * (TX monitor) wasn't fed — which on SunSDR pure-RX requires
-		 * a TX-silence keepalive in sunsdr.c. If that keepalive races
-		 * with mixer init / VAC enable on cold start, the mixer parks
-		 * forever and the entire VAC OUT path is silent
-		 * (intermittent silent-startup, project_startup_no_audio).
-		 * what=3 stays so source 1 is still INCLUDED in the mix when
-		 * it has data — just doesn't gate the loop. */
-		a->mixer = create_aamix(-1, id, a->audio_size, a->audio_size, 2, 1, 3, 1.0, 4096, inrate, a->audio_rate, xvac_out, 0.0, 0.0, 0.0, 0.0);
-	}
+	create_vac_mixer(id, a);
 	destroy_resamps(a);
 	create_resamps(a);
 	LeaveCriticalSection(&a->cs_ivac);
@@ -632,65 +649,19 @@ PORT void SetIVACvox(int id, int vox)
 PORT void SetIVACmox(int id, int mox)
 {
 	IVAC a = pvac[id];
+	EnterCriticalSection(&a->cs_ivac);
 	a->mox = mox;
-	if (!a->mox)
-	{
-		if (a->mon)
-		{
-			SetAAudioMixWhat(a->mixer, 0, 1, 1);
-			SetAAudioMixWhat(a->mixer, 0, 0, 1);
-		}
-		else
-		{
-			SetAAudioMixWhat(a->mixer, 0, 1, 0);
-			SetAAudioMixWhat(a->mixer, 0, 0, 1);
-		}
-	}
-	else
-	{
-		if (a->mon)
-		{
-			SetAAudioMixWhat(a->mixer, 0, 0, 0);
-			SetAAudioMixWhat(a->mixer, 0, 1, 1);
-		}
-		else
-		{
-			SetAAudioMixWhat(a->mixer, 0, 0, 0);
-			SetAAudioMixWhat(a->mixer, 0, 1, 0);
-		}
-	}
+	update_vac_mixer(a);
+	LeaveCriticalSection(&a->cs_ivac);
 }
 
 PORT void SetIVACmon(int id, int mon)
 {
 	IVAC a = pvac[id];
+	EnterCriticalSection(&a->cs_ivac);
 	a->mon = mon;
-	if (!a->mox)
-	{
-		if (a->mon)
-		{
-			SetAAudioMixWhat(a->mixer, 0, 1, 1);
-			SetAAudioMixWhat(a->mixer, 0, 0, 1);
-		}
-		else
-		{
-			SetAAudioMixWhat(a->mixer, 0, 1, 0);
-			SetAAudioMixWhat(a->mixer, 0, 0, 1);
-		}
-	}
-	else
-	{
-		if (a->mon)
-		{
-			SetAAudioMixWhat(a->mixer, 0, 0, 0);
-			SetAAudioMixWhat(a->mixer, 0, 1, 1);
-		}
-		else
-		{
-			SetAAudioMixWhat(a->mixer, 0, 0, 0);
-			SetAAudioMixWhat(a->mixer, 0, 1, 0);
-		}
-	}
+	update_vac_mixer(a);
+	LeaveCriticalSection(&a->cs_ivac);
 }
 
 PORT void SetIVACmonVol(int id, double vol)
@@ -714,7 +685,7 @@ PORT void SetIVACrxscale(int id, double scale)
 }
 
 // Per-input AF gain on the RX audio leg of the VAC mixer (input 0).
-// Composes with vac_rx_scale (set via SetIVACrxscale from the Setup →
+// Composes with vac_rx_scale (set via SetIVACrxscale from the Setup â†’
 // VAC RX Gain slider): effective gain = vac_rx_scale * af_gain.
 //
 // Wired up so the per-RX AF / volume slider on the main panel scales
@@ -727,6 +698,7 @@ PORT void SetIVACafgain(int id, double gain)
 {
 	IVAC a = pvac[id];
 	if (a == 0 || a->mixer == 0) return;
+	a->vac_af_gain = gain;
 	SetAAudioMixVol(a->mixer, 0, 0, gain);
 }
 

@@ -26,10 +26,6 @@ warren@wpratt.com
 
 #include "cmcomm.h"
 
-extern int RadioProtocol;
-#ifndef SUNSDR
-#define SUNSDR 2
-#endif
 
 cmaster cm  = {0};
 CMASTER pcm = &cm;
@@ -130,6 +126,8 @@ void create_xmtr()
 		// out[2] is used for sidetone-out
 		for (j = 0; j < 3; j++)
 			pcm->xmtr[i].out[j] = (double *) malloc0 (getbuffsize (pcm->cmMAXTxOutRate) * sizeof (complex));
+		pcm->xmtr[i].mon_input = (double*)malloc0(getbuffsize(pcm->cmMAXInRate) * sizeof(complex));
+		pcm->xmtr[i].mon_output = (double*)malloc0(getbuffsize(pcm->cmMAXTxOutRate) * sizeof(complex));
 
 		// dexp - vox
 		create_dexp (
@@ -272,6 +270,8 @@ void destroy_xmtr()
 		destroy_dexp (i);
 		for (j = 0; j < 3; j++)
 			_aligned_free (pcm->xmtr[i].out[j]);
+		_aligned_free(pcm->xmtr[i].mon_input);
+		_aligned_free(pcm->xmtr[i].mon_output);
 	}
 }
 
@@ -406,17 +406,15 @@ void xcmaster (int stream)
 				memset (pcm->in[stream], 0, pcm->xcm_insize[stream] * sizeof (complex));
 		}
 		xpipe (stream, 0, pcm->in);
+		memcpy(pcm->xmtr[tx].mon_input, pcm->in[stream], pcm->xcm_insize[stream] * sizeof(complex));
 		xdexp (tx);																				// vox-dexp
-		fexchange0 (chid (stream, 0), pcm->in[stream], pcm->xmtr[tx].out[0], &error);			// dsp
+		fexchange0WithMonitor(chid(stream, 0), pcm->in[stream], pcm->xmtr[tx].out[0],
+			pcm->xmtr[tx].mon_input, pcm->xmtr[tx].mon_output, &error);
 		// WriteAudio(10.0, pcm->xmtr[tx].ch_outrate, pcm->xmtr[tx].ch_outsize, pcm->xmtr[tx].out[0], 3);
-		xsidetone(tx);
+		xsidetone(tx, pcm->xmtr[tx].mon_output);
 		xpipe (stream, 1, pcm->xmtr[tx].out);
-		// SunSDR voice monitor must follow the real TX audio path, not the sidetone buffer.
-		{
-			double* monitor_audio = (RadioProtocol == SUNSDR) ? pcm->xmtr[tx].out[0] : pcm->xmtr[tx].out[2];
-			// Spectrum0 (1, stream, 0, 0, pcm->xmtr[tx].out[0]);								// panadapter
-			xMixAudio (0, 0, chid (stream, 0), monitor_audio);									// mix monitor audio
-		}
+		// out[2] carries the selected audio tap or the keyed CW sidetone.
+		xMixAudioSized (0, 0, chid (stream, 0), pcm->xmtr[tx].ch_outsize, pcm->xmtr[tx].out[2]);
 		xtxgain (pcm->xmtr[tx].pgain);															// Gain for Penelope & amp_protect
 		xeer (pcm->xmtr[tx].peer);																// EER transmission
 		xilv(pcm->xmtr[tx].pilv, pcm->xmtr[tx].out);											// interleave EER, call Outbound()

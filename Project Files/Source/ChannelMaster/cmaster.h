@@ -87,6 +87,8 @@ typedef struct _cmaster
 		int ch_outrate;												// xmtr output rate = tx channel output rate
 		int ch_outsize;												// xmtr output size = tx channel output size
 		double* out[3];												// output buff, per transmitter
+		double* mon_input;
+		double* mon_output;
 		VOX pvox;													// vox, per transmitter
 		void (__stdcall *pushvox)(int channel, int active);			// vox, per transmitter
 		TXGAIN pgain;												// gain block, for Penelope power control & amp protect

@@ -31,6 +31,7 @@ warren@wpratt.com
 
 typedef struct _aamix
 {
+	HANDLE thread;
 	int id;										// id of this aamixer
 	int outbound_id;							// id to use in the Outbound() call
 	volatile long run;							// thread runs when set to 1
@@ -108,6 +109,10 @@ extern void destroy_aamix (void* ptr, int id);
 extern void xaamix (AAMIX a);
 
 extern void xMixAudio (void* ptr, int id, int stream, double* data);
+
+// Input length is in complex samples at this stream's input rate.
+// Use when the producer's block duration differs from the mixer output.
+extern void xMixAudioSized (void* ptr, int id, int stream, int size, double* data);
 
 extern void SetAAudioMixOutputPointer(void* ptr, int id, void (*Outbound)(int id, int nsamples, double* buff));
 

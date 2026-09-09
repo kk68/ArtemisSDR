@@ -196,7 +196,7 @@ Tracked in the main README's "Current limitations" section. Summary:
 - Per-band TX calibration for bands other than 40 m
 - `0x1F` forward-power telemetry → ArtemisSDR `Fwd Pwr` meter wiring
 - Replace the RX band-switch auto power-recycle with an ExpertSDR3-style clean reconfigure
-- MON / DUP audio routing cleanup
+- DUP support remains unavailable; see [MON audio path and PRE/POST patch](docs/MON_AUDIO_PATH.md) for the monitor implementation and validation status.
 - Pin the mode byte offset inside the 0x20 config block payload
 - Diversity: no per-receiver antenna path found so far
 

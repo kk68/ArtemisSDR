@@ -100,7 +100,7 @@ extern SIDETONE create_sidetone(
 
 extern void destroy_sidetone(int id);
 
-extern void xsidetone(int id);
+extern void xsidetone(int id, double* monitor);
 
 extern __declspec (dllexport) void SetSidetoneSelectKey(int id, int select);
 

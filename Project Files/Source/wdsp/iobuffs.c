@@ -223,7 +223,7 @@ void upslew2 (IOB a, INREAL* pIin, INREAL* pQin)
 	}
 }
 
-void downslew0 (IOB a, double* pout)
+void downslew0 (IOB a, double* pout, double* monitor)
 {
 	int i;
 	double *pin;
@@ -231,6 +231,14 @@ void downslew0 (IOB a, double* pout)
 	pin = a->r2_baseptr + 2 * a->r2_outidx;
 	for (i = 0; i < a->out_size; i++)
 	{
+		if (monitor)
+		{
+			double gain = a->slew.dstate == DOWNSLEW
+				? a->slew.cdown[a->slew.ntdown - a->slew.dcount]
+				: (a->slew.dstate == ZERO || a->slew.dstate == OFF ? 0.0 : 1.0);
+			monitor[2 * i] *= gain;
+			monitor[2 * i + 1] *= gain;
+		}
 		I = pin[2 * i + 0];
 		Q = pin[2 * i + 1];
 		switch (a->slew.dstate)
@@ -429,6 +437,11 @@ void create_iobuffs (int channel)
 	a->r2_active_buffsize = DSP_MULT * a->r2_size;
 	a->r1_baseptr = (double*) malloc0 (a->r1_active_buffsize * sizeof (complex));
 	a->r2_baseptr = (double*) malloc0 (a->r2_active_buffsize * sizeof (complex));
+	if (ch[channel].type == 1)
+	{
+		a->r1_monptr = (double*)malloc0(a->r1_active_buffsize * sizeof(complex));
+		a->r2_monptr = (double*)malloc0(a->r2_active_buffsize * sizeof(complex));
+	}
 	a->r1_inidx = 0;
 	a->r1_outidx = 0;
 	a->r1_unqueuedsamps = 0;
@@ -473,6 +486,8 @@ void destroy_iobuffs (int channel)
 	CloseHandle (a->Sem_BuffReady);
 	DeleteCriticalSection(&a->r2_ControlSection);
 	_aligned_free (a->r2_baseptr);
+	_aligned_free (a->r2_monptr);
+	_aligned_free (a->r1_monptr);
 	_aligned_free (a->r1_baseptr);
 	_aligned_free (a);
 }
@@ -483,6 +498,10 @@ void flush_iobuffs (int channel)
 	IOB a = ch[channel].iob.pf;
 	memset (a->r1_baseptr, 0, a->r1_active_buffsize * sizeof (complex));
 	memset (a->r2_baseptr, 0, a->r2_active_buffsize * sizeof (complex));
+	if (a->r2_monptr)
+		memset(a->r2_monptr, 0, a->r2_active_buffsize * sizeof(complex));
+	if (a->r1_monptr)
+		memset(a->r1_monptr, 0, a->r1_active_buffsize * sizeof(complex));
 	a->r1_inidx = 0;
 	a->r1_outidx = 0;
 	a->r1_unqueuedsamps = 0;
@@ -501,14 +520,24 @@ void flush_iobuffs (int channel)
 PORT	//double, interleaved I/Q
 void fexchange0 (int channel, double* in, double* out, int* error)
 {
+	fexchange0WithMonitor(channel, in, out, 0, 0, error);
+}
+
+PORT
+void fexchange0WithMonitor(int channel, double* in, double* out, double* pre, double* monitor, int* error)
+{
 	int n;
 	int doit = 0;
 	IOB a;
 	*error = 0;
+	// A stopped TX channel must never replay the last microphone block.
+	if (monitor) memset(monitor, 0, ch[channel].out_size * sizeof(complex));
 	if (_InterlockedAnd (&ch[channel].exchange, 1))
 	{
 		EnterCriticalSection (&ch[channel].csEXCH);
 		a = ch[channel].iob.pe;
+		if (a->r1_monptr)
+			memcpy(a->r1_monptr + 2 * a->r1_inidx, pre ? pre : in, a->in_size * sizeof(complex));
 		if (_InterlockedAnd (&a->slew.upflag, 1))
 			upslew0 (a, in);
 		else
@@ -530,9 +559,12 @@ void fexchange0 (int channel, double* in, double* out, int* error)
 		LeaveCriticalSection (&a->r2_ControlSection);
 		if (a->bfo) WaitForSingleObject (a->Sem_OutReady, INFINITE);
 		if (a->bfo || doit)
+		{
+			if (monitor && a->r2_monptr)
+				memcpy(monitor, a->r2_monptr + 2 * a->r2_outidx, a->out_size * sizeof(complex));
 			if (_InterlockedAnd (&a->slew.downflag, 1))
 			{
-				downslew0 (a, out);
+				downslew0 (a, out, monitor);
 				if (!_InterlockedAnd (&a->slew.downflag, 1))
 				{
 					InterlockedBitTestAndReset (&ch[channel].exchange, 0);
@@ -541,6 +573,7 @@ void fexchange0 (int channel, double* in, double* out, int* error)
 			}
 			else
 				memcpy (out, a->r2_baseptr + 2 * a->r2_outidx, a->out_size * sizeof (complex));
+		}
 		else
 		{
 			memset (out, 0, a->out_size * sizeof (complex));
@@ -627,6 +660,8 @@ void dexchange (int channel, double* in, double* out)
 	a->r2_havesamps += a->r2_insize;
 	LeaveCriticalSection (&a->r2_ControlSection);
 	memcpy (a->r2_baseptr + 2 * a->r2_inidx, in, a->r2_insize * sizeof (complex));
+	if (a->r2_monptr)
+		memcpy(a->r2_monptr + 2 * a->r2_inidx, txa[channel].monout, a->r2_insize * sizeof(complex));
 	if ((a->r2_inidx += a->r2_insize) == a->r2_active_buffsize)
 		a->r2_inidx = 0;
 	if (a->bfo && (a->r2_unqueuedsamps += a->r2_insize) >= a->out_size)
@@ -636,6 +671,8 @@ void dexchange (int channel, double* in, double* out)
 		a->r2_unqueuedsamps -= n * a->out_size;
 	}
 	memcpy (out, a->r1_baseptr + 2 * a->r1_outidx, a->r1_outsize * sizeof (complex));
+	if (a->r1_monptr)
+		memcpy(txa[channel].moninput, a->r1_monptr + 2 * a->r1_outidx, a->r1_outsize * sizeof(complex));
 	if ((a->r1_outidx += a->r1_outsize) == a->r1_active_buffsize)
 		a->r1_outidx = 0;
 }

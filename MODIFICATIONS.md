@@ -26,6 +26,19 @@ Changes are ongoing; each release tag on https://github.com/kk68/ArtemisSDR
 represents a snapshot of the modified source at that point in time. The full
 per-commit change history is authoritative and available via `git log`.
 
+## 2026-09-09 - v2.1.10 MON PRE/POST release
+
+- `ChannelMaster/aamix`, `cmaster`, `ivac`, `pipe`, `sidetone` and `tci`:
+  monitor block sizing, routing, buffer lifetime and raw-input capture.
+- `wdsp/TXA` and `iobuffs`: synchronized PRE/POST monitor taps and exchange API.
+- `Console/audio.cs`, `console.cs` and `dsp.cs`: monitor selection, UI and routing.
+- `ArtemisSDR-Installer/Product.wxs`: runtime dependency completeness, runtime
+  merge-module selection and Start menu shortcut registry correction.
+- Added `tests/audio_monitor_tests.c`, its build project/runner and
+  `docs/MON_AUDIO_PATH.md`; updated release versions and documentation.
+
+Source paths above are relative to `Project Files/Source` unless stated otherwise.
+
 ## Files modified
 
 The following files contain substantive modifications by Kosta Kanchev (K0KOZ)

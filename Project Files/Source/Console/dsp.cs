@@ -98,6 +98,9 @@ namespace Thetis
         [DllImport("wdsp.dll", EntryPoint = "SetTXAMode", CallingConvention = CallingConvention.Cdecl)]
         public static extern void SetTXAMode(int channel, DSPMode mode);
 
+        [DllImport("wdsp.dll", CallingConvention = CallingConvention.Cdecl)]
+        public static extern void SetTXAMonitorPre(int channel, int pre);
+
         [DllImport("wdsp.dll", EntryPoint = "fexchange0", CallingConvention = CallingConvention.Cdecl)]
         public static extern void fexchange0 (int channel, double* Cin, double* Cout, int* error);
 

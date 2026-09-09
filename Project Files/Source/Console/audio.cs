@@ -253,6 +253,7 @@ namespace Thetis
                 monitor_volume = value;
                 cmaster.CMSetAudioVolume(value);
                 ivac.SetIVACmonVol(0, monitor_volume);
+                ivac.SetIVACmonVol(1, monitor_volume);
                 cmaster.SetTCIRxAudioMonVol(0, monitor_volume);
                 cmaster.SetTCIRxAudioMonVol(1, monitor_volume);
             }
@@ -282,7 +283,11 @@ namespace Thetis
         public static bool RX2Enabled
         {
             get { return rx2_enabled; }
-            set { rx2_enabled = value; }
+            set
+            {
+                rx2_enabled = value;
+                if (mon) setupIVACforMon();
+            }
         }
 
         private static volatile bool wave_playback = false;
@@ -379,6 +384,7 @@ namespace Thetis
                     cmaster.SetTCIRxAudioMox(1, 0);
                 }
 
+                setupIVACforMon();
                 WaveThing.UpdateMox();
             }
         }
@@ -387,9 +393,11 @@ namespace Thetis
         {
             if (mon)
             {
-                ivac.SetIVACmon(0, 1);
-                ivac.SetIVACmon(1, 0);
+                bool txOnB = rx2_enabled && vfob_tx;
+                ivac.SetIVACmon(0, txOnB ? 0 : 1);
+                ivac.SetIVACmon(1, txOnB ? 1 : 0);
                 ivac.SetIVACmonVol(0, monitor_volume);
+                ivac.SetIVACmonVol(1, monitor_volume);
                 cmaster.SetTCIRxAudioMon(0, 1);
                 cmaster.SetTCIRxAudioMon(1, 1);
                 cmaster.SetTCIRxAudioMonVol(0, monitor_volume);
@@ -403,12 +411,24 @@ namespace Thetis
                 cmaster.SetTCIRxAudioMon(1, 0);
             }
         }
+        private static bool monitor_pre;
+        public static bool MonitorPre
+        {
+            get { return monitor_pre; }
+            set
+            {
+                monitor_pre = value;
+                WDSP.SetTXAMonitorPre(WDSP.id(1, 0), value ? 1 : 0);
+            }
+        }
+
         private static bool mon;
         public static bool MON
         {
             set
             {
                 mon = value;
+                WDSP.SetTXAMonitorPre(WDSP.id(1, 0), monitor_pre ? 1 : 0);
 
                 setupIVACforMon();
 
@@ -436,6 +456,7 @@ namespace Thetis
             set
             {
                 vfob_tx = value;
+                if (mon) setupIVACforMon();
             }
             get
             {
